@@ -202,6 +202,14 @@ pub async fn build_space_setup_assembly(
         trusted_peer_repo: Arc::clone(&wired.trusted_peer_repo),
         peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
         presence: Arc::clone(&presence),
+        // Switch-space 4 阶段重加密迁移依赖（commit 4 接入）。`blob_cipher`
+        // 复用既有 `EncryptingClipboardEventWriter` /
+        // `DecryptingClipboardRepresentationRepository` 同款 adapter Arc，
+        // 共享 master_key session。
+        migration_state: Arc::clone(&wired.migration_state),
+        key_migration: Arc::clone(&wired.key_migration),
+        blob_migration_repo: Arc::clone(&wired.blob_migration_repo),
+        blob_cipher: Arc::clone(&deps.security.blob_cipher),
     }));
 
     // Slice 2 Phase 1 · T9:roster 门面和 space_setup facade 共享同一组

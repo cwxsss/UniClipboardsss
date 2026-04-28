@@ -17,13 +17,15 @@ mod facade;
 
 pub use commands::{
     CurrentInvitation, InitializeSpaceInput, InitializeSpaceResult, IssuePairingInvitationResult,
-    RedeemPairingInvitationInput, RedeemPairingInvitationResult, SetupStateView, UnlockSpaceInput,
-    UnlockSpaceResult,
+    MigrationPhaseKind, MigrationProgress, RedeemPairingInvitationInput,
+    RedeemPairingInvitationResult, SetupStateView, SwitchSpaceInput, SwitchSpaceResult,
+    UnlockSpaceInput, UnlockSpaceResult,
 };
 pub use deps::SpaceSetupDeps;
 pub use errors::{
-    CancelInvitationError, InitializeSpaceError, IssuePairingInvitationError, QuerySetupStateError,
-    RedeemPairingInvitationError, ResetSpaceError, TryResumeSessionError, UnlockSpaceError,
+    CancelInvitationError, InitializeSpaceError, IssuePairingInvitationError,
+    QueryMigrationProgressError, QuerySetupStateError, RedeemPairingInvitationError,
+    ResetSpaceError, SwitchSpaceError, TryResumeSessionError, UnlockSpaceError,
 };
 pub use events::PairingOutcome;
 pub use facade::SpaceSetupFacade;

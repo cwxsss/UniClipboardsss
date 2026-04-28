@@ -12,6 +12,8 @@
 //! fakes and tempdir-backed `JsonKeySlotStore` instances so the test runs
 //! hermetically on CI.
 
+mod common;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -371,6 +373,8 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
     ));
     let local_identity: Arc<dyn LocalIdentityPort> = Arc::clone(&identity_store) as _;
 
+    let (migration_state, key_migration, blob_migration_repo, blob_cipher) =
+        common::migration_noop_deps();
     let facade = Arc::new(SpaceSetupFacade::new(SpaceSetupDeps {
         space_access,
         local_identity,
@@ -387,6 +391,10 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         peer_addr_repo: Arc::clone(&peer_addr_repo)
             as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
         presence,
+        migration_state,
+        key_migration,
+        blob_migration_repo,
+        blob_cipher,
     }));
 
     Side {

@@ -27,6 +27,8 @@
 //! 改 slice1 测试导入面,对已绿测试有回归风险;这里保留 duplicate,单文
 //! 件可独立读可独立调试。未来再出第三个 e2e 时统一抽取。
 
+mod common;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -382,6 +384,8 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
     let presence_for_roster = Arc::clone(&presence);
     let local_identity_for_roster = Arc::clone(&local_identity);
 
+    let (migration_state, key_migration, blob_migration_repo, blob_cipher) =
+        common::migration_noop_deps();
     let facade = Arc::new(SpaceSetupFacade::new(SpaceSetupDeps {
         space_access,
         local_identity,
@@ -398,6 +402,10 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         peer_addr_repo: Arc::clone(&peer_addr_repo)
             as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
         presence,
+        migration_state,
+        key_migration,
+        blob_migration_repo,
+        blob_cipher,
     }));
 
     let roster = Arc::new(MemberRosterFacade::new(MemberRosterDeps {

@@ -70,7 +70,7 @@ use tracing::{debug, info, instrument, warn};
 
 use uc_core::crypto::aad;
 use uc_core::crypto::domain::{Aad, ActiveSpace, Ciphertext, Passphrase};
-use uc_core::ids::{DeviceId, SpaceId};
+use uc_core::ids::SpaceId;
 use uc_core::membership::{MemberRepositoryPort, MemberSyncPreferences};
 use uc_core::pairing::invitation::InvitationCode;
 use uc_core::ports::clipboard::{BlobMigrationRepoError, BlobMigrationRepoPort, MigrationRecord};
@@ -79,11 +79,13 @@ use uc_core::ports::security::{
 };
 use uc_core::ports::setup::{MigrationStateError, MigrationStatePort};
 use uc_core::ports::{ClockPort, PeerAddressRecord, PeerAddressRepositoryPort, SetupStatusPort};
-use uc_core::security::IdentityFingerprint;
 use uc_core::setup::{MigrationPhase, MigrationRunId, SetupStatus};
 use uc_core::TrustedPeerRepositoryPort;
 
-use crate::facade::space_setup::RedeemPairingInvitationError;
+use crate::facade::space_setup::commands::SwitchSpaceCommand;
+use crate::facade::space_setup::{
+    RedeemPairingInvitationError, SwitchSpaceError, SwitchSpaceResult,
+};
 use crate::membership::errors::MembershipApplicationError;
 use crate::membership::usecases::{AdmitMember, AdmitMemberUseCase};
 use crate::pairing_outbound::joiner_handshake::{
@@ -125,66 +127,12 @@ impl JoinerHandshakeRunner for JoinerHandshakeCoordinator {
 }
 
 // ---------------------------------------------------------------------------
-// 应用层命令 / 结果 / 错误
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-pub(crate) struct SwitchSpaceCommand {
-    pub code: InvitationCode,
-    pub new_passphrase: Passphrase,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SwitchSpaceResult {
-    pub sponsor_device_id: DeviceId,
-    pub sponsor_identity_fingerprint: IdentityFingerprint,
-    pub space_id: SpaceId,
-    pub self_device_id: DeviceId,
-    pub self_identity_fingerprint: IdentityFingerprint,
-    pub migrated_records: u64,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum SwitchSpaceError {
-    #[error("device has not completed first-time setup yet")]
-    NotSetup,
-    #[error("a previous switch-space migration is still in flight")]
-    PendingMigration(MigrationPhase),
-    #[error("space session is locked; unlock before switching spaces")]
-    NotUnlocked,
-    #[error("invitation not found")]
-    InvitationNotFound,
-    #[error("invitation expired")]
-    InvitationExpired,
-    #[error("sponsor unreachable")]
-    SponsorUnreachable,
-    #[error("sponsor declined the pairing")]
-    SponsorDeclined,
-    #[error("sponsor rejected the invitation code")]
-    SponsorRejectedInvitation,
-    #[error("sponsor handshake timed out")]
-    Timeout,
-    #[error("connection lost mid-handshake")]
-    ConnectionLost,
-    #[error("wrong passphrase")]
-    PassphraseMismatch,
-    #[error("space key material corrupted")]
-    CorruptedKeyMaterial,
-    #[error("device name is required")]
-    DeviceNameRequired,
-    #[error("service unavailable")]
-    ServiceUnavailable,
-    #[error("backup record decryption failed (corrupted ciphertext)")]
-    InvalidCiphertext,
-    #[error("storage failure: {0}")]
-    Storage(String),
-    #[error("internal error: {0}")]
-    Internal(String),
-}
-
-// ---------------------------------------------------------------------------
 // SwitchSpaceUseCase
 // ---------------------------------------------------------------------------
+//
+// 应用层 Command / Result / Error 由 facade 层（`facade::space_setup::commands`
+// + `facade::space_setup::errors`）拥有，与 redeem use case 的 pattern 对齐。
+// 本模块只持有编排逻辑，类型从 facade 引入。
 
 pub(crate) struct SwitchSpaceUseCase {
     setup_status: Arc<dyn SetupStatusPort>,

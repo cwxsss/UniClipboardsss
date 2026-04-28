@@ -51,10 +51,11 @@ use uc_infra::db::mappers::{
 };
 use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
-    DieselBlobReferenceRepository, DieselBlobRepository, DieselClipboardEntryRepository,
-    DieselClipboardEventRepository, DieselClipboardRepresentationRepository,
-    DieselClipboardSelectionRepository, DieselFileTransferRepository, DieselPeerAddressRepository,
-    DieselSpaceMemberRepository, DieselThumbnailRepository, DieselTrustedPeerRepository,
+    DieselBlobMigrationRepository, DieselBlobReferenceRepository, DieselBlobRepository,
+    DieselClipboardEntryRepository, DieselClipboardEventRepository,
+    DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
+    DieselFileTransferRepository, DieselPeerAddressRepository, DieselSpaceMemberRepository,
+    DieselThumbnailRepository, DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -65,7 +66,7 @@ use uc_infra::security::{
     Sha256IdentityFingerprintFactory, Sha256ShortCodeGenerator,
 };
 use uc_infra::settings::repository::FileSettingsRepository;
-use uc_infra::{FileSetupStatusRepository, SystemClock};
+use uc_infra::{FileMigrationStateRepository, FileSetupStatusRepository, SystemClock};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
 use uc_platform::ports::AppDirsPort;
@@ -155,6 +156,15 @@ pub struct WiredDependencies {
     pub iroh_blob_store_dir: PathBuf,
     /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
     pub blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
+    /// Switch-space 重加密迁移：跨重启的阶段持久化 port，落地为
+    /// `.migration_state` 文件（与 `.setup_status` 同目录）。消费者
+    /// `SpaceSetupFacade::switch_space` / `try_resume_session`，所以同
+    /// `peer_addr_repo` 走 WiredDependencies 旁路而不是 AppDeps。
+    pub migration_state: Arc<dyn uc_core::ports::setup::MigrationStatePort>,
+    /// Switch-space 一次性 migration_key 的 keyring 管理 port。
+    pub key_migration: Arc<dyn uc_core::ports::security::KeyMigrationPort>,
+    /// Switch-space backup 表 + 主表 inline_data 批量读写 port。
+    pub blob_migration_repo: Arc<dyn uc_core::ports::clipboard::BlobMigrationRepoPort>,
 }
 
 /// Infrastructure layer implementations
@@ -181,6 +191,11 @@ struct InfraLayer {
 
     // Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
     blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
+
+    // Switch-space migration ports — see WiredDependencies docs for
+    // life-cycle / consumer details.
+    migration_state: Arc<dyn uc_core::ports::setup::MigrationStatePort>,
+    blob_migration_repo: Arc<dyn uc_core::ports::clipboard::BlobMigrationRepoPort>,
 
     // Blob storage
     blob_repository: Arc<dyn BlobRepositoryPort>,
@@ -353,6 +368,16 @@ fn create_infra_layer(
     let setup_status: Arc<dyn SetupStatusPort> =
         Arc::new(FileSetupStatusRepository::with_defaults(vault_path.clone()));
 
+    // Switch-space 4 阶段迁移的状态持久化点；与 setup_status 同目录。
+    let migration_state: Arc<dyn uc_core::ports::setup::MigrationStatePort> = Arc::new(
+        FileMigrationStateRepository::with_defaults(vault_path.clone()),
+    );
+
+    // Switch-space backup 表 + 主表 inline_data 批量 IO；常态业务代码不
+    // 应触碰，由 SpaceSetupFacade::switch_space 内部使用。
+    let blob_migration_repo: Arc<dyn uc_core::ports::clipboard::BlobMigrationRepoPort> =
+        Arc::new(DieselBlobMigrationRepository::new(Arc::clone(&db_executor)));
+
     let clock: Arc<dyn ClockPort> = Arc::new(SystemClock);
     let hash: Arc<dyn ContentHashPort> = Arc::new(Blake3Hasher);
 
@@ -375,6 +400,8 @@ fn create_infra_layer(
         trusted_peer_repo,
         peer_addr_repo,
         blob_reference_repo,
+        migration_state,
+        blob_migration_repo,
         blob_repository,
         thumbnail_repo,
         thumbnail_generator,
@@ -751,6 +778,17 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
     let iroh_blob_store_dir_for_wiring =
         apply_profile_suffix(paths.app_data_root_dir.join("iroh-blobs"));
 
+    // Switch-space migration ports for SpaceSetupFacade. Same WiredDependencies
+    // bypass pattern as `peer_addr_repo` — consumer lives in uc-application.
+    let migration_state_for_wiring = Arc::clone(&infra.migration_state);
+    let blob_migration_repo_for_wiring = Arc::clone(&infra.blob_migration_repo);
+    // `key_migration` adapter consumes secure_storage from PlatformLayer,
+    // so it's constructed here at wire_dependencies level rather than in
+    // create_infra_layer.
+    let key_migration_for_wiring: Arc<dyn uc_core::ports::security::KeyMigrationPort> = Arc::new(
+        uc_infra::security::DefaultKeyMigrationAdapter::new(Arc::clone(&platform.secure_storage)),
+    );
+
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
         Arc::new(ClipboardPayloadResolver::new(
@@ -838,6 +876,9 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
         peer_addr_repo: peer_addr_repo_for_wiring,
         iroh_blob_store_dir: iroh_blob_store_dir_for_wiring,
         blob_reference_repo: blob_reference_repo_for_wiring,
+        migration_state: migration_state_for_wiring,
+        key_migration: key_migration_for_wiring,
+        blob_migration_repo: blob_migration_repo_for_wiring,
         background: BackgroundRuntimeDeps {
             representation_cache,
             spool_manager,

@@ -26,6 +26,8 @@
 //! 因详见 `slice2_phase1_presence_e2e.rs` 文件首注:整合 `tests/common/`
 //! 会牵动已绿测试导入面;留待 Phase 2 收尾后统一抽取。
 
+mod common;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -414,6 +416,8 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
     let device_identity_for_clipboard = Arc::clone(&device_identity);
     let settings_for_clipboard = Arc::clone(&settings) as Arc<dyn SettingsPort>;
 
+    let (migration_state, key_migration, blob_migration_repo, blob_cipher) =
+        common::migration_noop_deps();
     let facade = Arc::new(SpaceSetupFacade::new(SpaceSetupDeps {
         space_access,
         local_identity,
@@ -430,6 +434,10 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         peer_addr_repo: Arc::clone(&peer_addr_repo)
             as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
         presence,
+        migration_state,
+        key_migration,
+        blob_migration_repo,
+        blob_cipher,
     }));
 
     let roster = Arc::new(MemberRosterFacade::new(MemberRosterDeps {

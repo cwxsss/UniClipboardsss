@@ -8,8 +8,11 @@
 use std::sync::Arc;
 
 use uc_core::membership::MemberRepositoryPort;
+use uc_core::ports::clipboard::BlobMigrationRepoPort;
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
+use uc_core::ports::security::{BlobCipherPort, KeyMigrationPort};
+use uc_core::ports::setup::MigrationStatePort;
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
     ClockPort, DeviceIdentityPort, LocalIdentityPort, PeerAddressRepositoryPort, PresencePort,
@@ -69,4 +72,19 @@ pub struct SpaceSetupDeps {
     /// (usecase 是 `pub(crate)`,bootstrap 不拿它直接 construct,
     /// 对齐 `uc-application/AGENTS.md` §11.4)。
     pub presence: Arc<dyn PresencePort>,
+    /// Switch-space 重加密迁移：跨重启的阶段持久化点。`None` 表示无在飞迁移；
+    /// `Prepared` / `HandshakeDone` / `Swapped` 各有续跑语义，由
+    /// `SpaceSetupFacade::try_resume_session` 内部 `resume_pending` 自动处理。
+    pub migration_state: Arc<dyn MigrationStatePort>,
+    /// Switch-space 一次性 migration_key 的 keyring 管理。生命周期：phase 1
+    /// `prepare_migration_key` 时生成，phase 4 `discard_migration_key` 时销毁。
+    pub key_migration: Arc<dyn KeyMigrationPort>,
+    /// Switch-space `clipboard_migration_backup` 表 + 主表 inline_data 批量
+    /// 读写。常态业务代码不应触碰。
+    pub blob_migration_repo: Arc<dyn BlobMigrationRepoPort>,
+    /// 业务剪贴板加解密 port（既有 `EncryptingClipboardEventWriter` /
+    /// `DecryptingClipboardRepresentationRepository` 已经持有同款 Arc）。
+    /// switch-space phase 1 用它解旧密文 / phase 3 用它写新密文，所以
+    /// facade 必须能拿到这一份。
+    pub blob_cipher: Arc<dyn BlobCipherPort>,
 }

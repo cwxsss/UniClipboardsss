@@ -30,7 +30,8 @@ use uc_core::setup::SetupStatus;
 
 use crate::facade::space_setup::commands::{
     CurrentInvitation, InitializeSpaceCommand, InitializeSpaceInput, InitializeSpaceResult,
-    IssuePairingInvitationResult, SetupStateView, UnlockSpaceCommand, UnlockSpaceInput,
+    IssuePairingInvitationResult, MigrationPhaseKind, MigrationProgress, SetupStateView,
+    SwitchSpaceCommand, SwitchSpaceInput, SwitchSpaceResult, UnlockSpaceCommand, UnlockSpaceInput,
     UnlockSpaceResult,
 };
 use crate::facade::space_setup::commands::{
@@ -38,7 +39,8 @@ use crate::facade::space_setup::commands::{
 };
 use crate::facade::space_setup::deps::SpaceSetupDeps;
 use crate::facade::space_setup::errors::{
-    CancelInvitationError, QuerySetupStateError, RedeemPairingInvitationError, ResetSpaceError,
+    CancelInvitationError, QueryMigrationProgressError, QuerySetupStateError,
+    RedeemPairingInvitationError, ResetSpaceError, SwitchSpaceError,
 };
 use crate::facade::space_setup::errors::{
     InitializeSpaceError, IssuePairingInvitationError, TryResumeSessionError, UnlockSpaceError,
@@ -56,7 +58,10 @@ use crate::usecases::presence::ensure_reachable_all::{
     EnsureReachableAllError, EnsureReachableAllReport, EnsureReachableAllUseCase,
 };
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
+use crate::usecases::setup::switch_space::{JoinerHandshakeRunner, SwitchSpaceUseCase};
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
+use uc_core::ports::clipboard::BlobMigrationRepoPort;
+use uc_core::ports::setup::MigrationStatePort;
 
 /// Space-lifecycle facade (A1 initialise, A2 unlock, B1 issue invitation,
 /// B2 redeem invitation, P7e inbound subscriber, F2 shutdown).
@@ -93,6 +98,16 @@ pub struct SpaceSetupFacade {
     /// [`Self::auto_prime_presence`] 触发一次全员预连,把 presence 缓存
     /// 填满,让 UI 查 roster 时 online/offline 立刻准。
     ensure_reachable_all: Arc<EnsureReachableAllUseCase>,
+    /// Switch-space 4 阶段重加密迁移 use case。已 setup 设备加入另一个
+    /// sponsor 空间时由 [`Self::switch_space`] 驱动；启动期补偿在
+    /// [`Self::try_resume_session`] 内通过 [`SwitchSpaceUseCase::resume_pending`]
+    /// 自动触发。
+    switch_space: Arc<SwitchSpaceUseCase>,
+    /// Switch-space 进度查询用——`query_migration_progress` 直接读这两份。
+    /// 持有同一份 Arc 是因为 use case 内部不暴露状态访问，进度只读路径
+    /// 必须自己拿 port。
+    migration_state: Arc<dyn MigrationStatePort>,
+    blob_migration_repo: Arc<dyn BlobMigrationRepoPort>,
 }
 
 impl SpaceSetupFacade {
@@ -114,6 +129,10 @@ impl SpaceSetupFacade {
             trusted_peer_repo,
             peer_addr_repo,
             presence,
+            migration_state,
+            key_migration,
+            blob_migration_repo,
+            blob_cipher,
         } = deps;
 
         // Stash handles for `try_resume_session` before the originals
@@ -219,6 +238,23 @@ impl SpaceSetupFacade {
             settings,
             handshake_ttl,
         );
+        // Switch-space 复用同一个 handshake coordinator + admit/trust/peer
+        // /clock，所以这些先 clone 一份给 switch-space use case，剩下的再
+        // move 进 redeem use case（与既有 use case 装配模式一致）。
+        let migration_state_for_facade = Arc::clone(&migration_state);
+        let blob_migration_repo_for_facade = Arc::clone(&blob_migration_repo);
+        let switch_space = Arc::new(SwitchSpaceUseCase::new(
+            Arc::clone(&setup_status),
+            Arc::clone(&migration_state),
+            key_migration,
+            Arc::clone(&blob_migration_repo),
+            blob_cipher,
+            Arc::clone(&joiner_handshake) as Arc<dyn JoinerHandshakeRunner>,
+            Arc::clone(&admit_member_uc),
+            Arc::clone(&trust_peer_uc),
+            Arc::clone(&peer_addr_repo),
+            Arc::clone(&clock),
+        ));
         let redeem_pairing_invitation = Arc::new(RedeemPairingInvitationUseCase::new(
             joiner_handshake,
             admit_member_uc,
@@ -240,6 +276,9 @@ impl SpaceSetupFacade {
             settings: settings_for_facade,
             invitation_holder: invitation_holder_for_facade,
             ensure_reachable_all,
+            switch_space,
+            migration_state: migration_state_for_facade,
+            blob_migration_repo: blob_migration_repo_for_facade,
         }
     }
 
@@ -273,22 +312,92 @@ impl SpaceSetupFacade {
         // passed here is an opaque handle rather than a lookup key.
         // Minting a fresh UUID matches how A2 `unlock` does it.
         let space_id = SpaceId::new();
-        match self.space_access.try_resume_session(&space_id).await {
-            Ok(Some(_)) => Ok(true),
+        let resumed = match self.space_access.try_resume_session(&space_id).await {
+            Ok(Some(_)) => true,
             // Keyslot missing despite has_completed == true — treat
             // as "nothing to resume" rather than an error: can happen
             // right after factory_reset when setup_status lagged.
-            Ok(None) => Ok(false),
+            Ok(None) => false,
             Err(SpaceAccessError::CorruptedKeyMaterial) => {
-                Err(TryResumeSessionError::CorruptedKeyMaterial)
+                return Err(TryResumeSessionError::CorruptedKeyMaterial);
             }
             // NotInitialized and WrongPassphrase from load_kek map to
             // "keyring didn't give us what we needed to silently unlock".
             Err(SpaceAccessError::NotInitialized) | Err(SpaceAccessError::WrongPassphrase) => {
-                Err(TryResumeSessionError::KeyringMiss)
+                return Err(TryResumeSessionError::KeyringMiss);
             }
-            Err(other) => Err(TryResumeSessionError::Internal(other.to_string())),
+            Err(other) => return Err(TryResumeSessionError::Internal(other.to_string())),
+        };
+
+        // Switch-space migration recovery hook: if there's an in-flight
+        // 4-phase migration left over from a prior daemon crash, advance
+        // it now that the session is unlocked and the new master_key is
+        // available. `None` is a noop, so the cost on idle paths is one
+        // `migration_state.get_current()` read.
+        //
+        // Failure here surfaces as `TryResumeSessionError::Internal` —
+        // the device is in a wedged state (Prepared/HandshakeDone/Swapped
+        // with replay failure) and the caller should bubble it up to the
+        // operator rather than silently continue with stale data.
+        if resumed {
+            if let Err(err) = self.switch_space.resume_pending().await {
+                warn!(error = %err, "switch-space resume_pending failed during try_resume_session");
+                return Err(TryResumeSessionError::Internal(format!(
+                    "migration resume failed: {err}"
+                )));
+            }
         }
+
+        Ok(resumed)
+    }
+
+    /// Switch this device to another sponsor's space while preserving
+    /// local clipboard history via 4-phase re-encryption migration. See
+    /// [`crate::usecases::setup::switch_space`] module doc for full
+    /// semantics, including failure rollback and crash recovery.
+    ///
+    /// Pre-conditions: setup completed (else `NotSetup`), session
+    /// unlocked (else `NotUnlocked`), no in-flight migration (else
+    /// `PendingMigration`).
+    #[instrument(skip_all)]
+    pub async fn switch_space(
+        &self,
+        input: SwitchSpaceInput,
+    ) -> Result<SwitchSpaceResult, SwitchSpaceError> {
+        let cmd: SwitchSpaceCommand = input.into();
+        let result = self.switch_space.execute(cmd).await?;
+        // F1 hook: switch-space ends in a fresh sponsor relationship —
+        // mirror A1/A2/B2 by priming presence cache so the UI roster
+        // shows the new sponsor's online state without waiting on the
+        // adapter's lazy probe.
+        self.auto_prime_presence().await;
+        Ok(result)
+    }
+
+    /// Coarse-grained read of switch-space progress for UI polling.
+    ///
+    /// Returns `phase = None` + `backup_record_count = 0` on the idle
+    /// path. While a migration is in flight, `phase` reflects the last
+    /// committed step (`Prepared` / `HandshakeDone` / `Swapped`) and
+    /// `backup_record_count` is the size of the backup table.
+    #[instrument(skip_all)]
+    pub async fn query_migration_progress(
+        &self,
+    ) -> Result<MigrationProgress, QueryMigrationProgressError> {
+        let phase = self
+            .migration_state
+            .get_current()
+            .await
+            .map_err(|err| QueryMigrationProgressError::StorageFailed(err.to_string()))?;
+        let backup_record_count = self
+            .blob_migration_repo
+            .count_records()
+            .await
+            .map_err(|err| QueryMigrationProgressError::StorageFailed(err.to_string()))?;
+        Ok(MigrationProgress {
+            phase: phase.as_ref().map(MigrationPhaseKind::from),
+            backup_record_count,
+        })
     }
 
     /// Subscribe to sponsor-side pairing completion events.
@@ -907,6 +1016,151 @@ mod tests {
         }
     }
 
+    // ── Switch-space minimal fakes (smoke-test scope only) ────────────────
+    //
+    // 既有 A1/A2/B1 smoke tests 不走 switch-space 路径，但 SpaceSetupDeps
+    // 现在要求 4 个新 ports；下面 4 个 fake 全部返回中性默认值（None /
+    // 空 vec / Ok），让 facade 构造器跑得通。switch-space 自身的契约
+    // 验证留给 `usecases::setup::switch_space::tests` 与下面的
+    // `switch_space::*` smoke。
+
+    struct FakeMigrationState;
+    #[async_trait]
+    impl uc_core::ports::setup::MigrationStatePort for FakeMigrationState {
+        async fn get_current(
+            &self,
+        ) -> Result<
+            Option<uc_core::setup::MigrationPhase>,
+            uc_core::ports::setup::MigrationStateError,
+        > {
+            Ok(None)
+        }
+        async fn set_current(
+            &self,
+            _phase: Option<uc_core::setup::MigrationPhase>,
+        ) -> Result<(), uc_core::ports::setup::MigrationStateError> {
+            Ok(())
+        }
+    }
+
+    struct FakeKeyMigration;
+    #[async_trait]
+    impl uc_core::ports::security::KeyMigrationPort for FakeKeyMigration {
+        async fn prepare_migration_key(
+            &self,
+        ) -> Result<uc_core::setup::MigrationRunId, uc_core::ports::security::KeyMigrationError>
+        {
+            Ok(uc_core::setup::MigrationRunId::new("smoke-run-id"))
+        }
+        async fn encrypt_with_migration_key(
+            &self,
+            _run_id: &uc_core::setup::MigrationRunId,
+            plaintext: &uc_core::crypto::domain::Plaintext,
+            _aad: &uc_core::crypto::domain::Aad,
+        ) -> Result<uc_core::crypto::domain::Ciphertext, uc_core::ports::security::KeyMigrationError>
+        {
+            Ok(uc_core::crypto::domain::Ciphertext::new(
+                plaintext.as_bytes().to_vec(),
+            ))
+        }
+        async fn decrypt_with_migration_key(
+            &self,
+            _run_id: &uc_core::setup::MigrationRunId,
+            ciphertext: &uc_core::crypto::domain::Ciphertext,
+            _aad: &uc_core::crypto::domain::Aad,
+        ) -> Result<uc_core::crypto::domain::Plaintext, uc_core::ports::security::KeyMigrationError>
+        {
+            Ok(uc_core::crypto::domain::Plaintext::new(
+                ciphertext.as_bytes().to_vec(),
+            ))
+        }
+        async fn discard_migration_key(
+            &self,
+            _run_id: &uc_core::setup::MigrationRunId,
+        ) -> Result<(), uc_core::ports::security::KeyMigrationError> {
+            Ok(())
+        }
+    }
+
+    struct FakeBlobMigrationRepo;
+    #[async_trait]
+    impl uc_core::ports::clipboard::BlobMigrationRepoPort for FakeBlobMigrationRepo {
+        async fn list_main_inline_representations(
+            &self,
+        ) -> Result<
+            Vec<(uc_core::ids::EventId, uc_core::ids::RepresentationId)>,
+            uc_core::ports::clipboard::BlobMigrationRepoError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn read_main_inline_data(
+            &self,
+            _event_id: &uc_core::ids::EventId,
+            _representation_id: &uc_core::ids::RepresentationId,
+        ) -> Result<Option<Vec<u8>>, uc_core::ports::clipboard::BlobMigrationRepoError> {
+            Ok(None)
+        }
+        async fn upsert_record(
+            &self,
+            _record: &uc_core::ports::clipboard::MigrationRecord,
+        ) -> Result<(), uc_core::ports::clipboard::BlobMigrationRepoError> {
+            Ok(())
+        }
+        async fn count_records(
+            &self,
+        ) -> Result<u64, uc_core::ports::clipboard::BlobMigrationRepoError> {
+            Ok(0)
+        }
+        async fn list_records(
+            &self,
+        ) -> Result<
+            Vec<uc_core::ports::clipboard::MigrationRecord>,
+            uc_core::ports::clipboard::BlobMigrationRepoError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn update_main_inline_data(
+            &self,
+            _event_id: &uc_core::ids::EventId,
+            _representation_id: &uc_core::ids::RepresentationId,
+            _new_ciphertext: &[u8],
+        ) -> Result<(), uc_core::ports::clipboard::BlobMigrationRepoError> {
+            Ok(())
+        }
+        async fn discard_all_records(
+            &self,
+        ) -> Result<(), uc_core::ports::clipboard::BlobMigrationRepoError> {
+            Ok(())
+        }
+    }
+
+    struct FakeBlobCipher;
+    #[async_trait]
+    impl uc_core::ports::security::BlobCipherPort for FakeBlobCipher {
+        async fn encrypt(
+            &self,
+            _space: &uc_core::crypto::domain::ActiveSpace,
+            plaintext: &uc_core::crypto::domain::Plaintext,
+            _aad: &uc_core::crypto::domain::Aad,
+        ) -> Result<uc_core::crypto::domain::Ciphertext, uc_core::ports::security::BlobCipherError>
+        {
+            Ok(uc_core::crypto::domain::Ciphertext::new(
+                plaintext.as_bytes().to_vec(),
+            ))
+        }
+        async fn decrypt(
+            &self,
+            _space: &uc_core::crypto::domain::ActiveSpace,
+            ciphertext: &uc_core::crypto::domain::Ciphertext,
+            _aad: &uc_core::crypto::domain::Aad,
+        ) -> Result<uc_core::crypto::domain::Plaintext, uc_core::ports::security::BlobCipherError>
+        {
+            Ok(uc_core::crypto::domain::Plaintext::new(
+                ciphertext.as_bytes().to_vec(),
+            ))
+        }
+    }
+
     fn default_fingerprint() -> IdentityFingerprint {
         IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
     }
@@ -942,6 +1196,10 @@ mod tests {
             peer_addr_repo: Arc::clone(&peer_addr_repo)
                 as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
             presence: Arc::new(FakePresence),
+            migration_state: Arc::new(FakeMigrationState),
+            key_migration: Arc::new(FakeKeyMigration),
+            blob_migration_repo: Arc::new(FakeBlobMigrationRepo),
+            blob_cipher: Arc::new(FakeBlobCipher),
         });
         (facade, pairing_invitation, peer_addr_repo)
     }
@@ -1269,5 +1527,66 @@ mod tests {
             0,
             "B1 must not trigger ensure_reachable_all",
         );
+    }
+
+    // ── Switch-space smoke tests (commit 4) ──────────────────────────────
+    //
+    // 端口契约层面的回归在 `usecases::setup::switch_space::tests` 里覆盖；
+    // 这里只验 facade 层的转发 / 启动 hook 行为：
+    // * pre-flight 把"设备未 setup"映射成 `NotSetup`。
+    // * `query_migration_progress` 在空闲状态（FakeMigrationState 全返
+    //   None）下返回 `phase=None, count=0`。
+    // * `try_resume_session` 在 has_completed=true + FakeSpaceAccess 返回
+    //   `Some(active_space)` 时走通 `resume_pending`（None phase 是 noop，
+    //   不会拉错路径）。
+
+    #[tokio::test]
+    async fn switch_space_rejects_when_setup_not_completed() {
+        let (facade, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()), // has_completed=false
+            Arc::new(InMemorySettings::default()),
+        );
+        let err = facade
+            .switch_space(SwitchSpaceInput {
+                code: "CODE-1".into(),
+                new_passphrase: "hunter22hunter22".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SwitchSpaceError::NotSetup));
+    }
+
+    #[tokio::test]
+    async fn query_migration_progress_idle_returns_phase_none_and_zero_count() {
+        let (facade, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        let progress = facade.query_migration_progress().await.expect("idle ok");
+        assert_eq!(progress.phase, None);
+        assert_eq!(progress.backup_record_count, 0);
+    }
+
+    #[tokio::test]
+    async fn try_resume_session_resumes_silent_unlock_and_runs_migration_hook() {
+        // FakeSpaceAccess::try_resume_session 默认返回 Ok(None)，模拟没有
+        // keyslot 的场景——`try_resume_session` 应返回 Ok(false)，且
+        // resume_pending 因为 FakeMigrationState 返回 None 也是 noop。
+        // 这里覆盖的是"两个 hook 都不 panic + 错误不被吞"。
+        let setup_status = InMemorySetupStatus::default();
+        *setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+            space_id: None,
+        };
+        let (facade, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(setup_status),
+            Arc::new(InMemorySettings::default()),
+        );
+        let resumed = facade.try_resume_session().await.expect("resume ok");
+        // FakeSpaceAccess.try_resume_session 默认 Ok(None) → "nothing to resume"
+        assert!(!resumed);
     }
 }
