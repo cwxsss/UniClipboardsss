@@ -23,7 +23,7 @@ use iroh::endpoint::{TransportConfig, VarInt};
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use iroh_quinn_proto::congestion::BbrConfig;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 
 use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::blob::BlobTransferPort;
@@ -394,6 +394,13 @@ impl IrohNodeBuilder {
             Arc::clone(&self.endpoint),
             store,
         ));
+
+        info!(
+            store_dir = %store_dir.display(),
+            alpn = %String::from_utf8_lossy(BLOBS_ALPN),
+            endpoint_id = %self.endpoint.id().fmt_short(),
+            "iroh blobs acceptor installed"
+        );
 
         Ok(BlobHandlers {
             blob_transfer: adapter,
