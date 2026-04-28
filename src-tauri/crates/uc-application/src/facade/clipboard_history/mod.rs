@@ -4,12 +4,17 @@ use std::sync::Arc;
 use thiserror::Error;
 use uc_core::blob::ports::BlobReaderPort;
 use uc_core::clipboard::link_utils::extract_domain;
-use uc_core::ids::EntryId;
+use uc_core::ids::{EntryId, EventId, FormatId, RepresentationId};
 use uc_core::ports::clipboard::{ClipboardPayloadResolverPort, ThumbnailRepositoryPort};
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::{
     ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationRepositoryPort,
-    ClipboardSelectionRepositoryPort, FileTransferRepositoryPort,
+    ClipboardSelectionRepositoryPort, ClockPort, DeviceIdentityPort, FileTransferRepositoryPort,
+};
+use uc_core::{
+    ClipboardEntry, ClipboardEvent, ClipboardSelection, ClipboardSelectionDecision, MimeType,
+    ObservedClipboardRepresentation, PayloadAvailability, PersistedClipboardRepresentation,
+    SelectionPolicyVersion, SystemClipboardSnapshot,
 };
 
 use crate::usecases::clipboard_history::{
@@ -104,6 +109,10 @@ pub struct ClipboardHistoryFacadeDeps {
     pub file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     pub search_index: Option<Arc<dyn SearchIndexPort>>,
     pub file_cache_dir: Option<PathBuf>,
+    /// `seed_text_entry` 用：构造 `ClipboardEvent.source_device`。
+    pub device_identity: Arc<dyn DeviceIdentityPort>,
+    /// `seed_text_entry` 用：构造 `captured_at_ms` / `created_at_ms`。
+    pub clock: Arc<dyn ClockPort>,
 }
 
 pub struct ClipboardHistoryFacade {
@@ -113,6 +122,11 @@ pub struct ClipboardHistoryFacade {
     toggle_favorite_uc: ToggleFavoriteClipboardEntryUseCase,
     delete_uc: DeleteClipboardEntryUseCase,
     clear_uc: ClearClipboardHistoryUseCase,
+    /// debug seed 路径需要的额外 ports，常态业务不直接消费。
+    seed_event_writer: Arc<dyn ClipboardEventWriterPort>,
+    seed_entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
+    seed_device_identity: Arc<dyn DeviceIdentityPort>,
+    seed_clock: Arc<dyn ClockPort>,
 }
 
 impl ClipboardHistoryFacade {
@@ -128,7 +142,20 @@ impl ClipboardHistoryFacade {
             file_transfer_repo,
             search_index,
             file_cache_dir,
+            device_identity,
+            clock,
         } = deps;
+        // seed 路径要在主 use case 装配之后单独留一份 Arc 引用——其它字段
+        // 都被 move 进各 use case 内部，不能在外面继续 clone。
+        let seed_event_writer = Arc::clone(&event_writer);
+        let seed_entry_repo = Arc::clone(&entry_repo);
+        let seed_device_identity = Arc::clone(&device_identity);
+        let seed_clock = Arc::clone(&clock);
+        // device_identity / clock 在常态 use case 里目前不消费，避免出现
+        // 未使用 binding 警告——下面的 _ 让 clippy 闭嘴；后续 use case 真
+        // 用上时再展开。
+        let _ = device_identity;
+        let _ = clock;
 
         let list_uc = ListClipboardEntryProjectionsUseCase::new(
             entry_repo.clone(),
@@ -188,7 +215,89 @@ impl ClipboardHistoryFacade {
             toggle_favorite_uc,
             delete_uc,
             clear_uc,
+            seed_event_writer,
+            seed_entry_repo,
+            seed_device_identity,
+            seed_clock,
         }
+    }
+
+    /// 调试 / 测试用：直接落库一条文本剪贴板条目。
+    ///
+    /// 走 `event_writer` decorator 链——所以 `inline_data` 会被
+    /// `EncryptingClipboardEventWriter` 用当前 session master_key 加密。
+    /// 之后 `entry_repo.save_entry_and_selection` 写入 `clipboard_entry`
+    /// 行，让 `list_entries` / `get_entry` 能看到这条记录。
+    ///
+    /// 这是 switch-space E2E 数据完整性验证的种子方法（CLI
+    /// `uniclip seed-clipboard` 命令的后端）；常态业务路径走
+    /// `CaptureClipboardUseCase`，不要和这个方法混用。
+    pub async fn seed_text_entry(&self, text: &str) -> Result<String, ClipboardHistoryError> {
+        let event_id = EventId::new();
+        let entry_id = EntryId::new();
+        let rep_id = RepresentationId::new();
+        let now = self.seed_clock.now_ms();
+        let device_id = self.seed_device_identity.current_device_id();
+        let bytes = text.as_bytes().to_vec();
+        let total_size = bytes.len() as i64;
+
+        // 用 SystemClipboardSnapshot 算 snapshot_hash——和 CaptureClipboardUseCase
+        // 走同一份 hash 算法，与生产端 inbound dedup 路径一致。
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: now,
+            representations: vec![ObservedClipboardRepresentation::new(
+                rep_id.clone(),
+                FormatId::from("text"),
+                Some(MimeType("text/plain".to_string())),
+                bytes.clone(),
+            )],
+        };
+        let snapshot_hash = snapshot.snapshot_hash();
+
+        let event = ClipboardEvent::new(event_id.clone(), now, device_id, snapshot_hash);
+
+        // PersistedClipboardRepresentation::new_with_state 把 inline_data
+        // 标记为 Inline（可立即读出），与"text 默认 inline"语义一致。
+        let rep = PersistedClipboardRepresentation::new_with_state(
+            rep_id.clone(),
+            FormatId::from("text"),
+            Some(MimeType("text/plain".to_string())),
+            total_size,
+            Some(bytes),
+            None,
+            PayloadAvailability::Inline,
+            None,
+        )
+        .map_err(|e| ClipboardHistoryError::Internal(format!("build representation: {e}")))?;
+
+        self.seed_event_writer
+            .insert_event(&event, &vec![rep])
+            .await
+            .map_err(|e| ClipboardHistoryError::Internal(format!("insert_event: {e}")))?;
+
+        // ClipboardEntry 与 ClipboardSelection 是搭配的——entry_repo 的
+        // save_entry_and_selection 会同时写两张表。selection 里只有一个
+        // representation，全部字段都指向 rep_id。
+        let entry = ClipboardEntry::new(entry_id.clone(), event_id, now, None, total_size);
+        let selection = ClipboardSelectionDecision::new(
+            entry_id.clone(),
+            ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: Vec::new(),
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id,
+                policy_version: SelectionPolicyVersion::V1,
+            },
+        );
+
+        self.seed_entry_repo
+            .save_entry_and_selection(&entry, &selection)
+            .await
+            .map_err(|e| {
+                ClipboardHistoryError::Internal(format!("save_entry_and_selection: {e}"))
+            })?;
+
+        Ok(entry_id.to_string())
     }
 
     pub async fn list_entries(

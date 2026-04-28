@@ -27,6 +27,7 @@ set -euo pipefail
 CLI="${CLI:-./src-tauri/target/debug/uniclip}"
 PASSPHRASE_ALICE="${PASSPHRASE_ALICE:-hunter22hunter22}"
 PASSPHRASE_BOB="${PASSPHRASE_BOB:-bobsfirstpasspass}"
+SEED_TEXT="${SEED_TEXT:-secret-clipboard-message-from-bob}"
 WAIT_SECS="${WAIT_SECS:-30}"
 COMMON_FLAGS="--dev"
 
@@ -66,6 +67,18 @@ echo "==> bob: init (passphrase B — bob's original space, will be migrated awa
 "$CLI" $COMMON_FLAGS --profile bob init \
     --passphrase "$PASSPHRASE_BOB" \
     --device-name "bob (e2e)"
+
+echo "==> bob: seed-clipboard (encrypted under passphrase B's master key)"
+"$CLI" $COMMON_FLAGS --profile bob seed-clipboard \
+    --text "$SEED_TEXT"
+
+echo "==> bob: dump-clipboard (sanity — should show seeded text decrypted under B's key)"
+PRE_DUMP="$("$CLI" $COMMON_FLAGS --profile bob dump-clipboard --limit 5)"
+echo "$PRE_DUMP" | sed 's/^/    bob_pre | /'
+if ! echo "$PRE_DUMP" | grep -qF "$SEED_TEXT"; then
+    echo "FAIL: bob's pre-switch dump did not contain the seeded text" >&2
+    exit 1
+fi
 
 echo "==> alice: invite (background)"
 ALICE_OUT="$(mktemp -t uc_alice_invite.XXXXXX)"
@@ -125,4 +138,12 @@ if [[ $ALICE_EXIT -ne 0 ]]; then
     exit 1
 fi
 
-echo "PASS: single-machine switch-space end-to-end verified"
+echo "==> bob: dump-clipboard (post-switch — must still show seeded text decrypted under A's master key)"
+POST_DUMP="$("$CLI" $COMMON_FLAGS --profile bob dump-clipboard --limit 5)"
+echo "$POST_DUMP" | sed 's/^/    bob_post | /'
+if ! echo "$POST_DUMP" | grep -qF "$SEED_TEXT"; then
+    echo "FAIL: bob's post-switch dump did not contain the seeded text — re-encryption broke data" >&2
+    exit 1
+fi
+
+echo "PASS: single-machine switch-space end-to-end verified (data round-trip preserved)"

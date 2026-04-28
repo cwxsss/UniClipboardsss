@@ -167,6 +167,8 @@ pub fn build_app_facade_from_deps(
             file_transfer_repo: deps.storage.file_transfer_repo.clone(),
             search_index: Some(deps.search.search_index.clone()),
             file_cache_dir: Some(storage_paths.cache_dir.clone()),
+            device_identity: deps.device.device_identity.clone(),
+            clock: deps.system.clock.clone(),
         })),
         clipboard_sync: options.clipboard_sync,
         blob_transfer: options.blob_transfer,

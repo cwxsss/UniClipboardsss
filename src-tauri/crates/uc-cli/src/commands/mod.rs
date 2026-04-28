@@ -1,11 +1,13 @@
 pub mod app_session;
 pub mod blob;
 pub mod devices;
+pub mod dump_clipboard;
 pub mod init;
 pub mod invite;
 pub mod join;
 pub mod members;
 pub mod search;
+pub mod seed_clipboard;
 pub mod send;
 pub mod start;
 pub mod status;

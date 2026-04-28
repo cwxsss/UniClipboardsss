@@ -109,6 +109,22 @@ enum Commands {
         #[arg(long)]
         device_name: Option<String>,
     },
+    /// Debug / E2E only: insert one text clipboard entry encrypted with
+    /// the current session master key. Used by switch-space data-integrity
+    /// tests as a seeding helper. Not part of the user-facing surface.
+    SeedClipboard {
+        /// Plaintext to seed.
+        #[arg(long)]
+        text: String,
+    },
+    /// Debug / E2E only: print the latest decrypted clipboard entries
+    /// (preview field is plaintext after decryption). Pair with
+    /// `seed-clipboard` to verify switch-space preserves data round-trip.
+    DumpClipboard {
+        /// Maximum number of entries to print (default 10).
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Switch to another sponsor's space, re-encrypting local clipboard
     /// history under the new master key (4-phase migration).
     ///
@@ -255,6 +271,21 @@ fn main() -> anyhow::Result<()> {
                         passphrase,
                         device_name,
                     },
+                    cli.verbose,
+                )
+                .await
+            }
+            Commands::SeedClipboard { text } => {
+                commands::seed_clipboard::run(
+                    commands::seed_clipboard::SeedClipboardArgs { text },
+                    cli.verbose,
+                )
+                .await
+            }
+            Commands::DumpClipboard { limit } => {
+                commands::dump_clipboard::run(
+                    commands::dump_clipboard::DumpClipboardArgs { limit },
+                    cli.json,
                     cli.verbose,
                 )
                 .await
