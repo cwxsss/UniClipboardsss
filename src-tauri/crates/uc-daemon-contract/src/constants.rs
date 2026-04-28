@@ -124,6 +124,12 @@ pub mod http_route_v2 {
     pub const SETUP_RESET: &str = "/v2/setup/reset";
     /// GET /v2/setup/state — read-only snapshot for the v2 UI.
     pub const SETUP_STATE: &str = "/v2/setup/state";
+    /// POST /v2/setup/switch-space — already-setup device joins another sponsor's
+    /// space, running the 4-phase clipboard re-encryption migration.
+    pub const SETUP_SWITCH_SPACE: &str = "/v2/setup/switch-space";
+    /// GET /v2/setup/migration-progress — coarse progress snapshot for UI polling
+    /// during a switch-space migration. Returns `phase = null` when idle.
+    pub const SETUP_MIGRATION_PROGRESS: &str = "/v2/setup/migration-progress";
 }
 
 /// HTTP route paths for daemon auth endpoints.

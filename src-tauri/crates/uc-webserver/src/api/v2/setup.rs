@@ -10,6 +10,10 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
+use uc_application::facade::space_setup::{
+    MigrationPhaseKind, MigrationProgress, QueryMigrationProgressError, SwitchSpaceError,
+    SwitchSpaceInput, SwitchSpaceResult,
+};
 use uc_application::facade::{
     CancelInvitationError, InitializeSpaceError, IssuePairingInvitationResult,
     QuerySetupStateError, RedeemPairingInvitationError, RedeemPairingInvitationResult,
@@ -20,7 +24,8 @@ use uc_application::facade::{
 };
 use uc_daemon_contract::api::dto::v2::setup::{
     CurrentInvitation, InitializeSpaceRequest, InitializeSpaceResponse, IssueInvitationResponse,
-    RedeemRequest, RedeemResponse, SetupStateResponse,
+    MigrationPhaseDto, MigrationProgressResponse, RedeemRequest, RedeemResponse,
+    SetupStateResponse, SwitchSpaceRequest, SwitchSpaceResponse,
 };
 use uc_daemon_contract::constants::http_route_v2;
 
@@ -38,6 +43,11 @@ pub fn router() -> Router<DaemonApiState> {
         .route(http_route_v2::SETUP_CANCEL, post(cancel))
         .route(http_route_v2::SETUP_RESET, post(reset))
         .route(http_route_v2::SETUP_STATE, get(get_state))
+        .route(http_route_v2::SETUP_SWITCH_SPACE, post(switch_space))
+        .route(
+            http_route_v2::SETUP_MIGRATION_PROGRESS,
+            get(query_migration_progress),
+        )
 }
 
 fn require_facade(state: &DaemonApiState) -> Result<std::sync::Arc<SpaceSetupFacade>, ApiError> {
@@ -294,6 +304,131 @@ fn state_to_dto(view: SetupStateView) -> SetupStateResponse {
     }
 }
 
+// ---------------------------------------------------------------------------
+// POST /v2/setup/switch-space
+// ---------------------------------------------------------------------------
+
+#[utoipa::path(
+    post,
+    path = "/v2/setup/switch-space",
+    tag = "setup-v2",
+    request_body = SwitchSpaceRequest,
+    responses(
+        (status = 200, body = SwitchSpaceResponse),
+        (status = 400, description = "Wrong passphrase / device name missing", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 404, description = "Invitation not found / expired", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 409, description = "Not setup, pending migration, sponsor rejected, or session locked", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 503, description = "Sponsor unreachable / service unavailable", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal error / corrupted ciphertext / storage failure", body = crate::api::dto::error::ApiErrorResponse),
+    ),
+)]
+pub(crate) async fn switch_space(
+    State(state): State<DaemonApiState>,
+    Json(req): Json<SwitchSpaceRequest>,
+) -> Result<Json<SwitchSpaceResponse>, ApiError> {
+    let facade = require_facade(&state)?;
+    let input = SwitchSpaceInput {
+        code: req.code,
+        new_passphrase: req.new_passphrase,
+    };
+    let out = facade
+        .switch_space(input)
+        .await
+        .map_err(map_switch_space_err)?;
+    Ok(Json(switch_space_to_dto(out)))
+}
+
+fn map_switch_space_err(err: SwitchSpaceError) -> ApiError {
+    use SwitchSpaceError as E;
+    match err {
+        E::NotSetup => ApiError::conflict(
+            "this device has not completed first-time setup yet; use /v2/setup/initialize \
+             or /v2/setup/redeem first",
+        ),
+        E::PendingMigration(_) => ApiError::conflict(
+            "a previous switch-space migration is still in flight; restart the daemon to \
+             auto-resume, or call /v2/setup/reset to abandon",
+        ),
+        E::NotUnlocked => {
+            ApiError::conflict("space session is locked; unlock the current space before switching")
+        }
+        E::InvitationNotFound => ApiError::not_found("invitation not found"),
+        E::InvitationExpired => ApiError::not_found("invitation has expired"),
+        E::SponsorUnreachable => ApiError::service_unavailable("sponsor is not reachable"),
+        E::ServiceUnavailable => {
+            ApiError::service_unavailable("pairing invitation service unavailable")
+        }
+        E::PassphraseMismatch => ApiError::bad_request("wrong passphrase"),
+        E::CorruptedKeyMaterial => ApiError::internal("space key material corrupted"),
+        E::DeviceNameRequired => ApiError::bad_request("device name is required"),
+        E::SponsorRejectedInvitation => {
+            ApiError::conflict("sponsor did not recognise the invitation code")
+        }
+        E::SponsorDeclined => ApiError::conflict("sponsor declined the pairing request"),
+        E::Timeout => ApiError::service_unavailable("handshake timed out"),
+        E::ConnectionLost => ApiError::service_unavailable("connection lost mid-handshake"),
+        E::InvalidCiphertext => {
+            ApiError::internal("backup record decryption failed (corrupted ciphertext)")
+        }
+        E::Storage(msg) => ApiError::internal(format!("storage failure: {msg}")),
+        E::Internal(msg) => ApiError::internal(msg),
+    }
+}
+
+fn switch_space_to_dto(out: SwitchSpaceResult) -> SwitchSpaceResponse {
+    SwitchSpaceResponse {
+        sponsor_device_id: out.sponsor_device_id.to_string(),
+        sponsor_identity_fingerprint: out.sponsor_identity_fingerprint.as_display().to_string(),
+        space_id: out.space_id.to_string(),
+        self_device_id: out.self_device_id.to_string(),
+        self_identity_fingerprint: out.self_identity_fingerprint.as_display().to_string(),
+        migrated_records: out.migrated_records,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /v2/setup/migration-progress
+// ---------------------------------------------------------------------------
+
+#[utoipa::path(
+    get,
+    path = "/v2/setup/migration-progress",
+    tag = "setup-v2",
+    responses(
+        (status = 200, body = MigrationProgressResponse),
+        (status = 503, description = "Facade not assembled", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Storage failure", body = crate::api::dto::error::ApiErrorResponse),
+    ),
+)]
+pub(crate) async fn query_migration_progress(
+    State(state): State<DaemonApiState>,
+) -> Result<Json<MigrationProgressResponse>, ApiError> {
+    let facade = require_facade(&state)?;
+    let progress = facade
+        .query_migration_progress()
+        .await
+        .map_err(|err| match err {
+            QueryMigrationProgressError::StorageFailed(msg) => ApiError::internal(msg),
+            QueryMigrationProgressError::Internal(msg) => ApiError::internal(msg),
+        })?;
+    Ok(Json(migration_progress_to_dto(progress)))
+}
+
+fn migration_progress_to_dto(progress: MigrationProgress) -> MigrationProgressResponse {
+    MigrationProgressResponse {
+        phase: progress.phase.map(phase_kind_to_dto),
+        backup_record_count: progress.backup_record_count,
+    }
+}
+
+fn phase_kind_to_dto(kind: MigrationPhaseKind) -> MigrationPhaseDto {
+    match kind {
+        MigrationPhaseKind::Prepared => MigrationPhaseDto::Prepared,
+        MigrationPhaseKind::HandshakeDone => MigrationPhaseDto::HandshakeDone,
+        MigrationPhaseKind::Swapped => MigrationPhaseDto::Swapped,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Handler-internal pure-function tests. End-to-end router /
@@ -439,5 +574,168 @@ mod tests {
                 .as_u16(),
             500
         );
+    }
+
+    // ── switch-space + migration-progress (commit 7) ─────────────────────
+
+    #[test]
+    fn switch_space_to_dto_carries_all_fields_including_migrated_records() {
+        let dto = switch_space_to_dto(SwitchSpaceResult {
+            sponsor_device_id: DeviceId::new("sponsor-1"),
+            sponsor_identity_fingerprint: fixed_fp(),
+            space_id: SpaceId::from_str("space-new"),
+            self_device_id: DeviceId::new("joiner-2"),
+            self_identity_fingerprint: fixed_fp(),
+            migrated_records: 7,
+        });
+        assert_eq!(dto.sponsor_device_id, "sponsor-1");
+        assert_eq!(dto.self_device_id, "joiner-2");
+        assert_eq!(dto.space_id, "space-new");
+        assert_eq!(dto.migrated_records, 7);
+        assert_eq!(dto.sponsor_identity_fingerprint, "ABCD-EFGH-IJKL-MNOP");
+    }
+
+    #[test]
+    fn map_switch_space_err_branches() {
+        // Conflict (409) — pre-flight + state-conflict variants.
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::NotSetup)
+                .status
+                .as_u16(),
+            409
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::PendingMigration(
+                uc_core::setup::MigrationPhase::Prepared {
+                    run_id: uc_core::setup::MigrationRunId::new("r")
+                }
+            ))
+            .status
+            .as_u16(),
+            409
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::NotUnlocked)
+                .status
+                .as_u16(),
+            409
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::SponsorRejectedInvitation)
+                .status
+                .as_u16(),
+            409
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::SponsorDeclined)
+                .status
+                .as_u16(),
+            409
+        );
+        // 404 — invitation-shape errors.
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::InvitationNotFound)
+                .status
+                .as_u16(),
+            404
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::InvitationExpired)
+                .status
+                .as_u16(),
+            404
+        );
+        // 400 — client-fixable input.
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::PassphraseMismatch)
+                .status
+                .as_u16(),
+            400
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::DeviceNameRequired)
+                .status
+                .as_u16(),
+            400
+        );
+        // 503 — transient / retry-friendly.
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::SponsorUnreachable)
+                .status
+                .as_u16(),
+            503
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::ServiceUnavailable)
+                .status
+                .as_u16(),
+            503
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::Timeout)
+                .status
+                .as_u16(),
+            503
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::ConnectionLost)
+                .status
+                .as_u16(),
+            503
+        );
+        // 500 — corrupted state / internal.
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::CorruptedKeyMaterial)
+                .status
+                .as_u16(),
+            500
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::InvalidCiphertext)
+                .status
+                .as_u16(),
+            500
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::Storage("boom".into()))
+                .status
+                .as_u16(),
+            500
+        );
+        assert_eq!(
+            map_switch_space_err(SwitchSpaceError::Internal("boom".into()))
+                .status
+                .as_u16(),
+            500
+        );
+    }
+
+    #[test]
+    fn migration_progress_to_dto_idle_returns_phase_none() {
+        let dto = migration_progress_to_dto(MigrationProgress {
+            phase: None,
+            backup_record_count: 0,
+        });
+        assert!(dto.phase.is_none());
+        assert_eq!(dto.backup_record_count, 0);
+    }
+
+    #[test]
+    fn migration_progress_to_dto_maps_each_phase_kind() {
+        for (kind, expected) in [
+            (MigrationPhaseKind::Prepared, MigrationPhaseDto::Prepared),
+            (
+                MigrationPhaseKind::HandshakeDone,
+                MigrationPhaseDto::HandshakeDone,
+            ),
+            (MigrationPhaseKind::Swapped, MigrationPhaseDto::Swapped),
+        ] {
+            let dto = migration_progress_to_dto(MigrationProgress {
+                phase: Some(kind),
+                backup_record_count: 3,
+            });
+            assert_eq!(dto.phase, Some(expected));
+            assert_eq!(dto.backup_record_count, 3);
+        }
     }
 }

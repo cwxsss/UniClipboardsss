@@ -52,6 +52,27 @@ export interface SetupStateResponse {
   deviceName: string | null
 }
 
+export interface SwitchSpaceRequest {
+  code: string
+  newPassphrase: string
+}
+
+export interface SwitchSpaceResponse {
+  sponsorDeviceId: string
+  sponsorIdentityFingerprint: string
+  spaceId: string
+  selfDeviceId: string
+  selfIdentityFingerprint: string
+  migratedRecords: number
+}
+
+export type MigrationPhase = 'prepared' | 'handshake_done' | 'swapped'
+
+export interface MigrationProgressResponse {
+  phase: MigrationPhase | null
+  backupRecordCount: number
+}
+
 // ── Typed errors (HTTP status → discriminated union) ───────────────────────
 //
 // Backend returns descriptive English messages in the body; we keep the raw
@@ -94,6 +115,28 @@ export type ResetErrorKind =
   | 'internal' // 500
 
 export type QuerySetupStateErrorKind =
+  | 'service_unavailable' // 503
+  | 'internal' // 500
+
+export type SwitchSpaceErrorKind =
+  | 'not_setup' // 409 — device hasn't completed first-time setup yet
+  | 'pending_migration' // 409 — a previous migration is still in flight
+  | 'not_unlocked' // 409 — current space session is locked
+  | 'sponsor_rejected' // 409 — sponsor did not recognise the invitation code
+  | 'sponsor_declined' // 409 — sponsor declined the pairing
+  | 'invitation_not_found' // 404
+  | 'invitation_expired' // 404
+  | 'passphrase_mismatch' // 400 — wrong new passphrase
+  | 'device_name_required' // 400
+  | 'sponsor_unreachable' // 503
+  | 'service_unavailable' // 503
+  | 'timeout' // 503
+  | 'connection_lost' // 503
+  | 'corrupted_key_material' // 500
+  | 'invalid_ciphertext' // 500 — backup record could not be decrypted
+  | 'internal' // 500
+
+export type QueryMigrationProgressErrorKind =
   | 'service_unavailable' // 503
   | 'internal' // 500
 
@@ -223,6 +266,62 @@ function classifyQueryError(err: unknown): SetupV2Error<QuerySetupStateErrorKind
   return new SetupV2Error('internal', raw, status)
 }
 
+function classifySwitchSpaceError(err: unknown): SetupV2Error<SwitchSpaceErrorKind> {
+  const status = pickStatus(err)
+  const raw = rawMessage(err)
+  const lower = raw.toLowerCase()
+  if (status === 404) {
+    if (lower.includes('expired')) return new SetupV2Error('invitation_expired', raw, status)
+    return new SetupV2Error('invitation_not_found', raw, status)
+  }
+  if (status === 400) {
+    if (lower.includes('device name')) {
+      return new SetupV2Error('device_name_required', raw, status)
+    }
+    return new SetupV2Error('passphrase_mismatch', raw, status)
+  }
+  if (status === 409) {
+    // 5 distinct 409 sub-cases — disambiguate by message keyword. Backend
+    // text from `map_switch_space_err` is the source of truth; keep the
+    // matchers narrow so unrelated future variants land on `internal`.
+    if (lower.includes('first-time setup')) return new SetupV2Error('not_setup', raw, status)
+    if (lower.includes('still in flight')) return new SetupV2Error('pending_migration', raw, status)
+    if (lower.includes('locked')) return new SetupV2Error('not_unlocked', raw, status)
+    if (lower.includes('declined')) return new SetupV2Error('sponsor_declined', raw, status)
+    if (lower.includes('did not recognise') || lower.includes('did not recognize')) {
+      return new SetupV2Error('sponsor_rejected', raw, status)
+    }
+    return new SetupV2Error('internal', raw, status)
+  }
+  if (status === 503) {
+    if (lower.includes('timed out') || lower.includes('timeout')) {
+      return new SetupV2Error('timeout', raw, status)
+    }
+    if (lower.includes('connection lost')) return new SetupV2Error('connection_lost', raw, status)
+    if (lower.includes('sponsor')) return new SetupV2Error('sponsor_unreachable', raw, status)
+    return new SetupV2Error('service_unavailable', raw, status)
+  }
+  if (status === 500) {
+    if (lower.includes('corrupted ciphertext')) {
+      return new SetupV2Error('invalid_ciphertext', raw, status)
+    }
+    if (lower.includes('key material')) {
+      return new SetupV2Error('corrupted_key_material', raw, status)
+    }
+    return new SetupV2Error('internal', raw, status)
+  }
+  return new SetupV2Error('internal', raw, status)
+}
+
+function classifyMigrationProgressError(
+  err: unknown
+): SetupV2Error<QueryMigrationProgressErrorKind> {
+  const status = pickStatus(err)
+  const raw = rawMessage(err)
+  if (status === 503) return new SetupV2Error('service_unavailable', raw, status)
+  return new SetupV2Error('internal', raw, status)
+}
+
 // ── HTTP calls ──────────────────────────────────────────────────────────────
 
 const ROUTE = {
@@ -232,6 +331,8 @@ const ROUTE = {
   cancel: '/v2/setup/cancel',
   reset: '/v2/setup/reset',
   state: '/v2/setup/state',
+  switchSpace: '/v2/setup/switch-space',
+  migrationProgress: '/v2/setup/migration-progress',
 } as const
 
 export async function initializeSpace(
@@ -302,5 +403,44 @@ export async function getSetupState(): Promise<SetupStateResponse> {
     return await daemonClient.request<SetupStateResponse>(ROUTE.state)
   } catch (err) {
     throw classifyQueryError(err)
+  }
+}
+
+/**
+ * Switch this device to another sponsor's space, re-encrypting the local
+ * clipboard history under the new master key (4-phase migration).
+ *
+ * Pre-conditions enforced by the backend (surface as `not_setup` /
+ * `pending_migration` / `not_unlocked` errors):
+ *  * Device must have completed `init` or `redeem` (otherwise `not_setup`).
+ *  * Current space session must be unlocked (otherwise `not_unlocked`).
+ *  * No previous migration may be in flight (otherwise `pending_migration`;
+ *    restart the daemon to auto-resume, or `resetSetup` to abandon).
+ *
+ * The call blocks until all four phases complete; UI should show a
+ * spinner. Mid-flight progress is observable via `queryMigrationProgress`.
+ */
+export async function switchSpace(body: SwitchSpaceRequest): Promise<SwitchSpaceResponse> {
+  try {
+    return await daemonClient.request<SwitchSpaceResponse>(ROUTE.switchSpace, {
+      method: 'POST',
+      body: { ...body, code: normalizeInvitationCode(body.code) },
+    })
+  } catch (err) {
+    throw classifySwitchSpaceError(err)
+  }
+}
+
+/**
+ * Read the coarse-grained switch-space migration progress. Returns
+ * `phase = null` when no migration is in flight (idle / completed). UI
+ * polls this during a `switchSpace()` call to render which of the 4
+ * phases is currently running.
+ */
+export async function queryMigrationProgress(): Promise<MigrationProgressResponse> {
+  try {
+    return await daemonClient.request<MigrationProgressResponse>(ROUTE.migrationProgress)
+  } catch (err) {
+    throw classifyMigrationProgressError(err)
   }
 }

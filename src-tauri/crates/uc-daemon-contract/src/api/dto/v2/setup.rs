@@ -95,6 +95,61 @@ pub struct CurrentInvitation {
 // Content with no body — no response DTO needed. 409 Conflict on
 // cancel-when-empty surfaces through the daemon's standard ApiError.
 
+// ---------------------------------------------------------------------------
+// POST /v2/setup/switch-space
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /v2/setup/switch-space`. Maps to
+/// `SpaceSetupFacade::switch_space(SwitchSpaceInput)`. Pre-conditions
+/// (setup completed + session unlocked + no pending migration) are
+/// checked inside the facade and surface as 409 / 423 / 423 respectively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchSpaceRequest {
+    pub code: String,
+    pub new_passphrase: String,
+}
+
+/// Response body for `POST /v2/setup/switch-space`. Mirrors
+/// `SwitchSpaceResult` flattened to wire-friendly strings, plus
+/// `migrated_records` so the UI can show "迁移了 N 条历史".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchSpaceResponse {
+    pub sponsor_device_id: String,
+    pub sponsor_identity_fingerprint: String,
+    pub space_id: String,
+    pub self_device_id: String,
+    pub self_identity_fingerprint: String,
+    pub migrated_records: u64,
+}
+
+// ---------------------------------------------------------------------------
+// GET /v2/setup/migration-progress
+// ---------------------------------------------------------------------------
+
+/// Coarse-grained migration phase exposed to the UI. The internal
+/// `MigrationPhase` carries `run_id` / `target_space_id`; those are
+/// implementation detail and not surfaced over the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationPhaseDto {
+    Prepared,
+    HandshakeDone,
+    Swapped,
+}
+
+/// Response body for `GET /v2/setup/migration-progress`. Mirrors
+/// `MigrationProgress`. `phase = null` means no migration is in
+/// flight (idle / completed); polling clients should stop their loop
+/// when they observe this transition while `backup_record_count == 0`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationProgressResponse {
+    pub phase: Option<MigrationPhaseDto>,
+    pub backup_record_count: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +240,61 @@ mod tests {
             1_745_577_600_000_i64
         );
         assert_eq!(json["deviceName"], "MacBook");
+    }
+
+    #[test]
+    fn switch_space_request_round_trip_camel_case() {
+        let req = SwitchSpaceRequest {
+            code: "ABCD-1234".to_string(),
+            new_passphrase: "newpass22newpass".to_string(),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["code"], "ABCD-1234");
+        assert_eq!(json["newPassphrase"], "newpass22newpass");
+        assert!(json.get("new_passphrase").is_none());
+        let decoded: SwitchSpaceRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn switch_space_response_carries_migrated_records() {
+        let resp = SwitchSpaceResponse {
+            sponsor_device_id: "sponsor-1".to_string(),
+            sponsor_identity_fingerprint: "FPSPONSOR".to_string(),
+            space_id: "space-1".to_string(),
+            self_device_id: "joiner-2".to_string(),
+            self_identity_fingerprint: "FPJOINER".to_string(),
+            migrated_records: 7,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["sponsorDeviceId"], "sponsor-1");
+        assert_eq!(json["spaceId"], "space-1");
+        assert_eq!(json["selfDeviceId"], "joiner-2");
+        assert_eq!(json["migratedRecords"], 7);
+    }
+
+    #[test]
+    fn migration_progress_idle_serializes_phase_null() {
+        let resp = MigrationProgressResponse {
+            phase: None,
+            backup_record_count: 0,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["phase"].is_null());
+        assert_eq!(json["backupRecordCount"], 0);
+    }
+
+    #[test]
+    fn migration_progress_in_flight_serializes_snake_case_phase() {
+        let resp = MigrationProgressResponse {
+            phase: Some(MigrationPhaseDto::HandshakeDone),
+            backup_record_count: 42,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        // The phase enum is the wire contract — UI clients pattern-match
+        // on these strings, so the snake_case rendering is ironclad.
+        assert_eq!(json["phase"], "handshake_done");
+        assert_eq!(json["backupRecordCount"], 42);
     }
 
     #[test]

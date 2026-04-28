@@ -48,6 +48,8 @@ export {
   redeemInvitation,
   cancelInvitation,
   resetSetup,
+  switchSpace,
+  queryMigrationProgress,
   SetupV2Error,
 } from './setupV2'
 export type {
@@ -57,10 +59,16 @@ export type {
   InitializeSpaceResponse,
   IssueInvitationErrorKind,
   IssueInvitationResponse,
+  MigrationPhase,
+  MigrationProgressResponse,
+  QueryMigrationProgressErrorKind,
   RedeemInvitationErrorKind,
   RedeemRequest,
   RedeemResponse,
   SetupStateResponse,
+  SwitchSpaceErrorKind,
+  SwitchSpaceRequest,
+  SwitchSpaceResponse,
 } from './setupV2'
 export {
   getLocalDeviceInfo,
