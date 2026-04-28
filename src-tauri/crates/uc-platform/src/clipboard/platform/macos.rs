@@ -6,7 +6,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML,
-    NSPasteboardTypeString, NSPasteboardWriting,
+    NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSPasteboardWriting,
 };
 use objc2_foundation::{NSArray, NSData};
 use std::sync::{Arc, Mutex};
@@ -75,6 +75,11 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
                 Some("text/plain")
             }
             "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
+            // PixPin 截图 / Windows 端复制图片等场景 format_id 为 "image"，mime 通常为
+            // "image/png"。`common.rs::read_snapshot` 已把图像统一标准化为 PNG，因此 jpeg /
+            // webp / gif 不会出现在 envelope 中（与 windows.rs 保持同样取舍）。
+            "public.png" | "image" => Some("image/png"),
+            "public.tiff" => Some("image/tiff"),
             // file-list 表示：接收端 materializer 会把 rep.bytes 改写为本机 file:// URI
             // 列表（每行一条），写入时为每个 URI 生成一个独立 NSPasteboardItem 承载
             // NSPasteboardTypeFileURL —— Finder / NSDocumentController 识别的规范形式。
@@ -151,24 +156,33 @@ fn make_nsdata(bytes: &[u8]) -> Retained<NSData> {
 ///
 /// - `text/plain` → `NSPasteboardTypeString`
 /// - `text/html`  → `NSPasteboardTypeHTML`
+/// - `image/png`  → `NSPasteboardTypePNG`（每个 image rep 独立成一个 NSPasteboardItem，
+///   原始字节直接喂给 AppKit，避免 NSImage 中转的 colorspace / alpha 翻译误差）
+/// - `image/tiff` → `NSPasteboardTypeTIFF`
 /// - `text/uri-list` → 每个 URI 一个独立 `NSPasteboardItem`，承载 `NSPasteboardTypeFileURL`
 ///   （Apple 官方推荐的多文件写入形式）
 ///
-/// 其他 mime（image / rtf 等）在多 rep 路径里跳过并 info 日志，
-/// 留待后续 phase 补齐 `NSPasteboardTypePNG / NSPasteboardTypeRTF` 等。
+/// `image/jpeg` / `image/webp` / `image/gif` / RTF 等仍不支持：上游
+/// `common.rs::read_snapshot` 已把图像统一标准化为 PNG（与 windows.rs 同步取舍），
+/// envelope 不会出现这些 mime；RTF 等留待后续 phase 补齐 `NSPasteboardTypeRTF` 等。
 ///
 /// ## clearContents() 副作用防御
 ///
-/// 函数开头扫描 snapshot 是否包含至少一条可写 rep（text/plain、text/html 或 text/uri-list）。
-/// 若扫描结果为空，直接 bail——**不调用 clearContents()**，避免把用户原本的 clipboard
-/// 内容抹掉却什么都写不进去（与 Windows 任务的 `empty()` 副作用防御同构）。
+/// 函数开头扫描 snapshot 是否包含至少一条可写 rep（text/plain、text/html、
+/// text/uri-list、image/png 或 image/tiff）。若扫描结果为空，直接 bail——
+/// **不调用 clearContents()**，避免把用户原本的 clipboard 内容抹掉却什么都写不进去
+/// （与 Windows 任务的 `empty()` 副作用防御同构）。
 pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> Result<()> {
-    // 预扫描：snapshot 中至少要有一条可写 rep（text/plain、text/html 或 text/uri-list）。
-    // 否则直接 bail，不打开 / 不 clear pasteboard。
+    // 预扫描：snapshot 中至少要有一条可写 rep（text/plain、text/html、text/uri-list、
+    // image/png 或 image/tiff）。否则直接 bail，不打开 / 不 clear pasteboard。
     let has_writable = snapshot.representations.iter().any(|rep| {
         matches!(
             resolve_multi_rep_mime(rep),
-            Some("text/plain") | Some("text/html") | Some("text/uri-list")
+            Some("text/plain")
+                | Some("text/html")
+                | Some("text/uri-list")
+                | Some("image/png")
+                | Some("image/tiff")
         )
     });
 
@@ -184,8 +198,8 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             "macOS 多 rep 写入：无可写 rep；未清空系统 pasteboard（防副作用兜底）"
         );
         anyhow::bail!(
-            "macOS 多 rep 写入：无可写 rep（支持 text/plain, text/html, text/uri-list）；\
-             未清空系统 pasteboard；跳过的 rep = {:?}",
+            "macOS 多 rep 写入：无可写 rep（支持 text/plain, text/html, text/uri-list, \
+             image/png, image/tiff）；未清空系统 pasteboard；跳过的 rep = {:?}",
             skipped
         );
     }
@@ -207,11 +221,13 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
     // 纯文本目的地（TextEdit / Terminal）从一个 item 就能拿到文本；而 files 按 Apple
     // 规范各自一个 item。
     let text_item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+    let mut image_items: Vec<Retained<NSPasteboardItem>> = Vec::new();
     let mut file_items: Vec<Retained<NSPasteboardItem>> = Vec::new();
 
     let mut wrote_any = false;
     let mut skipped: Vec<String> = Vec::new();
     let mut file_uri_total = 0usize;
+    let mut image_total = 0usize;
 
     for rep in &snapshot.representations {
         match resolve_multi_rep_mime(rep) {
@@ -244,6 +260,47 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                     warn!(
                         bytes = rep.bytes.len(),
                         "setData_forType(NSPasteboardTypeHTML) 返回 false"
+                    );
+                    skipped.push(rep.format_id.as_str().to_string());
+                }
+            }
+            Some("image/png") => {
+                // image rep 独立成一个 NSPasteboardItem，不合并进 text_item。
+                // 同一 item 的多个 type 在 NSPasteboard 语义里表达"同一份内容的多种表示"，
+                // 把 PNG bytes 与 plain text 混在一个 item 会让 reader 误判一致性。
+                // PNG 字节直接喂给 NSPasteboardTypePNG，AppKit 内部 lazy-decode，比
+                // 经 NSImage 中转更稳（避免 alpha / colorspace 翻译误差）。
+                let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+                let data = make_nsdata(&rep.bytes);
+                // NSPasteboardTypePNG 是 extern "C" 静态变量，访问需要 unsafe 块。
+                let ok = unsafe { item.setData_forType(&data, NSPasteboardTypePNG) };
+                if ok {
+                    debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypePNG 成功");
+                    wrote_any = true;
+                    image_total += 1;
+                    image_items.push(item);
+                } else {
+                    warn!(
+                        bytes = rep.bytes.len(),
+                        "setData_forType(NSPasteboardTypePNG) 返回 false"
+                    );
+                    skipped.push(rep.format_id.as_str().to_string());
+                }
+            }
+            Some("image/tiff") => {
+                let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+                let data = make_nsdata(&rep.bytes);
+                // NSPasteboardTypeTIFF 是 extern "C" 静态变量，访问需要 unsafe 块。
+                let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeTIFF) };
+                if ok {
+                    debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypeTIFF 成功");
+                    wrote_any = true;
+                    image_total += 1;
+                    image_items.push(item);
+                } else {
+                    warn!(
+                        bytes = rep.bytes.len(),
+                        "setData_forType(NSPasteboardTypeTIFF) 返回 false"
                     );
                     skipped.push(rep.format_id.as_str().to_string());
                 }
@@ -293,7 +350,7 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                     format_id = %rep.format_id,
                     mime = ?other,
                     bytes = rep.bytes.len(),
-                    "macOS 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, text/uri-list）"
+                    "macOS 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, text/uri-list, image/png, image/tiff）"
                 );
                 skipped.push(rep.format_id.as_str().to_string());
             }
@@ -319,16 +376,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
     //   （objc2-foundation `src/array.rs`）
     //   注意：此处需要先把所有 item 收进 Vec，再取切片。
     //
-    // Item 顺序：text_item 在前（text/plain + text/html），file_items 依次在后。
-    // NSPasteboard::writeObjects 会原子地把整个数组提交到 pasteboard；目的地应用
-    // 按需选择各 item 的对应 type。
+    // Item 顺序：text_item 在前（text/plain + text/html），image_items 居中，
+    // file_items 在后。NSPasteboard::writeObjects 会原子地把整个数组提交到
+    // pasteboard；目的地应用按需选择各 item 的对应 type。
     //
-    // 注意：text_item 即使为空也一并提交 —— 只有 file rep 的场景下它不会携带 string/html
-    // type，readers 自然不会从中拿到内容，与只写 file_items 等价。真实场景里几乎总会
-    // 伴随至少一种文本表示（参见 materialize 注入的 rep_count >= 2）。
+    // 注意：text_item 即使为空也一并提交 —— 只有 image / file rep 的场景下它不会
+    // 携带 string/html type，readers 自然不会从中拿到内容，与只写 image_items /
+    // file_items 等价。真实场景里几乎总会伴随至少一种文本表示（参见 materialize
+    // 注入的 rep_count >= 2）。
     let mut items_vec: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
-        Vec::with_capacity(1 + file_items.len());
+        Vec::with_capacity(1 + image_items.len() + file_items.len());
     items_vec.push(ProtocolObject::from_retained(text_item));
+    for item in image_items {
+        items_vec.push(ProtocolObject::from_retained(item));
+    }
     for item in file_items {
         items_vec.push(ProtocolObject::from_retained(item));
     }
@@ -357,8 +418,62 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
         total_reps = snapshot.representations.len(),
         skipped_count = skipped.len(),
         file_uri_total,
+        image_total,
         "macOS 原子多 rep 写入完成"
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::MimeType;
+
+    fn rep(format: &str, mime: Option<&str>) -> ObservedClipboardRepresentation {
+        ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from_str(format),
+            mime.map(|m| MimeType(m.to_string())),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn resolves_image_png_from_format_id() {
+        // PixPin 截图 / common.rs 标准化后的 format_id 路径。
+        assert_eq!(
+            resolve_multi_rep_mime(&rep("public.png", None)),
+            Some("image/png")
+        );
+        assert_eq!(
+            resolve_multi_rep_mime(&rep("image", None)),
+            Some("image/png")
+        );
+    }
+
+    #[test]
+    fn resolves_image_tiff_from_format_id() {
+        assert_eq!(
+            resolve_multi_rep_mime(&rep("public.tiff", None)),
+            Some("image/tiff")
+        );
+    }
+
+    #[test]
+    fn explicit_image_mime_takes_priority_over_format_id() {
+        // 显式 mime 优先于 format_id 推断（与 windows.rs 对称）。
+        let r = rep("unknown-format-id", Some("image/png"));
+        assert_eq!(resolve_multi_rep_mime(&r), Some("image/png"));
+    }
+
+    #[test]
+    fn windows_private_reps_remain_unsupported() {
+        // 这些 Windows 平台私有 rep 必须继续返回 None，让多 rep 写入器跳过它们
+        // 而不是误把它们当作可写——issue #484 期望行为里明确这一点。
+        assert_eq!(resolve_multi_rep_mime(&rep("DataObject", None)), None);
+        assert_eq!(resolve_multi_rep_mime(&rep("PixPinData", None)), None);
+        assert_eq!(resolve_multi_rep_mime(&rep("Ole Private Data", None)), None);
+    }
 }
