@@ -714,6 +714,64 @@
           "fileTransfer": "File transfer"
         }
       }
+    },
+    "switchSpace": {
+      "button": "Join another space",
+      "title": "Switch to another space",
+      "subtitle": "Existing clipboard history will be re-encrypted under the new master key.",
+      "warning": "All local clipboard data is re-encrypted in 4 phases. Don't quit the app until it finishes — a crash mid-flight will auto-resume on next launch.",
+      "labels": {
+        "code": "Invitation code",
+        "newPassphrase": "New space passphrase"
+      },
+      "placeholders": {
+        "newPassphrase": "Passphrase the new sponsor chose"
+      },
+      "actions": {
+        "switch": "Switch",
+        "switching": "Switching…",
+        "cancel": "Cancel",
+        "close": "Close",
+        "retry": "Retry"
+      },
+      "migrating": {
+        "title": "Migrating clipboard history",
+        "phase": {
+          "preparing": "Phase 1: backing up history",
+          "prepared": "Phase 2: handshaking with new sponsor",
+          "handshakeDone": "Phase 3: re-encrypting under new key",
+          "swapped": "Phase 4: finalising"
+        },
+        "recordsHint": "{{count}} records in backup table"
+      },
+      "success": {
+        "title": "Switched space",
+        "subtitle_one": "Migrated 1 clipboard record under the new master key.",
+        "subtitle_other": "Migrated {{count}} clipboard records under the new master key.",
+        "subtitle_zero": "No clipboard history needed migration."
+      },
+      "failed": {
+        "title": "Switch space failed",
+        "fallback": "Switch space failed: {{reason}}",
+        "reasons": {
+          "not_setup": "This device hasn't completed first-time setup. Use \"Initialize\" or \"Join\" first.",
+          "pending_migration": "A previous migration is still in flight. Restart the app to auto-resume.",
+          "not_unlocked": "Space session is locked. Restart the app so the keychain re-unlocks it.",
+          "sponsor_rejected": "Sponsor did not recognise the invitation code.",
+          "sponsor_declined": "Sponsor declined the pairing.",
+          "invitation_not_found": "Invitation code is invalid. Ask the sponsor to issue a fresh one.",
+          "invitation_expired": "Invitation expired. Ask the sponsor to issue a fresh one.",
+          "passphrase_mismatch": "Wrong passphrase — please retry.",
+          "device_name_required": "Device name is required.",
+          "sponsor_unreachable": "Sponsor is not reachable. Check NAT / relay.",
+          "service_unavailable": "Pairing service is unreachable. Try again later.",
+          "timeout": "Handshake timed out.",
+          "connection_lost": "Connection lost mid-handshake.",
+          "corrupted_key_material": "Local key material is corrupted.",
+          "invalid_ciphertext": "Backup record could not be decrypted. Restart the app to auto-resume.",
+          "internal": "Internal error — see daemon logs."
+        }
+      }
     }
   },
   "pairing": {

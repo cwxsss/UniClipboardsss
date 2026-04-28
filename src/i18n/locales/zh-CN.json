@@ -705,6 +705,64 @@
           "fileTransfer": "传输文件"
         }
       }
+    },
+    "switchSpace": {
+      "button": "加入其他空间",
+      "title": "切换到其他空间",
+      "subtitle": "当前剪贴板历史会用新空间的主密钥重新加密。",
+      "warning": "所有本地剪贴板内容会经历 4 阶段重加密迁移。切换过程中不要退出应用——如果中途崩溃，下次启动会自动续跑。",
+      "labels": {
+        "code": "邀请码",
+        "newPassphrase": "新空间口令"
+      },
+      "placeholders": {
+        "newPassphrase": "新空间发起者设置的口令"
+      },
+      "actions": {
+        "switch": "切换",
+        "switching": "切换中…",
+        "cancel": "取消",
+        "close": "关闭",
+        "retry": "重试"
+      },
+      "migrating": {
+        "title": "迁移剪贴板历史",
+        "phase": {
+          "preparing": "阶段 1：备份本地历史",
+          "prepared": "阶段 2：与新发起者握手",
+          "handshakeDone": "阶段 3：用新密钥重加密",
+          "swapped": "阶段 4：收尾清理"
+        },
+        "recordsHint": "备份表中已有 {{count}} 条记录"
+      },
+      "success": {
+        "title": "切换成功",
+        "subtitle_one": "已用新主密钥迁移 1 条剪贴板记录。",
+        "subtitle_other": "已用新主密钥迁移 {{count}} 条剪贴板记录。",
+        "subtitle_zero": "无剪贴板历史需要迁移。"
+      },
+      "failed": {
+        "title": "切换失败",
+        "fallback": "切换失败：{{reason}}",
+        "reasons": {
+          "not_setup": "本设备尚未完成首次 setup，请先“初始化”或“加入”。",
+          "pending_migration": "上次迁移未完成，请重启应用让其自动续跑。",
+          "not_unlocked": "空间会话未解锁，请重启应用让 keychain 重新解锁。",
+          "sponsor_rejected": "对方没有识别这个邀请码。",
+          "sponsor_declined": "对方拒绝了配对请求。",
+          "invitation_not_found": "邀请码无效，请让对方重新签发。",
+          "invitation_expired": "邀请码已过期，请让对方重新签发。",
+          "passphrase_mismatch": "口令错误，请重试。",
+          "device_name_required": "缺少设备名。",
+          "sponsor_unreachable": "无法连接到对方，请检查 NAT / relay。",
+          "service_unavailable": "配对服务暂不可用，请稍后再试。",
+          "timeout": "握手超时。",
+          "connection_lost": "握手中途连接断开。",
+          "corrupted_key_material": "本地密钥物料损坏。",
+          "invalid_ciphertext": "备份记录无法解密，重启应用让其自动续跑。",
+          "internal": "内部错误 —— 请查看 daemon 日志。"
+        }
+      }
     }
   },
   "pairing": {
