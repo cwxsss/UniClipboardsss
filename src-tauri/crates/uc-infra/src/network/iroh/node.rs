@@ -93,10 +93,25 @@ impl IrohNode {
     /// Best-effort: caller is on the teardown path so we log and swallow
     /// the error — there is no recourse, and leaking an iroh node past a
     /// process exit is harmless (the OS reaps the socket).
+    ///
+    /// Wrapped in a timeout because `Router::shutdown` can stall past the
+    /// QUIC 3×PTO draining budget (observed >4s on relay paths). See
+    /// n0-computer/iroh#3875. On timeout the OS reclaims the UDP socket
+    /// and relay keepalives lapse on their own.
     #[instrument(skip_all)]
     pub async fn shutdown(self) {
-        if let Err(err) = self.router.shutdown().await {
-            tracing::warn!(error = %err, "iroh router shutdown failed; continuing teardown");
+        const SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
+        match tokio::time::timeout(SHUTDOWN_BUDGET, self.router.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(error = %err, "iroh router shutdown failed; continuing teardown");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    budget_ms = SHUTDOWN_BUDGET.as_millis() as u64,
+                    "iroh router shutdown timed out (n0-computer/iroh#3875); abandoning",
+                );
+            }
         }
         debug!("iroh node shut down");
     }
