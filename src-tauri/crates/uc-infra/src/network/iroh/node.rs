@@ -21,7 +21,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iroh::endpoint::{TransportConfig, VarInt};
 use iroh::protocol::{Router, RouterBuilder};
-use iroh::{Endpoint, RelayMode};
+use iroh::{Endpoint, RelayMode, TransportAddr};
 use iroh_quinn_proto::congestion::BbrConfig;
 use tracing::{debug, info, instrument};
 
@@ -130,6 +130,43 @@ pub struct IrohNodeConfig {
     /// iroh can fall back to the public relay mesh when NAT blocks direct
     /// UDP.
     pub disable_relays: bool,
+}
+
+/// Snapshot the candidate set this endpoint is currently advertising and
+/// log it at INFO. We compare these IPs against `connect.rs`'s
+/// `selected path` log to spot when magicsock is publishing virtual-NIC
+/// addresses (Clash TUN, WireGuard, Tailscale) that skew remote candidate
+/// races. Two snapshots are taken — `post-bind` (just after the UDP
+/// socket comes up) and `post-spawn` (after `install_*` finish, which
+/// gives magicsock more time to enumerate interfaces). Refs
+/// UniClipboard#486.
+fn log_publish_addrs(endpoint: &Endpoint, stage: &'static str) {
+    let addr = endpoint.addr();
+    let ip_addrs: Vec<String> = addr
+        .addrs
+        .iter()
+        .filter_map(|a| match a {
+            TransportAddr::Ip(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect();
+    let relay_urls: Vec<String> = addr
+        .addrs
+        .iter()
+        .filter_map(|a| match a {
+            TransportAddr::Relay(u) => Some(u.to_string()),
+            _ => None,
+        })
+        .collect();
+    info!(
+        stage,
+        endpoint_id = %endpoint.id().fmt_short(),
+        ip_addr_count = ip_addrs.len(),
+        relay_url_count = relay_urls.len(),
+        ip_addrs = ?ip_addrs,
+        relay_urls = ?relay_urls,
+        "iroh endpoint publish snapshot (refs UniClipboard#486)"
+    );
 }
 
 /// Build the QUIC `TransportConfig` we attach to the shared endpoint.
@@ -247,6 +284,7 @@ impl IrohNodeBuilder {
             rendezvous_override = config.rendezvous_base_url.is_some(),
             "iroh node bound; ready to install transport handlers"
         );
+        log_publish_addrs(&endpoint, "post-bind");
         Ok(Self {
             endpoint,
             router_builder: Some(router_builder),
@@ -429,6 +467,7 @@ impl IrohNodeBuilder {
             .router_builder
             .expect("router_builder missing — spawn called twice")
             .spawn();
+        log_publish_addrs(&self.endpoint, "post-spawn");
         IrohNode {
             endpoint: self.endpoint,
             router,
