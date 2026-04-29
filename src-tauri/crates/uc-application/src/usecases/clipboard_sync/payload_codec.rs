@@ -33,15 +33,22 @@ use uc_core::network::protocol::{BinaryRepresentation, ClipboardBinaryPayload};
 use uc_core::ports::blob::BlobTicket;
 use uc_core::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
 
-const BLOB_REFS_MAGIC: &[u8; 4] = b"UCBR";
+/// V3 blob refs trailer magic. Each ref carries 6 fields:
+/// `ticket / entry_id / filename / mime / size_bytes / representation_index`.
+const BLOB_REFS_MAGIC: &[u8; 4] = b"UCBS";
 const NONE_STRING_LEN: u16 = u16::MAX;
+const NONE_U32_MARKER: u8 = 0;
+const SOME_U32_MARKER: u8 = 1;
 const MAX_BLOB_REFS: usize = 1_024;
 const MAX_TICKET_LEN: usize = 64 * 1024;
 const MAX_BLOB_REF_STRING_LEN: usize = 8 * 1024;
 
 /// V3 尾部扩展里的 blob 引用。
 ///
-/// `ticket` 负责定位内容,`entry_id` 负责在接收端登记本次剪贴板归属。
+/// `ticket` 负责定位内容；`entry_id` 负责在接收端登记本次剪贴板归属；
+/// `representation_index` 当 `Some(i)` 时表示这条 blob 的 bytes 应当被
+/// 灌回到 envelope 主体 `representations[i]`（image/binary 等无法 inline
+/// 的 rep 走这条路），而不是当成独立 file 写入接收端 cache 目录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V3BlobRef {
     pub ticket: BlobTicket,
@@ -49,6 +56,7 @@ pub struct V3BlobRef {
     pub filename: Option<String>,
     pub mime: Option<String>,
     pub size_bytes: u64,
+    pub representation_index: Option<u32>,
 }
 
 /// Encode a snapshot into the V3 wire envelope and return
@@ -175,6 +183,7 @@ fn write_blob_refs_extension<W: Write>(
         write_optional_string_u16(writer, blob_ref.filename.as_deref(), "filename")?;
         write_optional_string_u16(writer, blob_ref.mime.as_deref(), "mime")?;
         writer.write_all(&blob_ref.size_bytes.to_le_bytes())?;
+        write_optional_u32(writer, blob_ref.representation_index)?;
     }
     Ok(())
 }
@@ -206,12 +215,14 @@ fn read_blob_refs_extension(mut bytes: &[u8]) -> Result<Vec<V3BlobRef>> {
         let filename = read_optional_string_u16(&mut bytes, "filename")?;
         let mime = read_optional_string_u16(&mut bytes, "mime")?;
         let size_bytes = read_u64(&mut bytes, "size_bytes")?;
+        let representation_index = read_optional_u32(&mut bytes, "representation_index")?;
         refs.push(V3BlobRef {
             ticket,
             entry_id,
             filename,
             mime,
             size_bytes,
+            representation_index,
         });
     }
 
@@ -274,6 +285,28 @@ fn write_optional_string_u16<W: Write>(
     match value {
         Some(value) => write_string_u16(writer, value, label),
         None => writer.write_all(&NONE_STRING_LEN.to_le_bytes()),
+    }
+}
+
+fn write_optional_u32<W: Write>(writer: &mut W, value: Option<u32>) -> std::io::Result<()> {
+    match value {
+        Some(v) => {
+            writer.write_all(&[SOME_U32_MARKER])?;
+            writer.write_all(&v.to_le_bytes())
+        }
+        None => writer.write_all(&[NONE_U32_MARKER]),
+    }
+}
+
+fn read_optional_u32<R: Read>(reader: &mut R, label: &str) -> Result<Option<u32>> {
+    let mut marker = [0u8; 1];
+    reader
+        .read_exact(&mut marker)
+        .map_err(|e| anyhow!("read {label} marker: {e}"))?;
+    match marker[0] {
+        NONE_U32_MARKER => Ok(None),
+        SOME_U32_MARKER => Ok(Some(read_u32(reader, label)?)),
+        other => Err(anyhow!("invalid {label} marker byte: {other}")),
     }
 }
 
@@ -471,6 +504,7 @@ mod tests {
             filename: Some("report.pdf".to_string()),
             mime: Some("application/pdf".to_string()),
             size_bytes: 12_345,
+            representation_index: None,
         };
 
         let (bytes, hash) =
@@ -487,6 +521,31 @@ mod tests {
         assert_eq!(decoded.representations[0].bytes, b"file placeholder");
         assert_eq!(refs, vec![blob_ref]);
         assert_eq!(refs[0].entry_id, entry_id);
+    }
+
+    /// Verdict 5b —— representation_index 字段端到端 roundtrip。新 sender
+    /// 把 image rep 的 bytes 替换为 blob ref 时携带 `representation_index`,
+    /// 接收端必须无损读到。
+    #[test]
+    fn blob_refs_with_representation_index_roundtrip() {
+        let original = fixture_snapshot("placeholder for image rep");
+        let entry_id = EntryId::from("entry-img");
+        let blob_ref = V3BlobRef {
+            ticket: BlobTicket::from_bytes(vec![9, 8, 7]),
+            entry_id: entry_id.clone(),
+            filename: None,
+            mime: Some("image/png".to_string()),
+            size_bytes: 3_500_000,
+            representation_index: Some(0),
+        };
+
+        let (bytes, _) = encode_snapshot_with_blob_refs_to_v3_bytes(&original, &[blob_ref.clone()])
+            .expect("encode with representation_index should succeed");
+
+        let (_, refs) = decode_v3_bytes_to_snapshot_and_blob_refs(&bytes).expect("decode ok");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], blob_ref);
+        assert_eq!(refs[0].representation_index, Some(0));
     }
 
     /// Verdict 6 —— 不带扩展时新 decoder 返回空 blob 引用,保持普通文本

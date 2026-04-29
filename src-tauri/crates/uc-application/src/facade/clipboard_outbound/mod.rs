@@ -115,14 +115,22 @@ impl ClipboardOutboundPort for ClipboardOutboundDispatcher {
             )
             .await;
 
-        let Some(clipboard_intent) = plan.clipboard else {
+        let Some(mut clipboard_intent) = plan.clipboard else {
             return Ok(ClipboardOutboundOutcome::Skipped {
                 reason: "planner_suppressed".to_string(),
             });
         };
 
         let entry_id = EntryId::from(input.entry_id.as_str());
-        let blob_refs = publish_file_blob_refs(&self.blob_transfer, &plan.files, &entry_id).await?;
+        let mut blob_refs =
+            publish_file_blob_refs(&self.blob_transfer, &plan.files, &entry_id).await?;
+        let mut image_blob_refs = publish_oversized_inline_blob_refs(
+            &self.blob_transfer,
+            &mut clipboard_intent.snapshot,
+            &entry_id,
+        )
+        .await?;
+        blob_refs.append(&mut image_blob_refs);
         let blob_ref_count = blob_refs.len();
 
         let dispatch_result = if blob_refs.is_empty() {
@@ -219,6 +227,81 @@ fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<P
     paths
 }
 
+/// 出向 dispatch 时单条 inline rep 在 envelope 主体里的最大 bytes 数。超过
+/// 该值的 image-类 rep 会被剥出来走 blob 通道（receiver 通过 `representation_index`
+/// 把 fetched bytes 灌回原 rep），避免撞 wire 层 `MAX_PAYLOAD_SIZE = 2 MiB` 上限。
+///
+/// 1 MiB 给 envelope 内其他 reps、V3 头、加密 AEAD overhead 留出充足余量；
+/// 大多数日常截图（< 1 MiB PNG）仍走 inline 快路径。
+const OVERSIZED_REP_THRESHOLD_BYTES: usize = 1024 * 1024;
+
+/// 把 snapshot 中超过 `OVERSIZED_REP_THRESHOLD_BYTES` 的 image-类 rep 上传到
+/// blob store，把它们的 `bytes` 字段就地清空（保留 `format_id` / `mime` / `id`），
+/// 返回携带 `representation_index` 的 V3BlobRef 列表。
+///
+/// receiver 端的 `InboundBlobMaterializer` 看到 `representation_index = Some(i)`
+/// 时把 fetched bytes 灌回 `representations[i]`，而不是当成独立 file 落到 cache。
+///
+/// **重要细节**：在清空 `bytes` 之前显式调用一次 `content_hash()`，强制把原内容
+/// 哈希写入 OnceLock 缓存，这样 envelope 编码阶段的 `snapshot.snapshot_hash()`
+/// 仍反映真实图片内容（receiver 端解码后会拿到一致的 content_hash 用于 dedup）。
+///
+/// 仅对 `mime` 以 `image/` 开头的 rep 生效。其它类型的大 rep 暂保持 inline；
+/// 后续若有非 image 大 rep 撞上限，会在此处扩展并补对应的 receiver 处理。
+async fn publish_oversized_inline_blob_refs(
+    blob_transfer: &BlobTransferFacade,
+    snapshot: &mut SystemClipboardSnapshot,
+    entry_id: &EntryId,
+) -> Result<Vec<V3BlobRef>, ClipboardOutboundError> {
+    let mut blob_refs = Vec::new();
+
+    for (idx, rep) in snapshot.representations.iter_mut().enumerate() {
+        if rep.bytes.len() <= OVERSIZED_REP_THRESHOLD_BYTES {
+            continue;
+        }
+        let mime_str = rep.mime.as_ref().map(|m| m.as_str().to_string());
+        let is_image = mime_str
+            .as_deref()
+            .map(|m| m.to_ascii_lowercase().starts_with("image/"))
+            .unwrap_or(false);
+        if !is_image {
+            continue;
+        }
+
+        // Force-cache content hash with the ORIGINAL bytes before we drain
+        // them — `snapshot_hash()` is invoked downstream during V3 encode
+        // and must reflect the real image content for cross-device dedup
+        // to match.
+        let _ = rep.content_hash();
+
+        let size_bytes = rep.bytes.len() as u64;
+        let plaintext = std::mem::take(&mut rep.bytes);
+
+        let result = blob_transfer
+            .publish_blob(PublishBlobCommand {
+                plaintext: Bytes::from(plaintext),
+                entry_id: Some(entry_id.clone()),
+            })
+            .await
+            .map_err(|err| ClipboardOutboundError::Internal(err.to_string()))?;
+
+        let representation_index = u32::try_from(idx).map_err(|_| {
+            ClipboardOutboundError::Internal(format!("representation index {idx} cannot fit u32"))
+        })?;
+
+        blob_refs.push(V3BlobRef {
+            ticket: result.ticket,
+            entry_id: result.entry_id,
+            filename: None,
+            mime: mime_str,
+            size_bytes,
+            representation_index: Some(representation_index),
+        });
+    }
+
+    Ok(blob_refs)
+}
+
 async fn publish_file_blob_refs(
     blob_transfer: &BlobTransferFacade,
     files: &[FileSyncIntent],
@@ -246,6 +329,7 @@ async fn publish_file_blob_refs(
             filename: Some(file.filename.clone()).filter(|name| !name.is_empty()),
             mime: None,
             size_bytes,
+            representation_index: None,
         });
     }
 

@@ -190,11 +190,78 @@ impl InboundBlobMaterializer for FileCacheBlobMaterializer {
             return Ok(snapshot);
         }
 
-        let mut local_paths = Vec::with_capacity(blob_refs.len());
-        let mut used_names = HashSet::new();
-        let blob_ref_total = blob_refs.len();
+        // Split blob refs by destination:
+        //   - `representation_index = Some(i)`: bytes belong to envelope rep i
+        //     (image / large binary path). Fetched bytes are written back into
+        //     `snapshot.representations[i]` so the rep round-trips with full
+        //     content; receiver does NOT spill these to disk.
+        //   - `representation_index = None`: free-standing file (legacy
+        //     file-URI path). Fetched bytes go to cache_dir, file-list rep is
+        //     rewritten with local `file://` URIs.
+        let (rep_refs, file_refs): (Vec<V3BlobRef>, Vec<V3BlobRef>) = blob_refs
+            .into_iter()
+            .partition(|r| r.representation_index.is_some());
 
-        for (idx, blob_ref) in blob_refs.into_iter().enumerate() {
+        // 1. Hydrate representation-bound blobs back into the snapshot.
+        for blob_ref in rep_refs {
+            let entry_id = blob_ref.entry_id.clone();
+            let advertised_size = blob_ref.size_bytes;
+            let idx = blob_ref
+                .representation_index
+                .expect("partition guarantees Some");
+            debug!(
+                entry_id = %entry_id,
+                size_bytes = advertised_size,
+                representation_index = idx,
+                mime = blob_ref.mime.as_deref().unwrap_or(""),
+                "materialize: fetching representation-bound blob"
+            );
+
+            let fetched = self
+                .fetcher
+                .fetch_blob(FetchBlobCommand {
+                    ticket: blob_ref.ticket,
+                    entry_id: blob_ref.entry_id.clone(),
+                })
+                .await
+                .map_err(|e| {
+                    warn!(
+                        entry_id = %entry_id,
+                        size_bytes = advertised_size,
+                        representation_index = idx,
+                        error = %e,
+                        "materialize: representation-bound blob fetch failed"
+                    );
+                    e
+                })?;
+
+            let usize_idx = idx as usize;
+            let rep_count = snapshot.representations.len();
+            let rep = snapshot.representations.get_mut(usize_idx).ok_or_else(|| {
+                anyhow!(
+                    "materialize: representation_index {idx} out of bounds (snapshot has {rep_count} reps)"
+                )
+            })?;
+            let fetched_len = fetched.plaintext.len();
+            rep.bytes = fetched.plaintext.to_vec();
+            info!(
+                entry_id = %entry_id,
+                representation_index = idx,
+                bytes_written = fetched_len,
+                "materialize: blob inlined back into representation"
+            );
+        }
+
+        if file_refs.is_empty() {
+            return Ok(snapshot);
+        }
+
+        // 2. Free-standing files: existing cache_dir + file-list rewrite path.
+        let mut local_paths = Vec::with_capacity(file_refs.len());
+        let mut used_names = HashSet::new();
+        let blob_ref_total = file_refs.len();
+
+        for (idx, blob_ref) in file_refs.into_iter().enumerate() {
             let entry_id = blob_ref.entry_id.clone();
             let advertised_size = blob_ref.size_bytes;
             let declared_name = blob_ref.filename.clone();
@@ -850,6 +917,7 @@ mod tests {
             filename: Some("original.txt".to_string()),
             mime: Some("text/plain".to_string()),
             size_bytes: 13,
+            representation_index: None,
         };
         let (plaintext, content_hash) =
             encode_snapshot_with_blob_refs_to_v3_bytes(&original, &[blob_ref.clone()]).unwrap();
@@ -918,6 +986,7 @@ mod tests {
             filename: Some("report.txt".to_string()),
             mime: Some("text/plain".to_string()),
             size_bytes: 11,
+            representation_index: None,
         };
         let snapshot = SystemClipboardSnapshot {
             ts_ms: 1,
@@ -962,5 +1031,113 @@ mod tests {
             .await
             .expect("materialized file should exist");
         assert_eq!(bytes, b"hello world");
+    }
+
+    /// Verdict 9 —— representation_index 路径：blob ref 携带索引时,materializer
+    /// 把 fetched bytes 灌回 envelope 主体里对应索引的 rep,而不是写到 cache_dir
+    /// 当 file 处理。这条路径是 oversized image 跨设备同步的关键。
+    #[tokio::test]
+    async fn file_cache_blob_materializer_inlines_representation_bound_blob_into_rep() {
+        let cache_dir = tempfile::tempdir().expect("tempdir");
+        let entry_id = EntryId::from("entry-img");
+        let ticket = BlobTicket::from_bytes(vec![7, 7, 7]);
+        let blob_ref = V3BlobRef {
+            ticket: ticket.clone(),
+            entry_id: entry_id.clone(),
+            filename: None,
+            mime: Some("image/png".to_string()),
+            size_bytes: 5,
+            representation_index: Some(0),
+        };
+        // Sender drained `bytes` to empty when publishing — receiver decode
+        // mirrors that empty-rep state until materialization runs.
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 1,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("image"),
+                Some(MimeType("image/png".to_string())),
+                Vec::new(),
+            )],
+        };
+
+        let mut fetcher = MockBlobFetcher::new();
+        fetcher
+            .expect_fetch_blob()
+            .times(1)
+            .withf(move |command| command.entry_id == entry_id && command.ticket == ticket)
+            .returning(|command| {
+                Ok(crate::facade::blob_transfer::FetchBlobResult {
+                    plaintext: Bytes::from_static(b"\x89PNG\x0d"),
+                    entry_id: command.entry_id,
+                    plaintext_hash: PlaintextHash::from_bytes([0; 32]),
+                    digest: BlobDigest::from_bytes([1; 32]),
+                })
+            });
+
+        let materializer =
+            FileCacheBlobMaterializer::new(Arc::new(fetcher), cache_dir.path().to_path_buf());
+        let materialized = materializer
+            .materialize(snapshot, vec![blob_ref])
+            .await
+            .expect("representation-bound materialize should succeed");
+
+        assert_eq!(materialized.representations.len(), 1);
+        assert_eq!(materialized.representations[0].bytes, b"\x89PNG\x0d");
+        assert_eq!(materialized.representations[0].format_id.as_ref(), "image");
+
+        let mut entries = tokio::fs::read_dir(cache_dir.path())
+            .await
+            .expect("read cache_dir");
+        assert!(
+            entries.next_entry().await.expect("read entry").is_none(),
+            "cache_dir must be empty for representation-bound refs"
+        );
+    }
+
+    /// Verdict 10 —— representation_index 越界时,materializer 必须显式报错而不是
+    /// silently 落到 file 路径或 panic。这个 guard 防止协议不一致的对端把消息
+    /// 灌进错误的 rep slot。
+    #[tokio::test]
+    async fn file_cache_blob_materializer_rejects_out_of_bounds_representation_index() {
+        let cache_dir = tempfile::tempdir().expect("tempdir");
+        let blob_ref = V3BlobRef {
+            ticket: BlobTicket::from_bytes(vec![1]),
+            entry_id: EntryId::from("entry-bad"),
+            filename: None,
+            mime: Some("image/png".to_string()),
+            size_bytes: 1,
+            representation_index: Some(5),
+        };
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 1,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("image"),
+                Some(MimeType("image/png".to_string())),
+                Vec::new(),
+            )],
+        };
+
+        let mut fetcher = MockBlobFetcher::new();
+        fetcher.expect_fetch_blob().times(1).returning(|command| {
+            Ok(crate::facade::blob_transfer::FetchBlobResult {
+                plaintext: Bytes::from_static(b"x"),
+                entry_id: command.entry_id,
+                plaintext_hash: PlaintextHash::from_bytes([0; 32]),
+                digest: BlobDigest::from_bytes([1; 32]),
+            })
+        });
+
+        let materializer =
+            FileCacheBlobMaterializer::new(Arc::new(fetcher), cache_dir.path().to_path_buf());
+        let err = materializer
+            .materialize(snapshot, vec![blob_ref])
+            .await
+            .expect_err("out-of-bounds index should fail");
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "error must mention out-of-bounds context: {err}"
+        );
     }
 }
