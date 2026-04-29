@@ -21,6 +21,11 @@
 //!   [`ClipboardDispatchError::Io`].
 //! * Peer sent a single-byte ack other than Accepted / DuplicateIgnored →
 //!   [`ClipboardDispatchError::PeerRejected`] with the code embedded.
+//! * Local boundary check (oversized payload, etc) refuses the payload
+//!   before any wire activity →
+//!   [`ClipboardDispatchError::LocalPolicyExceeded`]. This is **not** a
+//!   peer-side rejection — peer was never contacted; caller is expected
+//!   to route via blob ref / file transfer instead of retrying this peer.
 
 use std::sync::Arc;
 
@@ -106,10 +111,14 @@ impl ClipboardDispatchPort for IrohClipboardDispatchAdapter {
     ) -> Result<DispatchAck, ClipboardDispatchError> {
         // 1. Early-reject oversized payloads at the adapter boundary so
         //    the caller gets a clean error without us opening a stream
-        //    just to tear it back down.
+        //    just to tear it back down. This is a *local* policy check —
+        //    no wire activity yet, peer never contacted. Surface as
+        //    `LocalPolicyExceeded` so callers don't misread it as a peer
+        //    decision (the caller's correct response is to re-dispatch
+        //    via blob ref / file transfer, not to retry this peer).
         if payload.ciphertext.len() > clipboard_wire::MAX_PAYLOAD_SIZE as usize {
-            return Err(ClipboardDispatchError::PeerRejected(format!(
-                "payload {} bytes exceeds local maximum {}",
+            return Err(ClipboardDispatchError::LocalPolicyExceeded(format!(
+                "ciphertext {} bytes exceeds wire MAX_PAYLOAD_SIZE {}",
                 payload.ciphertext.len(),
                 clipboard_wire::MAX_PAYLOAD_SIZE
             )));
@@ -184,9 +193,15 @@ impl ClipboardDispatchPort for IrohClipboardDispatchAdapter {
 fn map_encode_err(err: WireEncodeError) -> ClipboardDispatchError {
     match err {
         WireEncodeError::Io(ioerr) => ClipboardDispatchError::Io(format!("frame write: {ioerr}")),
-        WireEncodeError::PayloadTooLarge { size, max } => ClipboardDispatchError::PeerRejected(
-            format!("payload {size} bytes exceeds local maximum {max}"),
-        ),
+        WireEncodeError::PayloadTooLarge { size, max } => {
+            // wire codec also enforces MAX_PAYLOAD_SIZE; if we somehow get
+            // here (the upstream early-reject in `dispatch` should have
+            // caught it first), surface the same `LocalPolicyExceeded`
+            // semantics — peer was never reached.
+            ClipboardDispatchError::LocalPolicyExceeded(format!(
+                "wire codec payload {size} bytes exceeds local maximum {max}"
+            ))
+        }
         WireEncodeError::HeaderTooLarge { size, max } => ClipboardDispatchError::Internal(format!(
             "self-built header {size} bytes exceeds {max}"
         )),
@@ -416,9 +431,11 @@ mod tests {
     }
 
     /// Verdict 4 — oversized payload. The adapter short-circuits before
-    /// even dialing, returning `PeerRejected` with a message that mentions
-    /// the local maximum. Protects against wasted QUIC handshake on a
-    /// payload that would fail the wire boundary anyway.
+    /// even dialing, returning `LocalPolicyExceeded` with a message that
+    /// mentions the wire MAX_PAYLOAD_SIZE. Protects against wasted QUIC
+    /// handshake on a payload that would fail the wire boundary anyway,
+    /// and uses the dedicated local-policy variant so callers don't
+    /// misread this as a peer-side rejection.
     #[tokio::test]
     async fn dispatch_rejects_oversized_payload_locally_without_dialing() {
         // No peer_addr seeded — proves the rejection is local; otherwise
@@ -438,13 +455,13 @@ mod tests {
             )
             .await;
         match result {
-            Err(ClipboardDispatchError::PeerRejected(msg)) => {
+            Err(ClipboardDispatchError::LocalPolicyExceeded(msg)) => {
                 assert!(
-                    msg.contains("exceeds local maximum"),
+                    msg.contains("exceeds wire MAX_PAYLOAD_SIZE"),
                     "unexpected reject msg: {msg}"
                 );
             }
-            other => panic!("expected PeerRejected, got {other:?}"),
+            other => panic!("expected LocalPolicyExceeded, got {other:?}"),
         }
     }
 }

@@ -68,8 +68,17 @@ pub enum ClipboardDispatchError {
     /// dial failure). Application layer treats this as "peer offline".
     #[error("target device offline or unreachable")]
     Offline,
+    /// Local-side dispatch policy refused the payload before any wire
+    /// activity (e.g. payload exceeds `MAX_PAYLOAD_SIZE` so we early-reject
+    /// in the adapter rather than dial). The peer was never contacted; the
+    /// caller is expected to route the content through a different channel
+    /// (blob ref, file transfer, etc) or surface a user-facing limit.
+    #[error("local policy rejected payload before dispatch: {0}")]
+    LocalPolicyExceeded(String),
     /// Peer accepted the connection but rejected the payload at the wire
-    /// boundary (bad header, oversized, etc). Carries peer's reason string.
+    /// boundary (bad header, unsupported version, etc). Carries the peer's
+    /// reason string. This is a real round-trip — distinct from
+    /// `LocalPolicyExceeded` which never reaches the peer.
     #[error("peer rejected: {0}")]
     PeerRejected(String),
     /// Stream I/O failure — broken connection, short read, etc.
