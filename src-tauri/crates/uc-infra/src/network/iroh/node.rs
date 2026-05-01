@@ -17,12 +17,16 @@
 //! [`install_presence`]: IrohNodeBuilder::install_presence
 //! [`install_clipboard`]: IrohNodeBuilder::install_clipboard
 
+use std::borrow::Cow;
+use std::net::IpAddr;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use iroh::endpoint::{TransportConfig, VarInt};
+use iroh::address_lookup::mdns::MdnsAddressLookup;
+use iroh::address_lookup::AddrFilter;
+use iroh::endpoint::{presets, QuicTransportConfig, VarInt};
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode, TransportAddr};
-use iroh_quinn_proto::congestion::BbrConfig;
+use noq_proto::congestion::BbrConfig;
 use tracing::{debug, info, instrument};
 
 use uc_core::file_transfer::OutboundProgressReporterPort;
@@ -183,7 +187,7 @@ fn log_publish_addrs(endpoint: &Endpoint, stage: &'static str) {
     );
 }
 
-/// Build the QUIC `TransportConfig` we attach to the shared endpoint.
+/// Build the QUIC `QuicTransportConfig` we attach to the shared endpoint.
 ///
 /// Defaults are tuned assuming "internet"-shaped paths; on macOS the shared
 /// Wi-Fi radio is periodically yanked away by AWDL (AirDrop / Handoff /
@@ -196,9 +200,14 @@ fn log_publish_addrs(endpoint: &Endpoint, stage: &'static str) {
 ///
 /// Any change here affects every transport (pairing / presence / clipboard
 /// / blobs) because they share this one endpoint.
-fn build_transport_config() -> TransportConfig {
-    let mut cfg = TransportConfig::default();
-    cfg
+///
+/// iroh 0.97 reshaped the API: the old quinn-style `&mut TransportConfig`
+/// lives behind `iroh::endpoint::QuicTransportConfigBuilder` now, returned
+/// by `QuicTransportConfig::builder()`. Setters are by-value chained
+/// instead of `&mut self`, but the underlying knobs are the same noq
+/// (the project's quinn fork) `TransportConfig` surface.
+fn build_transport_config() -> QuicTransportConfig {
+    QuicTransportConfig::builder()
         // BBR over CUBIC: we're observing iroh emit "Congestion controller
         // state reset" 3× per connection (path-validation churn) which slams
         // the CUBIC CWND back to 10 MSS each time, forcing slow-start. Even
@@ -243,8 +252,80 @@ fn build_transport_config() -> TransportConfig {
         // QUIC-level keepalive, complementary to PeerKeepAliveWorker's
         // app-level pings: keeps the magicsock path's last-activity stamp
         // fresh so iroh doesn't tear the path down between transfers.
-        .keep_alive_interval(Some(Duration::from_secs(15)));
-    cfg
+        // Note: iroh 0.98 changed the signature from `Option<Duration>`
+        // (where `None` disabled) to bare `Duration` (always enabled),
+        // because the iroh `QuicTransportConfigBuilder` already pre-sets a
+        // sane default — calling this setter just overrides it.
+        .keep_alive_interval(Duration::from_secs(15))
+        // iroh#4124 workaround: every QUIC connection has a monotonic
+        // PathId budget; the iroh default is `MAX_MULTIPATH_PATHS + 1 =
+        // 13`. With mDNS + pkarr + dual-relay + call-me-maybe + STUN
+        // hairpin all feeding candidates into the same connection, plus
+        // path abandonment not releasing the ID slot, we burn through 13
+        // in seconds. Once exhausted, every blob transfer that needs to
+        // open a new path fails with `Error::Io` and `remote_state` spams
+        // `MaxPathIdReached` WARN forever (no upstream back-off yet).
+        // Bumping to 64 gives ~5× headroom; each path costs a small
+        // amount of state-machine memory, well bounded by typical 2-peer
+        // workloads.
+        .max_concurrent_multipath_paths(64)
+        .build()
+}
+
+/// IP-range predicate that flags well-known *virtual* NIC addresses we don't
+/// want propagated as direct-address candidates. Treats the address as
+/// virtual when it falls into a range that no real LAN would ever use:
+///
+/// * `198.18.0.0/15` — the default Clash fake-ip pool. Observed concretely
+///   on this user's macOS box where Clash assigns `198.18.0.1` to its TUN
+///   interface; iroh's magicsock then publishes that to the peer, the peer
+///   races it against the real LAN candidate, and the TUN path occasionally
+///   wins because its local stack ACKs faster than the real LAN.
+/// * `100.64.0.0/10` — CGNAT / Tailscale default range. Same shape of bug:
+///   Tailscale advertises a 100.x address that's only routable inside the
+///   tailnet, but iroh can't tell that from a normal LAN IP.
+/// * `169.254.0.0/16` — IPv4 link-local autoconf. Only meaningful on the
+///   originating host; useless as a candidate for a remote peer.
+fn is_virtual_nic_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 (Clash fake-ip)
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT/Tailscale)
+                || (o[0] == 169 && o[1] == 254) // 169.254.0.0/16 (link-local)
+        }
+        // v1 only filters IPv4. IPv6 ULA / link-local can be added once we
+        // have telemetry showing iroh actually publishing them on real
+        // user setups.
+        IpAddr::V6(_) => false,
+    }
+}
+
+/// Build the `AddrFilter` we hand to `Endpoint::builder().addr_filter(...)`.
+/// The filter is applied at the `AddressLookupServices` layer (see
+/// iroh#3960 / #4010), upstream of every individual lookup service, so a
+/// single registration covers pkarr / mdns / static / DHT lookups in one
+/// place — that's what makes this a viable replacement for "fork iroh and
+/// patch magicsock" (issue #486 §三 A).
+fn build_addr_filter() -> AddrFilter {
+    AddrFilter::new(|addrs: &Vec<TransportAddr>| {
+        let any_virtual = addrs.iter().any(|a| match a {
+            TransportAddr::Ip(s) => is_virtual_nic_ip(s.ip()),
+            _ => false,
+        });
+        if !any_virtual {
+            return Cow::Borrowed(addrs);
+        }
+        let kept: Vec<TransportAddr> = addrs
+            .iter()
+            .filter(|a| match a {
+                TransportAddr::Ip(s) => !is_virtual_nic_ip(s.ip()),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        Cow::Owned(kept)
+    })
 }
 
 /// Staged builder — bind endpoint, install transport handlers, then
@@ -278,7 +359,7 @@ impl IrohNodeBuilder {
         } else {
             RelayMode::Default
         };
-        let endpoint = Endpoint::builder()
+        let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret)
             // Only PAIRING is declared at bind time; additional ALPNs are
             // added to the endpoint via `RouterBuilder::spawn`, which
@@ -287,6 +368,18 @@ impl IrohNodeBuilder {
             .alpns(vec![PAIRING_ALPN.to_vec()])
             .relay_mode(relay_mode)
             .transport_config(build_transport_config())
+            // UniClipboard#486: drop Clash TUN / CGNAT / link-local IPs from
+            // every address-lookup service in one shot. See
+            // `build_addr_filter` for the predicate.
+            .addr_filter(build_addr_filter())
+            // UniClipboard#486 §三 B: enable mDNS LAN discovery in addition
+            // to the n0 preset's pkarr DHT lookup. Two peers on the same
+            // Wi-Fi advertise their LAN IPs to each other through swarm-
+            // discovery TXT records, bypassing pkarr round-trip latency.
+            // The `addr_filter` above also runs over what mDNS publishes,
+            // so a Clash `198.18.0.1` won't leak into the LAN announcement
+            // even if magicsock surfaces it locally.
+            .address_lookup(MdnsAddressLookup::builder())
             .bind()
             .await
             .map_err(|err| IrohNodeError::Bind(err.to_string()))?;
