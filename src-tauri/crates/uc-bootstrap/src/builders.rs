@@ -163,6 +163,37 @@ pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (config, wired) = build_core(None)?;
     let storage_paths = get_storage_paths(&config)?;
 
+    // 启动期 reconcile:把 peer_addr_repo / trusted_peer_repo 中
+    // member_repo 已不再持有的孤儿条目清掉,恢复设计意图的不变量
+    // `peer_addr ⊆ member`、`trusted_peer ⊆ member`(见
+    // `dispatch_entry.rs` module doc 关于 paired-members 权威集合,
+    // `trust_peer.rs` 关于"先 Distrust 再 Trust" 的显式流程,以及
+    // `init.rs::reconcile_*`)。两者都在 `build_space_setup_assembly` 之前
+    // 执行,确保 dispatch / presence / 重新配对路径一上线就是干净状态。
+    // 失败只 log 不阻断启动 —— reconcile 是治理性的。
+    if let Err(err) = crate::init::reconcile_peer_addresses(
+        Arc::clone(&wired.deps.device.member_repo),
+        Arc::clone(&wired.peer_addr_repo),
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %err,
+            "peer_addr reconcile failed at boot; daemon continues with whatever orphans remain"
+        );
+    }
+    if let Err(err) = crate::init::reconcile_trusted_peers(
+        Arc::clone(&wired.deps.device.member_repo),
+        Arc::clone(&wired.trusted_peer_repo),
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %err,
+            "trusted_peer reconcile failed at boot; daemon continues with whatever orphans remain"
+        );
+    }
+
     // Build the iroh-stack assembly on the caller's runtime. Must NOT spin up
     // a throwaway current-thread rt here: `Endpoint::bind` spawns magicsock /
     // relay / STUN actors via `tokio::spawn`, which attach to whatever runtime
