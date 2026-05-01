@@ -1,6 +1,6 @@
 ![UniClipboard](https://socialify.git.ci/UniClipboard/UniClipboard/image?custom_description=A+privacy-first%2C+end-to-end+encrypted%2C+cross-device+clipboard+sync+built+with+Rust+and+Tauri.&description=1&font=KoHo&forks=1&issues=1&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)
 
-## 📝 项目介绍
+## 项目介绍
 
 [English](./README.md) | 简体中文
 
@@ -56,7 +56,7 @@ UniClipboard 是一款以**隐私优先**为核心理念的跨设备剪贴板同
 > [!WARNING]
 > UniClipboard 目前处于积极开发阶段，可能存在功能不稳定或缺失的情况。欢迎体验并提供反馈！
 
-## ✨ 功能特点
+## 功能特点
 
 - **跨平台支持**: Windows、macOS 和 Linux 三端均为一等公民 —— 你的剪贴板跟着你在哪都能用。
 - **跨网络同步**: 同一 Wi-Fi、不同家庭/办公室网络、甚至跨广域网均可实时同步，自动 NAT 穿透与加密中继回落 —— 不再局限于局域网，也不绑定单一网络。
@@ -68,34 +68,7 @@ UniClipboard 是一款以**隐私优先**为核心理念的跨设备剪贴板同
 - **安全加密**: XChaCha20-Poly1305 AEAD 在传输与本地存储全程加密 —— 即便流量经过中继，中继也只能看到密文。
 - **多设备管理**: 管理已配对设备、在线状态与每台设备的同步偏好。设备丢了？在任何一台已配对的设备上吊销，后续同步会立即把它排除在外。
 
-## 📊 竞品对比
-
-| 能力                            | **UniClipboard** | iCloud 通用剪贴板 | Paste       |   Maccy   |   Ditto    | ClipCascade |
-| ------------------------------- | :--------------: | :---------------: | :---------: | :-------: | :--------: | :---------: |
-| 端到端加密                      |        ✅        |        ❓¹         |      ❓      |     —     |     ⚠️²     |      ✅      |
-| 完全开源                        |   ✅ AGPL-3.0    |         ❌         |      ❌      |  ✅ MIT   |   ✅ GPL   |      ✅      |
-| **不经第三方服务器**            |      ✅ P2P      |     ❌ iCloud      |  ❌ iCloud  |     —     | ✅ 仅局域网 |     ⚠️³      |
-| macOS                           |        ✅        |         ✅         |      ✅      |     ✅     |     ❌      |      ✅      |
-| Windows                         |        ✅        |         ❌         |      ❌      |     ❌     |     ✅      |      ✅      |
-| Linux                           |        ✅        |         ❌         |      ❌      |     ❌     |     ❌      |      ✅      |
-| 公网 P2P（NAT 打洞）            |        ✅        |         ❌         |      ❌      |     ❌     | ❌ 仅局域网 |      ⚠️      |
-| 本地加密存储                    |        ✅        |         ❌         |      ❓      |     ❌     |     ❌      |      ❓      |
-| **加密全文搜索**                |        ✅        |         ❌         |      ❌      |     ❌     |     ❌      |      ❌      |
-| 无限历史记录                    |        ✅        |    ❌ 仅最近一次    |      ✅      | ✅ 本地  |  ✅ 本地  |   可配置    |
-| 文本 + 图片 + 文件              |        ✅        |       部分        |    部分     | 仅文本  | 仅文本  | 文本 + 文件 |
-| CLI / Headless                  |        ✅        |         ❌         |      ❌      |     ❌     |     ❌      |      ❌      |
-| 零部署                          |        ✅        |         ✅         |      ✅      |     ✅     |     ✅      | ❌ 需自托管 |
-| 无需账号                        |        ✅        |    ❌ Apple ID    | ❌ Apple ID |     ✅     |     ✅      |  视模式而定  |
-
-**注脚**
-
-1. iCloud 使用 Apple 的端到端加密体系，但实现闭源，第三方无法独立审计。
-2. Ditto 通过局域网同步，可选启用密码保护，默认不是端到端加密。
-3. ClipCascade 提供服务器模式（自托管 Spring Boot）和早期阶段的 P2P 模式。
-
-> 数据来源于各产品官网 / GitHub README，截至 2026-05。发现描述不准？欢迎[提 Issue](https://github.com/UniClipboard/UniClipboard/issues)。
-
-## 🚀 安装方法
+## 安装方法
 
 ### 从 Releases 下载
 
@@ -141,7 +114,7 @@ bun tauri dev
 bun tauri build
 ```
 
-## 🎮 使用说明
+## 使用说明
 
 ### 第一台设备（新建空间）
 
@@ -164,7 +137,7 @@ bun tauri build
 - **设备** —— 管理已配对设备与在线状态、生成邀请码、切换空间
 - **设置** —— 配置通用、同步、安全、网络、存储与搜索索引等选项
 
-## 🔧 高级功能
+## 高级功能
 
 ### 工作原理
 
@@ -234,7 +207,7 @@ uniclip status / start / stop   # 守护进程生命周期
 - **空间隔离**: 每个空间拥有独立的主密钥；切换到另一个空间时，本地历史会用新空间的主密钥重新加密。
 - **设备授权**: 精确控制每台已配对设备的访问权限。
 
-## ❓ 常见问题
+## 常见问题
 
 **直接用 iCloud 通用剪贴板不就行了？**
 如果你只有 Apple 设备、不需要历史记录、并且完全信任 Apple 闭源的端到端加密 —— iCloud 没问题。但只要你多了一台 Windows 或 Linux、想要可搜索的历史、或想自己验证加密实现，就需要别的方案。
@@ -251,7 +224,7 @@ uniclip status / start / stop   # 守护进程生命周期
 **从旧版本升级后，设备不再是已配对状态了？**
 0.6 版本重做了底层网络栈，旧版本的配对状态已不再有效。在 **设备** 页通过邀请码（或 `uniclip invite` / `uniclip join`）重新配对一次即可恢复同步。
 
-## 🤝 参与贡献
+## 参与贡献
 
 非常欢迎各种形式的贡献！如果您对改进 UniClipboard 感兴趣，请：
 
@@ -261,11 +234,11 @@ uniclip status / start / stop   # 守护进程生命周期
 4. 推送到分支 (`git push origin feature/amazing-feature`)
 5. 创建一个 Pull Request
 
-## 📄 许可证
+## 许可证
 
 本项目采用 AGPL-3.0 许可证 - 详情请参阅 [LICENSE](./LICENSE) 文件。
 
-## 🙏 鸣谢
+## 鸣谢
 
 - [Tauri](https://tauri.app) - 提供跨平台应用框架
 - [React](https://react.dev) - 前端界面开发框架
