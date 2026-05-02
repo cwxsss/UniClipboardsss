@@ -41,7 +41,7 @@ describe('p2p realtime contract', () => {
 
     expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
     expect(daemonWs.subscribe).toHaveBeenCalledWith(
-      ['clipboard', 'peers', 'pairing', 'setup', 'space-access', 'paired-devices'],
+      ['clipboard', 'peers', 'pairing', 'setup', 'paired-devices'],
       expect.any(Function)
     )
   })
@@ -116,20 +116,20 @@ describe('p2p realtime contract', () => {
 
     registeredHandler({
       topic: 'setup',
-      eventType: 'setup.stateChanged',
+      eventType: 'setup.pairingCompleted',
       ts: 1,
       sessionId: 'sess-1',
       payload: {
-        sessionId: 'sess-1',
-        state: {
-          JoinSpaceConfirmPeer: { short_code: '654321', peer_fingerprint: 'fp', error: null },
-        },
+        sponsorDeviceId: 'sponsor-1',
+        joinerDeviceId: 'joiner-2',
+        success: true,
+        reason: null,
       },
     })
 
     expect(received).toHaveLength(1)
     // Verify the bridge uses 'type' (not 'eventType') in the forwarded envelope
-    expect(received[0]).toHaveProperty('type', 'setup.stateChanged')
+    expect(received[0]).toHaveProperty('type', 'setup.pairingCompleted')
     expect((received[0] as Record<string, unknown>).eventType).toBeUndefined()
   })
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use uc_core::network::daemon_api_strings::ws_topic;
+use crate::constants::ws_topic;
 
 /// Request body sent by a client to subscribe to daemon event topics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -43,7 +43,6 @@ pub const WS_SUPPORTED_TOPICS: &[&str] = &[
     ws_topic::PAIRED_DEVICES,
     ws_topic::PAIRING,
     ws_topic::SETUP,
-    ws_topic::SPACE_ACCESS,
     ws_topic::CLIPBOARD,
     ws_topic::FILE_TRANSFER,
     ws_topic::ENCRYPTION,

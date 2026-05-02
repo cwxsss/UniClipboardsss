@@ -49,14 +49,3 @@ pub trait SecureStoragePort: Send + Sync {
     /// 按 key 删除数据。
     fn delete(&self, key: &str) -> Result<(), SecureStorageError>;
 }
-
-#[cfg(test)]
-mockall::mock! {
-    pub SecureStorage {}
-
-    impl SecureStoragePort for SecureStorage {
-        fn get(&self, key: &str) -> Result<Option<Vec<u8>>, SecureStorageError>;
-        fn set(&self, key: &str, value: &[u8]) -> Result<(), SecureStorageError>;
-        fn delete(&self, key: &str) -> Result<(), SecureStorageError>;
-    }
-}

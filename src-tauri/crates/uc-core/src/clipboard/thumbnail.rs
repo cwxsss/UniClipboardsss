@@ -56,18 +56,3 @@ impl ThumbnailMetadata {
         }
     }
 }
-
-#[cfg(test)]
-#[test]
-fn test_thumbnail_metadata_builds() {
-    let meta = ThumbnailMetadata::new(
-        RepresentationId::new(),
-        BlobId::new(),
-        MimeType("image/webp".to_string()),
-        640,
-        480,
-        1234,
-        Some(TimestampMs::from_epoch_millis(1)),
-    );
-    assert_eq!(meta.thumbnail_mime_type.as_str(), "image/webp");
-}

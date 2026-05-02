@@ -31,6 +31,15 @@
     "downloading": "正在下载...",
     "installing": "正在安装..."
   },
+  "upgradeNotice": {
+    "title": "请重新配对设备",
+    "body": "本版本更新了设备配对机制，原有配对已不可用。请前往「设备」页向另一台设备发送邀请或重新加入。",
+    "fromVersion": "上一版本：{{from}}",
+    "toVersion": "当前版本：{{to}}",
+    "fromUnknown": "上一版本：未知",
+    "gotIt": "我知道了，不再提醒",
+    "later": "稍后再说"
+  },
   "settings": {
     "title": "设置",
     "categories": {
@@ -540,7 +549,6 @@
       "sending": "发送中",
       "receiving": "接收中",
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
-      "chunks": "{{completed}} / {{total}} 块",
       "speedValue": "{{speed}}",
       "speedPending": "速度计算中",
       "remainingValue": "剩余 {{time}}",
@@ -549,6 +557,8 @@
       "failed": "传输失败",
       "pending": "等待传输",
       "transferring": "传输中...",
+      "incoming": "正在接收...",
+      "incomingWithSize": "正在接收 ({{size}})...",
       "statusBadge": {
         "pending": "文件等待传输",
         "transferring": "文件传输中",
@@ -570,7 +580,7 @@
   },
   "devices": {
     "title": "设备管理",
-    "addNew": "添加新设备",
+    "addNew": "邀请新设备",
     "thisDevice": {
       "title": "本设备",
       "syncActive": "同步已开启",
@@ -582,6 +592,42 @@
     },
     "pairedDevices": {
       "title": "已配对设备"
+    },
+    "addDevice": {
+      "title": "邀请新设备",
+      "subtitle": "在新设备上输入此邀请码",
+      "expiresIn": "{{remaining}} 后过期",
+      "expired": "邀请码已过期",
+      "passphraseHint": "新设备还需输入空间口令完成配对",
+      "loading": "正在生成邀请码……",
+      "actions": {
+        "cancel": "取消",
+        "regenerate": "重新生成",
+        "close": "关闭",
+        "copy": "复制",
+        "copied": "已复制"
+      },
+      "errors": {
+        "issueFailed": "生成邀请码失败，请重试"
+      },
+      "success": {
+        "title": "设备已加入",
+        "subtitle": "对方设备已成功加入此空间"
+      },
+      "failed": {
+        "title": "配对失败",
+        "unknown": "对方设备未能成功加入",
+        "fallback": "配对失败：{{reason}}",
+        "reasons": {
+          "cancelled": "邀请已取消",
+          "expired": "邀请已过期",
+          "timeout": "等待超时，对方未在时限内完成配对",
+          "passphrase_mismatch": "对方输入的口令错误",
+          "user_rejected": "你拒绝了这次配对请求",
+          "proof_mismatch": "身份校验失败",
+          "joiner_disconnected": "对方设备中途断开"
+        }
+      }
     },
     "unpair": {
       "confirmTitle": "取消配对",
@@ -611,8 +657,8 @@
         "retry": "重试",
         "unpair": "取消配对",
         "settings": "设置",
-        "addDevice": "添加设备",
-        "addAnotherDevice": "添加另一台设备"
+        "addDevice": "邀请设备",
+        "addAnotherDevice": "邀请另一台设备"
       }
     },
     "syncPaused": {
@@ -631,9 +677,9 @@
         "title": "同步设置",
         "restoreDefaults": "恢复默认",
         "rules": {
-          "autoSync": {
-            "title": "自动同步",
-            "description": "在设备解锁状态下自动同步剪贴板内容"
+          "sendEnabled": {
+            "title": "发送到此设备",
+            "description": "开启后，本机的剪贴板内容会同步给此设备。接收方向当前始终开启，独立的接收开关将在后续版本中开放。"
           },
           "syncText": {
             "title": "同步文本",
@@ -668,6 +714,64 @@
           "writeClipboard": "写入剪贴板",
           "historyAccess": "访问历史记录",
           "fileTransfer": "传输文件"
+        }
+      }
+    },
+    "switchSpace": {
+      "button": "加入其他空间",
+      "title": "切换到其他空间",
+      "subtitle": "当前剪贴板历史会用新空间的主密钥重新加密。",
+      "warning": "所有本地剪贴板内容会经历 4 阶段重加密迁移。切换过程中不要退出应用——如果中途崩溃，下次启动会自动续跑。",
+      "labels": {
+        "code": "邀请码",
+        "newPassphrase": "新空间口令"
+      },
+      "placeholders": {
+        "newPassphrase": "新空间发起者设置的口令"
+      },
+      "actions": {
+        "switch": "切换",
+        "switching": "切换中…",
+        "cancel": "取消",
+        "close": "关闭",
+        "retry": "重试"
+      },
+      "migrating": {
+        "title": "迁移剪贴板历史",
+        "phase": {
+          "preparing": "阶段 1：备份本地历史",
+          "prepared": "阶段 2：与新发起者握手",
+          "handshakeDone": "阶段 3：用新密钥重加密",
+          "swapped": "阶段 4：收尾清理"
+        },
+        "recordsHint": "备份表中已有 {{count}} 条记录"
+      },
+      "success": {
+        "title": "切换成功",
+        "subtitle_one": "已用新主密钥迁移 1 条剪贴板记录。",
+        "subtitle_other": "已用新主密钥迁移 {{count}} 条剪贴板记录。",
+        "subtitle_zero": "无剪贴板历史需要迁移。"
+      },
+      "failed": {
+        "title": "切换失败",
+        "fallback": "切换失败：{{reason}}",
+        "reasons": {
+          "not_setup": "本设备尚未完成首次 setup，请先“初始化”或“加入”。",
+          "pending_migration": "上次迁移未完成，请重启应用让其自动续跑。",
+          "not_unlocked": "空间会话未解锁，请重启应用让 keychain 重新解锁。",
+          "sponsor_rejected": "对方没有识别这个邀请码。",
+          "sponsor_declined": "对方拒绝了配对请求。",
+          "invitation_not_found": "邀请码无效，请让对方重新签发。",
+          "invitation_expired": "邀请码已过期，请让对方重新签发。",
+          "passphrase_mismatch": "口令错误，请重试。",
+          "device_name_required": "缺少设备名。",
+          "sponsor_unreachable": "无法连接到对方，请检查 NAT / relay。",
+          "service_unavailable": "配对服务暂不可用，请稍后再试。",
+          "timeout": "握手超时。",
+          "connection_lost": "握手中途连接断开。",
+          "corrupted_key_material": "本地密钥物料损坏。",
+          "invalid_ciphertext": "备份记录无法解密，重启应用让其自动续跑。",
+          "internal": "内部错误 —— 请查看 daemon 日志。"
         }
       }
     }
@@ -875,7 +979,7 @@
         "description": "与另一台设备配对，并使用其口令访问共享空间。",
         "cta": "通过配对加入"
       },
-      "footer": "你可以稍后在设置中切换空间或添加更多设备。"
+      "footer": "你可以稍后在设置中切换空间或邀请更多设备。"
     },
     "createPassphrase": {
       "title": "创建加密口令",
@@ -898,7 +1002,7 @@
         "creating": "正在创建...",
         "submit": "创建空间"
       },
-      "hint": "请将口令保存在安全的位置，后续添加设备时会用到。"
+      "hint": "请将口令保存在安全的位置，后续邀请设备时会用到。"
     },
     "joinPickDevice": {
       "title": "选择要加入的设备",
@@ -970,11 +1074,85 @@
         "confirm": "确认配对"
       }
     },
-    "done": {
-      "title": "初始化完成",
-      "subtitle": "加密空间已准备就绪，可以开始安全同步。",
+    "initializeSpace": {
+      "title": "创建你的空间",
+      "subtitle": "为本机设置一个名称，并设置一个口令保护这个加密空间。",
+      "labels": {
+        "deviceName": "设备名称",
+        "passphrase": "口令",
+        "passphraseConfirm": "确认口令"
+      },
+      "placeholders": {
+        "deviceName": "例如：MacBook Pro",
+        "passphrase": "输入一个强口令",
+        "passphraseConfirm": "再次输入口令"
+      },
+      "errors": {
+        "passphraseMismatch": "两次输入的口令不一致",
+        "deviceNameRequired": "请填写设备名称",
+        "alreadyInitialized": "本机已完成初始化。",
+        "serviceUnavailable": "守护进程尚未就绪，请稍后重试。",
+        "generic": "创建空间失败，请重试。"
+      },
       "actions": {
-        "enter": "进入 UniClipboard"
+        "back": "返回",
+        "creating": "正在创建...",
+        "submit": "创建空间"
+      },
+      "hint": "请妥善保管该口令，所有想加入此空间的设备都需要输入它。"
+    },
+    "showInvitation": {
+      "title": "邀请新设备",
+      "subtitle": "在另一台设备上输入这个邀请码即可加入空间。",
+      "expiresIn": "{{remaining}} 后过期",
+      "expired": "邀请码已过期",
+      "hint": "配对完成前请保持两台设备都在线。",
+      "hintExpired": "邀请码已失效，请取消后重新生成。",
+      "actions": {
+        "cancel": "取消邀请"
+      }
+    },
+    "redeemInvitation": {
+      "title": "加入已有空间",
+      "subtitle": "输入对方设备显示的邀请码，以及创建空间时设置的口令。",
+      "labels": {
+        "code": "邀请码",
+        "passphrase": "空间口令"
+      },
+      "placeholders": {
+        "passphrase": "输入对方在创建空间时使用的口令"
+      },
+      "errors": {
+        "invitationNotFound": "邀请码无效，请仔细核对对方设备上显示的字符。",
+        "invitationExpired": "邀请码已过期，请请求对方重新生成一个。",
+        "passphraseMismatch": "口令错误，请重试。",
+        "sponsorUnreachable": "暂时无法连接对方设备，请确认两台设备都在线。",
+        "sponsorRejected": "对方未识别该邀请码。",
+        "sponsorDeclined": "对方拒绝了本次配对请求。",
+        "timeout": "配对握手超时，请重试。",
+        "connectionLost": "配对过程中连接中断，请重试。",
+        "serviceUnavailable": "守护进程尚未就绪，请稍后重试。",
+        "deviceNameRequired": "本机缺少设备名称，无法加入。",
+        "generic": "加入空间失败，请重试。"
+      },
+      "hint": "邀请码有效期较短，请让对方保持显示直到配对完成。",
+      "actions": {
+        "back": "返回",
+        "joining": "正在加入...",
+        "submit": "加入空间"
+      }
+    },
+    "pairingComplete": {
+      "title": "完成",
+      "sponsor": {
+        "subtitle": "你的空间已就绪，稍后可在设备列表里继续邀请其他设备。"
+      },
+      "joiner": {
+        "subtitle": "你已成功加入这个加密空间。",
+        "connectedTo": "已连接到"
+      },
+      "actions": {
+        "done": "继续"
       }
     }
   }

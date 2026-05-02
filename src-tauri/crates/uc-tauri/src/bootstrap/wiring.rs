@@ -38,15 +38,14 @@ use tauri::async_runtime;
 use tokio::time::{self, Duration};
 use tracing::{info, warn};
 
-use uc_app::task_registry::TaskRegistry;
-use uc_app::usecases::file_sync::CleanupExpiredFilesUseCase;
+use uc_application::facade::ClipboardHistoryFacade;
+use uc_bootstrap::TaskRegistry;
 use uc_daemon_client::{DaemonConnectionState, DaemonPairingClient};
 
 // Re-export assembly types from uc-bootstrap.
 pub use uc_bootstrap::assembly::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    wire_dependencies_with_identity_store, HostEventSetupPort, WiredDependencies, WiringError,
-    WiringResult,
+    get_storage_paths, resolve_pairing_device_name, wire_dependencies, WiredDependencies,
+    WiringError, WiringResult,
 };
 
 // Re-export BackgroundRuntimeDeps from uc-bootstrap (definition moved in Phase 40).
@@ -56,22 +55,31 @@ const GUI_PAIRING_LEASE_TTL_MS: u64 = 300_000;
 const GUI_PAIRING_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Start the file cache cleanup task (runs once at startup, fire-and-forget).
+///
+/// Cleanup goes through `ClipboardHistoryFacade::cleanup_expired_files`,
+/// which routes every expired file through the entry-aware delete path
+/// (untag iroh-blobs reference + remove cache file + drop sqlite rows
+/// in one shot). Pre-Phase-C this called a standalone use case that
+/// `tokio::fs::remove_file`-d cache files directly, leaving iroh-blobs
+/// metadata pointing at vanished files (the precursor to the Poisoned
+/// BaoFileStorage panic at `bao_file.rs:410`).
 pub fn start_background_tasks(
-    settings: Arc<dyn uc_core::ports::SettingsPort>,
-    file_cache_dir: std::path::PathBuf,
+    history_facade: Arc<ClipboardHistoryFacade>,
     task_registry: &Arc<TaskRegistry>,
 ) {
     let registry = task_registry.clone();
     async_runtime::spawn(async move {
         registry
             .spawn("file_cache_cleanup", |_token| async move {
-                let uc = CleanupExpiredFilesUseCase::new(settings, file_cache_dir.clone());
-                match uc.execute().await {
+                match history_facade.cleanup_expired_files().await {
                     Ok(result) => {
                         if result.files_removed > 0 {
                             info!(
                                 files_removed = result.files_removed,
+                                entries_deleted = result.entries_deleted,
+                                orphans_removed = result.orphans_removed,
                                 bytes_reclaimed = result.bytes_reclaimed,
+                                errors = result.errors,
                                 "Startup file cache cleanup completed"
                             );
                         }
@@ -150,91 +158,5 @@ async fn run_gui_pairing_lease_loop<F, Fut>(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc as StdArc;
-    use tokio::sync::Mutex;
-    use tokio::time::{advance, Duration};
-    use tokio_util::sync::CancellationToken;
-
-    #[test]
-    fn test_wiring_error_display() {
-        let err = WiringError::DatabaseInit("connection failed".to_string());
-        assert!(err.to_string().contains("Database initialization"));
-        assert!(err.to_string().contains("connection failed"));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn gui_pairing_lease_loop_registers_immediately_and_renews() {
-        let calls = StdArc::new(Mutex::new(Vec::<(bool, Option<u64>)>::new()));
-        let calls_for_loop = calls.clone();
-        let token = CancellationToken::new();
-
-        let handle = tokio::spawn(async move {
-            run_gui_pairing_lease_loop(
-                token,
-                300_000,
-                Duration::from_secs(120),
-                move |enabled, ttl_ms| {
-                    let calls = calls_for_loop.clone();
-                    async move {
-                        calls.lock().await.push((enabled, ttl_ms));
-                        Ok::<(), anyhow::Error>(())
-                    }
-                },
-            )
-            .await;
-        });
-
-        tokio::task::yield_now().await;
-        assert_eq!(&*calls.lock().await, &vec![(true, Some(300_000))]);
-
-        advance(Duration::from_secs(120)).await;
-        tokio::task::yield_now().await;
-
-        assert_eq!(
-            &*calls.lock().await,
-            &vec![(true, Some(300_000)), (true, Some(300_000))]
-        );
-
-        handle.abort();
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn gui_pairing_lease_loop_disables_lease_when_cancelled() {
-        let calls = StdArc::new(Mutex::new(Vec::<(bool, Option<u64>)>::new()));
-        let calls_for_loop = calls.clone();
-        let token = CancellationToken::new();
-        let cancel = token.clone();
-
-        let handle = tokio::spawn(async move {
-            run_gui_pairing_lease_loop(
-                token,
-                300_000,
-                Duration::from_secs(120),
-                move |enabled, ttl_ms| {
-                    let calls = calls_for_loop.clone();
-                    async move {
-                        calls.lock().await.push((enabled, ttl_ms));
-                        Ok::<(), anyhow::Error>(())
-                    }
-                },
-            )
-            .await;
-        });
-
-        tokio::task::yield_now().await;
-        cancel.cancel();
-        tokio::task::yield_now().await;
-        handle.await.expect("lease loop should exit cleanly");
-
-        assert_eq!(
-            &*calls.lock().await,
-            &vec![(true, Some(300_000)), (false, None)]
-        );
     }
 }

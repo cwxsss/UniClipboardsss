@@ -1,12 +1,13 @@
 [package]
 name = "uc-bootstrap"
 version.workspace = true
+license.workspace = true
 edition = "2021"
-description = "Composition root — sole crate allowed to depend on uc-core + uc-app + uc-infra + uc-platform simultaneously"
+description = "Composition root — sole crate allowed to depend on uc-core + uc-application + uc-infra + uc-platform simultaneously"
 
 [dependencies]
 uc-core = { path = "../uc-core" }
-uc-app = { path = "../uc-app" }
+uc-application = { path = "../uc-application" }
 uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
@@ -34,3 +35,7 @@ base64 = "0.22"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 mockall = "0.13"
+wiremock = "0.6"
+# Slice 2 Phase 2 · T12 — clipboard e2e packs plaintext as `Bytes`
+# for `ClipboardSyncFacade::dispatch_entry`.
+bytes = "1.7"

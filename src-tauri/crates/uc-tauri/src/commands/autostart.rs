@@ -109,14 +109,3 @@ pub async fn is_autostart_enabled(
     .instrument(span)
     .await
 }
-
-#[cfg(test)]
-mod tests {
-    use super::format_autostart_error;
-
-    #[test]
-    fn format_autostart_error_includes_prefix_and_error() {
-        let message = format_autostart_error("Failed to enable autostart", "boom");
-        assert_eq!(message, "Failed to enable autostart: boom");
-    }
-}

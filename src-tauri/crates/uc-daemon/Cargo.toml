@@ -1,8 +1,9 @@
 [package]
 name = "uc-daemon"
 version.workspace = true
+license.workspace = true
 edition = "2021"
-description = "Headless daemon for UniClipboard — background clipboard sync without GUI"
+description = "Compatibility daemon binary for UniClipboard desktop host"
 
 [[bin]]
 name = "uniclipboard-daemon"
@@ -13,41 +14,6 @@ name = "uc_daemon"
 path = "src/lib.rs"
 
 [dependencies]
-uc-bootstrap = { path = "../uc-bootstrap" }
-uc-app = { path = "../uc-app" }
-uc-core = { path = "../uc-core" }
-uc-infra = { path = "../uc-infra" }
-uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
-uc-observability = { path = "../uc-observability" }
-uc-daemon-contract = { path = "../uc-daemon-contract" }
-uc-daemon-local = { path = "../uc-daemon-local" }
-clipboard-rs = { version = "0.3.3", features = ["default"] }
-axum = { version = "0.7", features = ["ws", "tokio", "http1", "http2"] }
-base64 = "0.22"
-tokio = { version = "1", features = ["full", "test-util"] }
-tokio-util = "0.7"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 anyhow = "1.0"
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-rand = "0.8"
-blake3 = "1"
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
-tracing = "0.1"
-futures-util = "0.3"
-url = "2"
-utoipa = { version = "4", features = ["uuid", "chrono", "url"] }
-utoipa-axum = "0.2"
-utoipa-swagger-ui = { version = "7", features = ["axum"] }
-serde_with = "3.18.0"
-
-[dev-dependencies]
-uc-daemon-local = { path = "../uc-daemon-local", features = ["test-helpers"] }
-tempfile = "3"
-chrono = { version = "0.4", default-features = true }
-tower = { version = "0.5", features = ["util"] }
-tokio-tungstenite = "0.24"
-percent-encoding = "2"
-diesel = { version = "2.3.5", features = ["sqlite"] }
-mockall = "0.13"
+uc-daemon-local = { path = "../uc-daemon-local" }
+uc-desktop = { path = "../uc-desktop" }

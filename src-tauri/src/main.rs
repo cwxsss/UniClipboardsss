@@ -66,22 +66,21 @@ fn run_app(ctx: GuiBootstrapContext) {
     let GuiBootstrapContext {
         deps,
         background,
-        setup_ports,
         storage_paths,
-        pairing_orchestrator: _pairing_orchestrator,
-        pairing_action_rx: _pairing_action_rx,
-        staged_store: _staged_store,
-        key_slot_store: _key_slot_store,
         config: _config,
     } = ctx;
 
     let daemon_connection_state = DaemonConnectionState::default();
     let gui_owned_daemon_state = GuiOwnedDaemonState::default();
 
-    let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
+    let event_emitter: std::sync::Arc<dyn uc_application::facade::HostEventEmitterPort> =
         std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
-    let runtime = AppRuntime::with_setup(deps, setup_ports, storage_paths, event_emitter)
-        .with_clipboard_write_coordinator(background.clipboard_write_coordinator.clone());
+    let runtime = AppRuntime::with_setup(
+        deps,
+        storage_paths,
+        event_emitter,
+        background.clipboard_write_coordinator.clone(),
+    );
     let runtime = Arc::new(runtime);
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
@@ -276,8 +275,7 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             // Start file cache cleanup task (runs once at startup)
             start_background_tasks(
-                runtime.wiring_deps().settings.clone(),
-                background.file_cache_dir.clone(),
+                runtime.app_facade().clipboard_history.clone(),
                 runtime.task_registry(),
             );
 

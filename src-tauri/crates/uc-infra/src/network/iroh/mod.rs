@@ -1,0 +1,27 @@
+//! iroh network adapter (Slice 1+).
+//!
+//! Groups adapters backed by the `iroh` crate: long-term device identity,
+//! endpoint lifecycle, session opener, blob transfer. Slice 1 only ships
+//! [`IrohIdentityStore`]; later slices add the rest.
+
+pub mod blobs;
+pub mod clipboard_dispatch_adapter;
+pub mod clipboard_receiver_adapter;
+pub mod clipboard_wire;
+mod connect;
+pub mod identity_store;
+pub mod node;
+pub mod persistable_addr;
+pub mod presence_adapter;
+pub mod transfer_progress_adapter;
+pub mod transfer_progress_wire;
+
+pub use blobs::{IrohBlobTransferAdapter, BLOBS_ALPN};
+pub use clipboard_dispatch_adapter::{IrohClipboardDispatchAdapter, CLIPBOARD_ALPN};
+pub use clipboard_receiver_adapter::{IrohClipboardReceiverAdapter, IrohClipboardReceiverHandler};
+pub use identity_store::{IrohIdentityStore, IDENTITY_STORE_KEY};
+pub use node::{
+    BlobHandlers, ClipboardHandlers, IrohNode, IrohNodeBuilder, IrohNodeConfig, IrohNodeError,
+    PairingHandlers, TransferProgressHandlers,
+};
+pub use presence_adapter::{IrohPresenceAdapter, IrohPresenceHandler, PRESENCE_ALPN};

@@ -4,7 +4,6 @@
 //! The daemon re-exports these via `pub use uc_daemon_contract::api::dto::search::*;`.
 
 use serde::{Deserialize, Serialize};
-use uc_core::search::ContentType;
 use utoipa::ToSchema;
 
 /// Single search result — mirrors `SearchResult` with camelCase transport names.
@@ -12,7 +11,7 @@ use utoipa::ToSchema;
 #[serde(rename_all = "camelCase")]
 pub struct SearchResultDto {
     pub entry_id: String,
-    pub content_type: ContentType,
+    pub content_type: String,
     pub active_time_ms: i64,
     pub text_preview: Option<String>,
     pub mime_type: String,

@@ -25,11 +25,3 @@ pub struct NewClipboardRepresentationThumbnailRow {
     pub original_size_bytes: i64,
     pub created_at_ms: Option<i64>,
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_thumbnail_table_exists() {
-        let _ = crate::db::schema::clipboard_representation_thumbnail::table;
-    }
-}

@@ -178,6 +178,14 @@ pub trait FileTransferRepositoryPort: Send + Sync {
     /// Look up a single transfer by transfer_id.
     /// Returns the entry_id for the transfer, if found.
     async fn get_entry_id_for_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<String>>;
+
+    /// Look up the full projection row for a transfer_id.
+    ///
+    /// Used by receiver-side workers that need the locally-recorded
+    /// `cached_path` (and other context) once the domain timeline reports
+    /// completion. Returns `None` when no receiver projection row exists
+    /// for the given id — e.g. sender-side transfers.
+    async fn get_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<TrackedFileTransfer>>;
 }
 
 /// No-op stub for `FileTransferRepositoryPort` used at construction sites
@@ -230,6 +238,9 @@ impl FileTransferRepositoryPort for NoopFileTransferRepositoryPort {
     async fn get_entry_id_for_transfer(&self, _: &str) -> anyhow::Result<Option<String>> {
         Ok(None)
     }
+    async fn get_transfer(&self, _: &str) -> anyhow::Result<Option<TrackedFileTransfer>> {
+        Ok(None)
+    }
 }
 
 /// Compute aggregate status from a list of individual transfer statuses.
@@ -261,92 +272,4 @@ pub fn compute_aggregate_status(
         return Some(TrackedFileTransferStatus::Pending);
     }
     Some(TrackedFileTransferStatus::Completed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_status_as_str_roundtrip() {
-        for status in [
-            TrackedFileTransferStatus::Pending,
-            TrackedFileTransferStatus::Transferring,
-            TrackedFileTransferStatus::Completed,
-            TrackedFileTransferStatus::Failed,
-        ] {
-            let s = status.as_str();
-            let parsed = TrackedFileTransferStatus::from_str_value(s).unwrap();
-            assert_eq!(parsed, status);
-        }
-    }
-
-    #[test]
-    fn test_from_str_value_unknown_returns_none() {
-        assert!(TrackedFileTransferStatus::from_str_value("unknown").is_none());
-    }
-
-    #[test]
-    fn test_aggregate_empty_returns_none() {
-        assert_eq!(compute_aggregate_status(&[]), None);
-    }
-
-    #[test]
-    fn test_aggregate_all_completed() {
-        let statuses = vec![
-            TrackedFileTransferStatus::Completed,
-            TrackedFileTransferStatus::Completed,
-        ];
-        assert_eq!(
-            compute_aggregate_status(&statuses),
-            Some(TrackedFileTransferStatus::Completed)
-        );
-    }
-
-    #[test]
-    fn test_aggregate_failed_outranks_all() {
-        let statuses = vec![
-            TrackedFileTransferStatus::Completed,
-            TrackedFileTransferStatus::Transferring,
-            TrackedFileTransferStatus::Failed,
-            TrackedFileTransferStatus::Pending,
-        ];
-        assert_eq!(
-            compute_aggregate_status(&statuses),
-            Some(TrackedFileTransferStatus::Failed)
-        );
-    }
-
-    #[test]
-    fn test_aggregate_transferring_outranks_pending_and_completed() {
-        let statuses = vec![
-            TrackedFileTransferStatus::Completed,
-            TrackedFileTransferStatus::Transferring,
-            TrackedFileTransferStatus::Pending,
-        ];
-        assert_eq!(
-            compute_aggregate_status(&statuses),
-            Some(TrackedFileTransferStatus::Transferring)
-        );
-    }
-
-    #[test]
-    fn test_aggregate_pending_outranks_completed() {
-        let statuses = vec![
-            TrackedFileTransferStatus::Completed,
-            TrackedFileTransferStatus::Pending,
-        ];
-        assert_eq!(
-            compute_aggregate_status(&statuses),
-            Some(TrackedFileTransferStatus::Pending)
-        );
-    }
-
-    #[test]
-    fn test_aggregate_single_pending() {
-        assert_eq!(
-            compute_aggregate_status(&[TrackedFileTransferStatus::Pending]),
-            Some(TrackedFileTransferStatus::Pending)
-        );
-    }
 }

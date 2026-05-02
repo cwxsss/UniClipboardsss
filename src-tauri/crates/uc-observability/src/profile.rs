@@ -41,6 +41,31 @@ const NOISE_FILTERS: &[&str] = &[
     "Pool::poll=warn",
     "Swarm::poll=warn",
     "opentelemetry_sdk=warn",
+    // iroh 0.97 forked quinn into noq; the old quinn=info directives no
+    // longer match. noq_proto::connection in particular emits ~40k DEBUG
+    // events per peer-hour without this cap.
+    "noq=info",
+    "noq_proto=info",
+    // magicsock multipath state machine. The remote_state submodule is
+    // also where iroh#4124 spams `Opening path failed` on every event
+    // once the per-connection PathId budget is exhausted; cap that one
+    // at ERROR until upstream lands a fix (PR pending against v1.0.0-rc).
+    "iroh::socket=info",
+    "iroh::socket::remote_map::remote_state=error",
+    // swarm-discovery is the mDNS backend pulled in by the
+    // `address-lookup-mdns` feature; very chatty at INFO/DEBUG.
+    "swarm_discovery=warn",
+    // The socket actor logs `error sending mDNS: No route to host` on every
+    // tick when a bound interface (VPN/Clash TUN, stale virtual NIC, Wi-Fi
+    // mid-reassoc) returns EHOSTUNREACH. The condition is harmless — peer
+    // discovery still works on the other interfaces — but the actor's send
+    // cadence is fixed inside the crate, so we suppress the per-tick WARN.
+    "swarm_discovery::socket=error",
+    // hickory-dns resolver used by pkarr + relay URL resolution.
+    "hickory=warn",
+    // Catch-all for libraries that emit through the `log` crate (forwarded
+    // into tracing). Without this they default to TRACE.
+    "log=warn",
 ];
 
 impl LogProfile {
@@ -82,10 +107,21 @@ impl LogProfile {
     ///
     /// Always INFO-and-above regardless of profile. Debug/trace spans must
     /// never leave the machine via OTLP telemetry.
+    ///
+    /// `UC_OTLP_EXTRA` (comma-separated directives) appends to the default
+    /// filter at runtime — used for time-bounded remote diagnostics (e.g.
+    /// raising `iroh_quinn=debug` during a blob-fetch incident) without
+    /// rebuilding the daemon. Directives are appended last, so they take
+    /// precedence over both the base level and `NOISE_FILTERS`.
     pub fn otlp_filter(&self) -> EnvFilter {
         let mut directives = vec!["info".to_string()];
         for &filter in NOISE_FILTERS {
             directives.push(filter.to_string());
+        }
+        if let Ok(extra) = std::env::var("UC_OTLP_EXTRA") {
+            for d in extra.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                directives.push(d.to_string());
+            }
         }
         EnvFilter::new(directives.join(","))
     }
@@ -142,34 +178,6 @@ impl LogProfile {
 
         EnvFilter::new(directives.join(","))
     }
-
-    /// Return the filter directives as a string (for testing/debugging).
-    #[cfg(test)]
-    fn directives_string(&self) -> String {
-        let base = match self {
-            Self::Dev => "debug",
-            Self::Prod | Self::Cli => "info",
-            Self::DebugClipboard => "info",
-        };
-
-        let mut directives = vec![base.to_string()];
-        for &filter in NOISE_FILTERS {
-            directives.push(filter.to_string());
-        }
-        match self {
-            Self::Dev => {
-                directives.push("uc_platform=debug".to_string());
-                directives.push("uc_infra=debug".to_string());
-            }
-            Self::DebugClipboard => {
-                directives.push("uc_platform::adapters::clipboard=trace".to_string());
-                directives.push("uc_app::usecases::clipboard=debug".to_string());
-                directives.push("uc_core::clipboard=debug".to_string());
-            }
-            Self::Prod | Self::Cli => {}
-        }
-        directives.join(",")
-    }
 }
 
 impl fmt::Display for LogProfile {
@@ -180,235 +188,5 @@ impl fmt::Display for LogProfile {
             Self::DebugClipboard => write!(f, "debug_clipboard"),
             Self::Cli => write!(f, "cli"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    // Env var tests need serialization since they modify process-global state
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn test_from_env_dev() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("UC_LOG_PROFILE", "dev");
-        std::env::remove_var("RUST_LOG");
-        assert_eq!(LogProfile::from_env(), LogProfile::Dev);
-        std::env::remove_var("UC_LOG_PROFILE");
-    }
-
-    #[test]
-    fn test_from_env_prod() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("UC_LOG_PROFILE", "prod");
-        std::env::remove_var("RUST_LOG");
-        assert_eq!(LogProfile::from_env(), LogProfile::Prod);
-        std::env::remove_var("UC_LOG_PROFILE");
-    }
-
-    #[test]
-    fn test_from_env_debug_clipboard() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("UC_LOG_PROFILE", "debug_clipboard");
-        std::env::remove_var("RUST_LOG");
-        assert_eq!(LogProfile::from_env(), LogProfile::DebugClipboard);
-        std::env::remove_var("UC_LOG_PROFILE");
-    }
-
-    #[test]
-    fn test_from_env_unset_defaults_to_build_type() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("UC_LOG_PROFILE");
-        std::env::remove_var("RUST_LOG");
-        let profile = LogProfile::from_env();
-        // In debug builds (test), should be Dev
-        if cfg!(debug_assertions) {
-            assert_eq!(profile, LogProfile::Dev);
-        } else {
-            assert_eq!(profile, LogProfile::Prod);
-        }
-    }
-
-    #[test]
-    fn test_from_env_unrecognized_defaults_to_build_type() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("UC_LOG_PROFILE", "unknown_value");
-        std::env::remove_var("RUST_LOG");
-        let profile = LogProfile::from_env();
-        if cfg!(debug_assertions) {
-            assert_eq!(profile, LogProfile::Dev);
-        } else {
-            assert_eq!(profile, LogProfile::Prod);
-        }
-        std::env::remove_var("UC_LOG_PROFILE");
-    }
-
-    #[test]
-    fn test_dev_filter_has_debug_base() {
-        let directives = LogProfile::Dev.directives_string();
-        assert!(directives.starts_with("debug,"));
-    }
-
-    #[test]
-    fn test_prod_filter_has_info_base() {
-        let directives = LogProfile::Prod.directives_string();
-        assert!(directives.starts_with("info,"));
-    }
-
-    #[test]
-    fn test_from_env_cli() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("UC_LOG_PROFILE", "cli");
-        std::env::remove_var("RUST_LOG");
-        assert_eq!(LogProfile::from_env(), LogProfile::Cli);
-        std::env::remove_var("UC_LOG_PROFILE");
-    }
-
-    #[test]
-    fn test_cli_console_filter_is_off() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RUST_LOG");
-        // CLI profile should have console filter set to "off"
-        let filter = LogProfile::Cli.console_filter();
-        // Verify it builds without panic; the filter should reject all events
-        let _ = filter;
-    }
-
-    #[test]
-    fn test_cli_json_filter_is_info() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RUST_LOG");
-        let directives = LogProfile::Cli.directives_string();
-        assert!(
-            directives.starts_with("info,"),
-            "CLI JSON filter should be info-level, got: {}",
-            directives
-        );
-    }
-
-    #[test]
-    fn test_all_profiles_include_noise_filters() {
-        for profile in [
-            LogProfile::Dev,
-            LogProfile::Prod,
-            LogProfile::DebugClipboard,
-            LogProfile::Cli,
-        ] {
-            let directives = profile.directives_string();
-            assert!(
-                directives.contains("libp2p_mdns=info"),
-                "Missing libp2p_mdns=info in {profile}"
-            );
-            assert!(
-                directives.contains("libp2p_mdns::behaviour::iface=off"),
-                "Missing iface=off in {profile}"
-            );
-            assert!(
-                directives.contains("tauri=warn"),
-                "Missing tauri=warn in {profile}"
-            );
-            assert!(
-                directives.contains("wry=off"),
-                "Missing wry=off in {profile}"
-            );
-            assert!(
-                directives.contains("ipc::request=off"),
-                "Missing ipc::request=off in {profile}"
-            );
-            assert!(
-                directives.contains("hyper_util=info"),
-                "Missing hyper_util=info in {profile}"
-            );
-            assert!(
-                directives.contains("hyper=info"),
-                "Missing hyper=info in {profile}"
-            );
-            assert!(
-                directives.contains("Connection::poll=warn"),
-                "Missing Connection::poll=warn in {profile}"
-            );
-            assert!(
-                directives.contains("Pool::poll=warn"),
-                "Missing Pool::poll=warn in {profile}"
-            );
-            assert!(
-                directives.contains("Swarm::poll=warn"),
-                "Missing Swarm::poll=warn in {profile}"
-            );
-            assert!(
-                directives.contains("opentelemetry_sdk=warn"),
-                "Missing opentelemetry_sdk=warn in {profile}"
-            );
-            assert!(
-                directives.contains("quinn=info"),
-                "Missing quinn=info in {profile}"
-            );
-            assert!(
-                directives.contains("quinn_proto=info"),
-                "Missing quinn_proto=info in {profile}"
-            );
-            assert!(
-                directives.contains("quinn_udp=info"),
-                "Missing quinn_udp=info in {profile}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_dev_profile_includes_platform_debug() {
-        let directives = LogProfile::Dev.directives_string();
-        assert!(directives.contains("uc_platform=debug"));
-        assert!(directives.contains("uc_infra=debug"));
-    }
-
-    #[test]
-    fn test_debug_clipboard_includes_clipboard_targets() {
-        let directives = LogProfile::DebugClipboard.directives_string();
-        assert!(directives.contains("uc_platform::adapters::clipboard=trace"));
-        assert!(directives.contains("uc_app::usecases::clipboard=debug"));
-        assert!(directives.contains("uc_core::clipboard=debug"));
-    }
-
-    #[test]
-    fn test_json_filter_is_symmetric_with_console_filter() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RUST_LOG");
-        // We can't directly compare EnvFilters, but we can verify the directives are the same
-        // Note: Cli profile is intentionally asymmetric (console=off, json=info)
-        for profile in [
-            LogProfile::Dev,
-            LogProfile::Prod,
-            LogProfile::DebugClipboard,
-        ] {
-            let console_directives = profile.directives_string();
-            // json_filter uses the same build_filter() so directives should match
-            let json_directives = profile.directives_string();
-            assert_eq!(
-                console_directives, json_directives,
-                "Asymmetry in {profile}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_display_impl() {
-        assert_eq!(LogProfile::Dev.to_string(), "dev");
-        assert_eq!(LogProfile::Prod.to_string(), "prod");
-        assert_eq!(LogProfile::DebugClipboard.to_string(), "debug_clipboard");
-        assert_eq!(LogProfile::Cli.to_string(), "cli");
-    }
-
-    #[test]
-    fn test_console_filter_builds_valid_envfilter() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RUST_LOG");
-        // Should not panic
-        let _ = LogProfile::Dev.console_filter();
-        let _ = LogProfile::Prod.console_filter();
-        let _ = LogProfile::DebugClipboard.console_filter();
-        let _ = LogProfile::Cli.console_filter();
     }
 }

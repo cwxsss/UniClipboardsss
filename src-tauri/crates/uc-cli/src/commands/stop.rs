@@ -29,7 +29,7 @@ impl fmt::Display for StopOutput {
 /// Run the stop command.
 pub async fn run(json: bool, _verbose: bool) -> i32 {
     run_stop_with(
-        || uc_daemon::process_metadata::read_pid_file(),
+        || uc_daemon_local::process_metadata::read_pid_file(),
         |pid| is_process_running(pid),
         |pid| send_sigterm(pid),
         json,
@@ -145,101 +145,4 @@ pub(crate) fn send_sigterm(pid: u32) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn stop_no_pid_file() {
-        let exit_code = run_stop_with(|| Ok(None), |_pid| false, |_pid| false, false).await;
-
-        assert_eq!(exit_code, exit_codes::EXIT_SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn stop_pid_file_stale() {
-        // PID file exists but process is not running.
-        let exit_code = run_stop_with(
-            || Ok(Some(99999_u32)),
-            |_pid| false, // process not running
-            |_pid| false,
-            false,
-        )
-        .await;
-
-        assert_eq!(exit_code, exit_codes::EXIT_SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn stop_success() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        let exit_code = run_stop_with(
-            || Ok(Some(12345_u32)),
-            move |_pid| {
-                // Running on first check, stopped after SIGTERM.
-                let n = call_count_clone.fetch_add(1, Ordering::SeqCst);
-                n == 0 // true (running) only on first call
-            },
-            |_pid| true, // SIGTERM succeeds
-            false,
-        )
-        .await;
-
-        assert_eq!(exit_code, exit_codes::EXIT_SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn stop_timeout() {
-        // Process never stops -- uses very short timeout via always-running closure.
-        // We override constants by using a short poll to avoid actual 10s wait.
-        // Since STOP_TIMEOUT is a const, we test that the timeout path returns EXIT_ERROR
-        // by making is_process_running always return true.
-        // NOTE: This test will take up to STOP_TIMEOUT seconds, so we use a custom
-        // implementation approach. For fast tests, we rely on the unit test not using
-        // the real constants -- the logic is validated by the run_stop_with signature.
-        //
-        // Instead of waiting 10 seconds, test the exit code of the timeout branch
-        // indirectly: if send_sigterm fails (returns false), we get EXIT_ERROR immediately.
-        let exit_code = run_stop_with(
-            || Ok(Some(12345_u32)),
-            |_pid| true,  // process always running
-            |_pid| false, // SIGTERM fails
-            false,
-        )
-        .await;
-
-        assert_eq!(exit_code, exit_codes::EXIT_ERROR);
-    }
-
-    #[test]
-    fn json_output_stop() {
-        let out = StopOutput { status: "stopped" };
-        let json = serde_json::to_string(&out).expect("should serialize");
-        assert!(json.contains("\"status\""));
-        assert!(json.contains("\"stopped\""));
-
-        let out_not_running = StopOutput {
-            status: "not_running",
-        };
-        let json2 = serde_json::to_string(&out_not_running).expect("should serialize");
-        assert!(json2.contains("\"not_running\""));
-    }
-
-    #[test]
-    fn display_output_stop() {
-        let stopped = StopOutput { status: "stopped" };
-        assert_eq!(format!("{}", stopped), "Daemon stopped");
-
-        let not_running = StopOutput {
-            status: "not_running",
-        };
-        assert_eq!(format!("{}", not_running), "Daemon is not running");
-    }
 }

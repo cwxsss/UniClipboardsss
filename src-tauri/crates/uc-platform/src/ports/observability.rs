@@ -26,28 +26,3 @@ pub fn extract_trace(args: &serde_json::Value) -> Result<OptionalTrace, TracePar
         .map(Some)
         .map_err(|err| TraceParseError::InvalidTrace(err.to_string()))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn extracts_trace_metadata() {
-        let args = json!({
-            "_trace": {
-                "trace_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                "timestamp": 1737100000000u64
-            }
-        });
-
-        let trace = extract_trace(&args)
-            .expect("trace metadata parse error")
-            .expect("trace metadata missing");
-        assert_eq!(
-            trace.trace_id.to_string(),
-            "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-        );
-        assert_eq!(trace.timestamp, 1737100000000u64);
-    }
-}

@@ -1,6 +1,7 @@
 [package]
 name = "uniclipboard"
-version = "0.5.0"
+version = "0.6.0-alpha.4"
+license.workspace = true
 description = "一个剪切板同步工具"
 authors = ["mkdir700@gmail.com"]
 edition = "2021"
@@ -20,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # ===== Workspace crates =====
 uc-core = { path = "crates/uc-core" }
+uc-application = { path = "crates/uc-application" }
 uc-tauri = { path = "crates/uc-tauri" }
 uc-bootstrap = { path = "crates/uc-bootstrap" }
 uc-daemon-client = { path = "crates/uc-daemon-client" }
@@ -67,7 +69,7 @@ tokio = { version = "1", features = ["full"] }
 [workspace]
 members = [
   "crates/uc-core",
-  "crates/uc-app",
+  "crates/uc-application",
   "crates/uc-platform",
   "crates/uc-infra",
   "crates/uc-clipboard-probe",
@@ -76,6 +78,8 @@ members = [
   "crates/uc-bootstrap",
   "crates/uc-daemon-contract",
   "crates/uc-daemon-local",
+  "crates/uc-webserver",
+  "crates/uc-desktop",
   "crates/uc-daemon",
   "crates/uc-cli",
   "crates/uc-cli-macros",
@@ -84,7 +88,8 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0-alpha.4"
+license = "AGPL-3.0-only"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]

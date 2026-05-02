@@ -31,6 +31,15 @@
     "downloading": "Downloading...",
     "installing": "Installing..."
   },
+  "upgradeNotice": {
+    "title": "Re-pair your devices",
+    "body": "This version updates the device pairing scheme. Your previous pairings can no longer sync. Please open Devices to invite or re-join the other device.",
+    "fromVersion": "Previous version: {{from}}",
+    "toVersion": "Current version: {{to}}",
+    "fromUnknown": "Previous version: unknown",
+    "gotIt": "Got it, don't remind me again",
+    "later": "Later"
+  },
   "settings": {
     "title": "Settings",
     "categories": {
@@ -549,7 +558,6 @@
       "sending": "Sending",
       "receiving": "Receiving",
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
-      "chunks": "{{completed}} / {{total}} chunks",
       "speedValue": "{{speed}}",
       "speedPending": "Calculating speed",
       "remainingValue": "{{time}} remaining",
@@ -558,6 +566,8 @@
       "failed": "Transfer failed",
       "pending": "Pending transfer",
       "transferring": "Transferring...",
+      "incoming": "Receiving...",
+      "incomingWithSize": "Receiving ({{size}})...",
       "statusBadge": {
         "pending": "File transfer pending",
         "transferring": "File transfer in progress",
@@ -579,7 +589,7 @@
   },
   "devices": {
     "title": "Device Management",
-    "addNew": "Add New Device",
+    "addNew": "Invite New Device",
     "thisDevice": {
       "title": "This Device",
       "syncActive": "Sync active",
@@ -591,6 +601,42 @@
     },
     "pairedDevices": {
       "title": "Paired Devices"
+    },
+    "addDevice": {
+      "title": "Invite a new device",
+      "subtitle": "Enter this code on the joining device",
+      "expiresIn": "Expires in {{remaining}}",
+      "expired": "Invitation expired",
+      "passphraseHint": "The joining device also needs the space passphrase to finish pairing",
+      "loading": "Generating invitation code…",
+      "actions": {
+        "cancel": "Cancel",
+        "regenerate": "Regenerate",
+        "close": "Close",
+        "copy": "Copy",
+        "copied": "Copied"
+      },
+      "errors": {
+        "issueFailed": "Failed to generate invitation. Please try again."
+      },
+      "success": {
+        "title": "Device joined",
+        "subtitle": "The other device has successfully joined this space"
+      },
+      "failed": {
+        "title": "Pairing failed",
+        "unknown": "The other device couldn't join",
+        "fallback": "Pairing failed: {{reason}}",
+        "reasons": {
+          "cancelled": "Invitation was cancelled",
+          "expired": "Invitation expired",
+          "timeout": "Timed out — the other device didn't complete pairing in time",
+          "passphrase_mismatch": "The other device entered the wrong passphrase",
+          "user_rejected": "You declined this pairing request",
+          "proof_mismatch": "Identity verification failed",
+          "joiner_disconnected": "The other device disconnected mid-pairing"
+        }
+      }
     },
     "unpair": {
       "confirmTitle": "Unpair Device",
@@ -620,8 +666,8 @@
         "retry": "Retry",
         "unpair": "Unpair",
         "settings": "Settings",
-        "addDevice": "Add Device",
-        "addAnotherDevice": "Add another device"
+        "addDevice": "Invite Device",
+        "addAnotherDevice": "Invite another device"
       }
     },
     "syncPaused": {
@@ -640,9 +686,9 @@
         "title": "Sync Settings",
         "restoreDefaults": "Restore defaults",
         "rules": {
-          "autoSync": {
-            "title": "Auto Sync",
-            "description": "Automatically sync clipboard content when the device is unlocked"
+          "sendEnabled": {
+            "title": "Send to this device",
+            "description": "When on, clipboard content from this computer is sent to the selected device. Receiving is always on for now; a dedicated receive toggle will arrive in a later release."
           },
           "syncText": {
             "title": "Sync Text",
@@ -677,6 +723,64 @@
           "writeClipboard": "Write clipboard",
           "historyAccess": "Access history",
           "fileTransfer": "File transfer"
+        }
+      }
+    },
+    "switchSpace": {
+      "button": "Join another space",
+      "title": "Switch to another space",
+      "subtitle": "Existing clipboard history will be re-encrypted under the new master key.",
+      "warning": "All local clipboard data is re-encrypted in 4 phases. Don't quit the app until it finishes — a crash mid-flight will auto-resume on next launch.",
+      "labels": {
+        "code": "Invitation code",
+        "newPassphrase": "New space passphrase"
+      },
+      "placeholders": {
+        "newPassphrase": "Passphrase the new sponsor chose"
+      },
+      "actions": {
+        "switch": "Switch",
+        "switching": "Switching…",
+        "cancel": "Cancel",
+        "close": "Close",
+        "retry": "Retry"
+      },
+      "migrating": {
+        "title": "Migrating clipboard history",
+        "phase": {
+          "preparing": "Phase 1: backing up history",
+          "prepared": "Phase 2: handshaking with new sponsor",
+          "handshakeDone": "Phase 3: re-encrypting under new key",
+          "swapped": "Phase 4: finalising"
+        },
+        "recordsHint": "{{count}} records in backup table"
+      },
+      "success": {
+        "title": "Switched space",
+        "subtitle_one": "Migrated 1 clipboard record under the new master key.",
+        "subtitle_other": "Migrated {{count}} clipboard records under the new master key.",
+        "subtitle_zero": "No clipboard history needed migration."
+      },
+      "failed": {
+        "title": "Switch space failed",
+        "fallback": "Switch space failed: {{reason}}",
+        "reasons": {
+          "not_setup": "This device hasn't completed first-time setup. Use \"Initialize\" or \"Join\" first.",
+          "pending_migration": "A previous migration is still in flight. Restart the app to auto-resume.",
+          "not_unlocked": "Space session is locked. Restart the app so the keychain re-unlocks it.",
+          "sponsor_rejected": "Sponsor did not recognise the invitation code.",
+          "sponsor_declined": "Sponsor declined the pairing.",
+          "invitation_not_found": "Invitation code is invalid. Ask the sponsor to issue a fresh one.",
+          "invitation_expired": "Invitation expired. Ask the sponsor to issue a fresh one.",
+          "passphrase_mismatch": "Wrong passphrase — please retry.",
+          "device_name_required": "Device name is required.",
+          "sponsor_unreachable": "Sponsor is not reachable. Check NAT / relay.",
+          "service_unavailable": "Pairing service is unreachable. Try again later.",
+          "timeout": "Handshake timed out.",
+          "connection_lost": "Connection lost mid-handshake.",
+          "corrupted_key_material": "Local key material is corrupted.",
+          "invalid_ciphertext": "Backup record could not be decrypted. Restart the app to auto-resume.",
+          "internal": "Internal error — see daemon logs."
         }
       }
     }
@@ -884,106 +988,87 @@
         "description": "Pair with another device and reuse the passphrase to access the shared space.",
         "cta": "Join via pairing"
       },
-      "footer": "You can switch spaces or add more devices later in Settings."
+      "footer": "You can switch spaces or invite more devices later in Settings."
     },
-    "createPassphrase": {
-      "title": "Create encryption passphrase",
-      "subtitle": "This passphrase protects your encrypted space. Keep it memorable but secure.",
+    "initializeSpace": {
+      "title": "Create your space",
+      "subtitle": "Set a name for this device and choose a passphrase to protect the encrypted space.",
       "labels": {
-        "pass1": "Passphrase",
-        "pass2": "Confirm passphrase"
+        "deviceName": "Device name",
+        "passphrase": "Passphrase",
+        "passphraseConfirm": "Confirm passphrase"
       },
       "placeholders": {
-        "pass1": "Enter a strong passphrase",
-        "pass2": "Re-enter your passphrase"
+        "deviceName": "e.g. MacBook Pro",
+        "passphrase": "Enter a strong passphrase",
+        "passphraseConfirm": "Re-enter your passphrase"
       },
       "errors": {
-        "mismatch": "Passphrases do not match",
-        "tooShort": "Passphrase must be at least {{minLen}} characters",
-        "empty": "Passphrase cannot be empty",
-        "generic": "Failed to set passphrase. Please try again."
+        "passphraseMismatch": "Passphrases do not match",
+        "deviceNameRequired": "Device name is required",
+        "alreadyInitialized": "This device is already set up.",
+        "serviceUnavailable": "Daemon is not ready yet. Please try again in a moment.",
+        "generic": "Failed to create the space. Please try again."
       },
       "actions": {
+        "back": "Back",
         "creating": "Creating...",
         "submit": "Create space"
       },
-      "hint": "Store this passphrase in a safe place. You will need it to add more devices."
+      "hint": "Save this passphrase somewhere safe — you'll need it on every device that joins this space."
     },
-    "joinPickDevice": {
-      "title": "Choose a device to pair",
-      "subtitle": "Select a device that already joined the encrypted space.",
-      "scanning": {
-        "title": "Scanning for devices...",
-        "description": "Looking for other devices on your local network.",
-        "compact": "Scanning..."
-      },
-      "errors": {
-        "timeout": "Scanning timed out. Please try again.",
-        "peerUnavailable": "The other device is currently unavailable. Please choose a device again.",
-        "pairingRejected": "The other device rejected this pairing request.",
-        "pairingFailed": "The other device did not approve or respond in time. Please try again.",
-        "loadPeers": "Failed to fetch device list."
-      },
-      "empty": {
-        "title": "No devices discovered",
-        "description": "Ensure the host device is on the same network and pairing is enabled.",
-        "rescan": "Scan again",
-        "tips": {
-          "heading": "Troubleshooting tips",
-          "sameNetwork": "Confirm both devices are on the same Wi-Fi or LAN",
-          "pairingEnabled": "Confirm the main device has pairing enabled",
-          "firewall": "Check firewall settings aren't blocking local connections"
-        }
-      },
+    "showInvitation": {
+      "title": "Invite a new device",
+      "subtitle": "Type this code on the joining device to add it to the space.",
+      "expiresIn": "Expires in {{remaining}}",
+      "expired": "Invitation expired",
+      "hint": "Both devices must remain online while pairing.",
+      "hintExpired": "The code is no longer valid. Cancel and start a new invitation.",
       "actions": {
-        "select": "Select"
+        "cancel": "Cancel invitation"
       }
     },
-    "joinVerifyPassphrase": {
-      "title": "Verify passphrase",
-      "subtitle": "Enter the encryption passphrase to unlock the shared space.",
-      "targetDevice": "Target device: {{peerShort}}",
+    "redeemInvitation": {
+      "title": "Join an existing space",
+      "subtitle": "Enter the invitation code shown on the other device, then provide the same passphrase used to create the space.",
+      "labels": {
+        "code": "Invitation code",
+        "passphrase": "Space passphrase"
+      },
+      "placeholders": {
+        "passphrase": "Enter the passphrase from the host device"
+      },
       "errors": {
-        "empty": "Passphrase cannot be empty",
-        "timeout": "Verification timed out. Please try again.",
-        "peerUnavailable": "The other device went offline. Please pick a device again.",
-        "generic": "Failed to verify the passphrase."
+        "invitationNotFound": "This invitation code is not recognised. Double-check what was shown on the other device.",
+        "invitationExpired": "This invitation has expired. Ask the host to issue a new one.",
+        "passphraseMismatch": "The passphrase doesn't match. Try again.",
+        "sponsorUnreachable": "The host device is not reachable right now. Make sure both devices are online.",
+        "sponsorRejected": "The host did not recognise this code.",
+        "sponsorDeclined": "The host declined the pairing request.",
+        "timeout": "The pairing handshake timed out. Please try again.",
+        "connectionLost": "The connection dropped mid-handshake. Please try again.",
+        "serviceUnavailable": "The daemon is not ready yet. Please try again in a moment.",
+        "deviceNameRequired": "This device needs a display name before it can join.",
+        "generic": "Could not join the space. Please try again."
       },
+      "hint": "The code is short-lived — ask the host to keep it on screen until pairing completes.",
       "actions": {
-        "backToPick": "Back to device list",
-        "verifying": "Verifying...",
-        "verify": "Verify and continue"
-      },
-      "mismatchHelp": {
-        "title": "The entered passphrase didn’t work",
-        "subtitle": "It looks like the passphrase didn’t match what the host device expects.",
-        "p1": "Double-check that you typed the passphrase exactly, including case and symbols.",
-        "p2": "If you still cannot proceed, you can go back and pick another device or create a new space instead.",
-        "option1": "Re-enter the passphrase carefully",
-        "option2": "Ask the host device owner to confirm the passphrase",
-        "retry": "Try again",
-        "createNew": "Create a new space instead"
+        "back": "Back",
+        "joining": "Joining...",
+        "submit": "Join space"
       }
     },
-    "pairingConfirm": {
-      "title": "Confirm pairing code",
-      "subtitle": "Verify that the code matches on both devices before continuing.",
-      "peerFingerprint": "Device fingerprint",
-      "errors": {
-        "rejected": "Pairing was rejected by the other device.",
-        "generic": "Failed to confirm pairing."
+    "pairingComplete": {
+      "title": "All set",
+      "sponsor": {
+        "subtitle": "Your space is ready. You can invite more devices later from the device list."
+      },
+      "joiner": {
+        "subtitle": "You're now part of this encrypted space.",
+        "connectedTo": "Connected to"
       },
       "actions": {
-        "cancel": "Cancel",
-        "confirming": "Confirming...",
-        "confirm": "Confirm pairing"
-      }
-    },
-    "done": {
-      "title": "All set!",
-      "subtitle": "Your encrypted space is ready. Enjoy secure clipboard sync.",
-      "actions": {
-        "enter": "Enter UniClipboard"
+        "done": "Continue"
       }
     }
   }

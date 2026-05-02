@@ -14,6 +14,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    blob_reference (plaintext_hash) {
+        plaintext_hash -> Text,
+        digest -> Text,
+        created_at -> BigInt,
+    }
+}
+
+diesel::table! {
     file_transfer (transfer_id) {
         transfer_id -> Text,
         entry_id -> Text,
@@ -26,6 +34,17 @@ diesel::table! {
         failure_reason -> Nullable<Text>,
         created_at_ms -> BigInt,
         updated_at_ms -> BigInt,
+    }
+}
+
+diesel::table! {
+    file_transfer_events (id) {
+        id -> Integer,
+        transfer_id -> Text,
+        sequence -> Integer,
+        event_type -> Text,
+        payload_json -> Text,
+        occurred_at_ms -> BigInt,
     }
 }
 
@@ -48,6 +67,14 @@ diesel::table! {
         captured_at_ms -> BigInt,
         source_device -> Text,
         snapshot_hash -> Text,
+    }
+}
+
+diesel::table! {
+    clipboard_migration_backup (event_id, representation_id) {
+        event_id -> Text,
+        representation_id -> Text,
+        migration_ciphertext -> Binary,
     }
 }
 
@@ -99,14 +126,29 @@ diesel::table! {
 }
 
 diesel::table! {
-    paired_device (peer_id) {
-        peer_id -> Text,
-        pairing_state -> Text,
-        identity_fingerprint -> Text,
-        paired_at -> BigInt,
-        last_seen_at -> Nullable<BigInt>,
+    peer_address (device_id) {
+        device_id -> Text,
+        addr_blob -> Binary,
+        observed_at -> BigInt,
+    }
+}
+
+diesel::table! {
+    space_member (device_id) {
+        device_id -> Text,
         device_name -> Text,
-        sync_settings -> Nullable<Text>,
+        identity_fingerprint -> Text,
+        joined_at -> BigInt,
+        sync_preferences -> Text,
+    }
+}
+
+diesel::table! {
+    trusted_peer (peer_device_id) {
+        peer_device_id -> Text,
+        local_device_id -> Text,
+        peer_fingerprint -> Text,
+        trusted_at -> BigInt,
     }
 }
 
@@ -153,13 +195,18 @@ diesel::joinable!(clipboard_snapshot_representation -> clipboard_event (event_id
 
 diesel::allow_tables_to_appear_in_same_query!(
     blob,
+    blob_reference,
     clipboard_entry,
     clipboard_event,
+    clipboard_migration_backup,
     clipboard_selection,
     clipboard_representation_thumbnail,
     clipboard_snapshot_representation,
     file_transfer,
-    paired_device,
+    file_transfer_events,
+    peer_address,
+    space_member,
+    trusted_peer,
     search_document,
     search_index_meta,
     search_posting,

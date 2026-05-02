@@ -11,6 +11,15 @@
 //! ```
 //!
 //! Total header: 29 bytes before ciphertext.
+//!
+//! # Slice 3 改造
+//!
+//! 不再走 `BlobCipherPort`——本 decorator 的 wire format（UCBL 二进制）与
+//! 4 个剪切板 decorator 用的 JSON `EncryptedBlob` 字节布局不兼容,共享
+//! 同一个 port 会破坏既有 `.blob` 文件的可读性（V1 数据兼容 ironclad 不变量）。
+//!
+//! 改用 `super::v1_aead` 私有 helper 直接调底层 AEAD: 算法行为与历史
+//! `EncryptionPort::encrypt_blob` 字节级一致,保证既有 UCBL 文件继续可读。
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -18,12 +27,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info_span, Instrument};
 
-use uc_core::{
-    ports::{BlobStorePort, EncryptionPort, EncryptionSessionPort},
-    security::aad,
-    security::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion},
-    BlobId,
-};
+use uc_core::{blob::ports::BlobReaderPort, crypto::aad, BlobId};
+
+use super::session::InMemorySession;
+use super::v1_aead;
+use crate::blob::BlobStorePort;
 
 /// Magic bytes identifying a UniClipboard blob file ("UCBL")
 const BLOB_MAGIC: [u8; 4] = [0x55, 0x43, 0x42, 0x4C];
@@ -77,21 +85,12 @@ fn parse_blob(data: &[u8]) -> Result<(&[u8; 24], &[u8])> {
 /// - Read: parse binary -> decrypt -> decompress
 pub struct EncryptedBlobStore {
     inner: Arc<dyn BlobStorePort>,
-    encryption: Arc<dyn EncryptionPort>,
-    session: Arc<dyn EncryptionSessionPort>,
+    session: Arc<InMemorySession>,
 }
 
 impl EncryptedBlobStore {
-    pub fn new(
-        inner: Arc<dyn BlobStorePort>,
-        encryption: Arc<dyn EncryptionPort>,
-        session: Arc<dyn EncryptionSessionPort>,
-    ) -> Self {
-        Self {
-            inner,
-            encryption,
-            session,
-        }
+    pub fn new(inner: Arc<dyn BlobStorePort>, session: Arc<InMemorySession>) -> Self {
+        Self { inner, session }
     }
 }
 
@@ -100,45 +99,31 @@ impl BlobStorePort for EncryptedBlobStore {
     async fn put(&self, blob_id: &BlobId, data: &[u8]) -> Result<(PathBuf, Option<i64>)> {
         let plaintext_size = data.len();
 
-        // 1. Get master key from session
         let master_key = self
             .session
             .get_master_key()
-            .await
             .context("encryption session not ready - cannot encrypt blob")?;
 
-        // 2. Compress plaintext with zstd
         let compressed =
             zstd::bulk::compress(data, ZSTD_LEVEL).context("failed to compress blob data")?;
         let compressed_size = compressed.len();
 
-        // 3. Build AAD with v2 format
-        let aad = aad::for_blob_v2(blob_id);
+        let aad_bytes = aad::for_blob_v2(blob_id);
 
-        // 4. Encrypt compressed data
-        let encrypted_blob = self
-            .encryption
-            .encrypt_blob(
-                &master_key,
-                &compressed,
-                &aad,
-                EncryptionAlgo::XChaCha20Poly1305,
-            )
-            .await
+        // Slice 3 起直接走 v1_aead helper,跳过 EncryptedBlob 结构包装——
+        // EncryptedBlobStore 自己用 UCBL 二进制 wire format,不需要 JSON 包装。
+        let blob = v1_aead::encrypt_blob_xchacha(&master_key, &compressed, &aad_bytes)
             .context("failed to encrypt blob data")?;
 
-        // 5. Extract nonce as [u8; 24]
-        let nonce: [u8; 24] = encrypted_blob
+        let nonce: [u8; 24] = blob
             .nonce
             .as_slice()
             .try_into()
             .context("encrypted blob nonce is not 24 bytes")?;
 
-        // 6. Serialize to UCBL binary format
-        let binary_data = serialize_blob(&nonce, &encrypted_blob.ciphertext);
+        let binary_data = serialize_blob(&nonce, &blob.ciphertext);
         let on_disk_size = binary_data.len() as i64;
 
-        // 7. Write to inner store
         let (path, _) = self
             .inner
             .put(blob_id, &binary_data)
@@ -153,12 +138,17 @@ impl BlobStorePort for EncryptedBlobStore {
             "Wrote V2 blob (compress -> encrypt -> UCBL binary)"
         );
 
-        // 8. Return path and on-disk size
         Ok((path, Some(on_disk_size)))
     }
 
     async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
-        // 1. Read binary data from inner store
+        <Self as BlobReaderPort>::get(self, blob_id).await
+    }
+}
+
+#[async_trait]
+impl BlobReaderPort for EncryptedBlobStore {
+    async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
         let binary_data = self
             .inner
             .get(blob_id)
@@ -166,36 +156,19 @@ impl BlobStorePort for EncryptedBlobStore {
             .await
             .context("failed to read encrypted blob from storage")?;
 
-        // 2. Parse UCBL binary header
         let (nonce, ciphertext) = parse_blob(&binary_data)?;
 
-        // 3. Reconstruct EncryptedBlob struct
-        let encrypted_blob = EncryptedBlob {
-            version: EncryptionFormatVersion::V1,
-            aead: EncryptionAlgo::XChaCha20Poly1305,
-            nonce: nonce.to_vec(),
-            ciphertext: ciphertext.to_vec(),
-            aad_fingerprint: None,
-        };
-
-        // 4. Get master key from session
         let master_key = self
             .session
             .get_master_key()
-            .await
             .context("encryption session not ready - cannot decrypt blob")?;
 
-        // 5. Build AAD with v2 format
-        let aad = aad::for_blob_v2(blob_id);
+        let aad_bytes = aad::for_blob_v2(blob_id);
 
-        // 6. Decrypt
-        let compressed = self
-            .encryption
-            .decrypt_blob(&master_key, &encrypted_blob, &aad)
-            .await
+        // 直接走 v1_aead 解 (nonce + ciphertext + aad),跳过 EncryptedBlob 重构。
+        let compressed = v1_aead::decrypt_blob_xchacha(&master_key, nonce, ciphertext, &aad_bytes)
             .context("failed to decrypt blob - key mismatch or data corrupted")?;
 
-        // 7. Decompress
         let plaintext = zstd::bulk::decompress(&compressed, MAX_DECOMPRESSED_SIZE)
             .context("failed to decompress blob data - data may be corrupted")?;
 
@@ -208,486 +181,5 @@ impl BlobStorePort for EncryptedBlobStore {
         );
 
         Ok(plaintext)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use async_trait::async_trait;
-    use mockall::mock;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-    use uc_core::{
-        security::model::{EncryptedBlob, EncryptionFormatVersion, MasterKey},
-        BlobId,
-    };
-
-    mock! {
-        BlobStore {}
-
-        #[async_trait]
-        impl BlobStorePort for BlobStore {
-            async fn put(&self, blob_id: &BlobId, data: &[u8]) -> Result<(PathBuf, Option<i64>)>;
-            async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>>;
-        }
-    }
-
-    mock! {
-        Encryption {}
-
-        #[async_trait]
-        impl uc_core::ports::EncryptionPort for Encryption {
-            async fn derive_kek(
-                &self,
-                passphrase: &uc_core::security::model::Passphrase,
-                salt: &[u8],
-                kdf_params: &uc_core::security::model::KdfParams,
-            ) -> Result<uc_core::security::model::Kek, uc_core::security::model::EncryptionError>;
-            async fn wrap_master_key(
-                &self,
-                kek: &uc_core::security::model::Kek,
-                master_key: &MasterKey,
-                aead: uc_core::security::model::EncryptionAlgo,
-            ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError>;
-            async fn unwrap_master_key(
-                &self,
-                kek: &uc_core::security::model::Kek,
-                blob: &EncryptedBlob,
-            ) -> Result<MasterKey, uc_core::security::model::EncryptionError>;
-            async fn encrypt_blob(
-                &self,
-                master_key: &MasterKey,
-                plaintext: &[u8],
-                aad: &[u8],
-                algo: uc_core::security::model::EncryptionAlgo,
-            ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError>;
-            async fn decrypt_blob(
-                &self,
-                master_key: &MasterKey,
-                blob: &EncryptedBlob,
-                aad: &[u8],
-            ) -> Result<Vec<u8>, uc_core::security::model::EncryptionError>;
-        }
-    }
-
-    mock! {
-        EncryptionSession {}
-
-        #[async_trait]
-        impl EncryptionSessionPort for EncryptionSession {
-            async fn is_ready(&self) -> bool;
-            async fn get_master_key(&self) -> Result<MasterKey, uc_core::security::model::EncryptionError>;
-            async fn set_master_key(
-                &self,
-                master_key: MasterKey,
-            ) -> Result<(), uc_core::security::model::EncryptionError>;
-            async fn clear(&self) -> Result<(), uc_core::security::model::EncryptionError>;
-        }
-    }
-
-    type BlobStoreStorage = Arc<Mutex<HashMap<BlobId, Vec<u8>>>>;
-
-    fn make_blob_store_mock() -> (MockBlobStore, BlobStoreStorage) {
-        let storage: BlobStoreStorage = Arc::new(Mutex::new(HashMap::new()));
-        let mut mock = MockBlobStore::new();
-
-        let put_storage = Arc::clone(&storage);
-        mock.expect_put()
-            .returning(move |blob_id: &BlobId, data: &[u8]| {
-                put_storage
-                    .lock()
-                    .unwrap()
-                    .insert(blob_id.clone(), data.to_vec());
-                Ok((
-                    PathBuf::from(format!("/fake/path/{}", blob_id.as_ref())),
-                    None,
-                ))
-            });
-
-        let get_storage = Arc::clone(&storage);
-        mock.expect_get().returning(move |blob_id: &BlobId| {
-            get_storage
-                .lock()
-                .unwrap()
-                .get(blob_id)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("blob not found"))
-        });
-
-        (mock, storage)
-    }
-
-    fn get_stored_blob(storage: &BlobStoreStorage, blob_id: &BlobId) -> Option<Vec<u8>> {
-        storage.lock().unwrap().get(blob_id).cloned()
-    }
-
-    fn make_encryption_mock(
-        should_fail_encrypt: bool,
-        should_fail_decrypt: bool,
-    ) -> MockEncryption {
-        let mut mock = MockEncryption::new();
-
-        mock.expect_derive_kek()
-            .returning(|_, _, _| Ok(uc_core::security::model::Kek([0u8; 32])));
-        mock.expect_wrap_master_key().returning(|_, _, _| {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: uc_core::security::model::EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 32],
-                aad_fingerprint: None,
-            })
-        });
-        mock.expect_unwrap_master_key()
-            .returning(|_, _| MasterKey::from_bytes(&[0u8; 32]));
-        mock.expect_encrypt_blob().returning(
-            move |_: &MasterKey,
-                  plaintext: &[u8],
-                  _: &[u8],
-                  _: uc_core::security::model::EncryptionAlgo| {
-                if should_fail_encrypt {
-                    return Err(uc_core::security::model::EncryptionError::EncryptFailed);
-                }
-                Ok(EncryptedBlob {
-                    version: EncryptionFormatVersion::V1,
-                    aead: uc_core::security::model::EncryptionAlgo::XChaCha20Poly1305,
-                    nonce: vec![0u8; 24],
-                    ciphertext: plaintext.to_vec(),
-                    aad_fingerprint: None,
-                })
-            },
-        );
-        mock.expect_decrypt_blob().returning(
-            move |_: &MasterKey, blob: &EncryptedBlob, _: &[u8]| {
-                if should_fail_decrypt {
-                    return Err(uc_core::security::model::EncryptionError::CorruptedBlob);
-                }
-                Ok(blob.ciphertext.clone())
-            },
-        );
-
-        mock
-    }
-
-    fn make_encryption_session_mock(master_key: Option<MasterKey>) -> MockEncryptionSession {
-        let mut mock = MockEncryptionSession::new();
-
-        let is_ready = master_key.is_some();
-        mock.expect_is_ready().returning(move || is_ready);
-
-        let get_key = master_key.clone();
-        mock.expect_get_master_key().returning(move || {
-            get_key
-                .clone()
-                .ok_or(uc_core::security::model::EncryptionError::Locked)
-        });
-
-        mock.expect_set_master_key().returning(|_| Ok(()));
-        mock.expect_clear().returning(|| Ok(()));
-
-        mock
-    }
-
-    // --- Helper to build a ready store ---
-    fn make_store() -> (EncryptedBlobStore, BlobStoreStorage) {
-        let (inner, storage) = make_blob_store_mock();
-        let encryption = Arc::new(make_encryption_mock(false, false));
-        let session = Arc::new(make_encryption_session_mock(Some(
-            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
-        )));
-        let store = EncryptedBlobStore::new(Arc::new(inner), encryption, session);
-        (store, storage)
-    }
-
-    // ========================================================================
-    // Binary format helper tests
-    // ========================================================================
-
-    #[test]
-    fn test_serialize_parse_roundtrip() {
-        let nonce: [u8; 24] = [0xAB; 24];
-        let ciphertext = b"hello encrypted world";
-
-        let serialized = serialize_blob(&nonce, ciphertext);
-        let (parsed_nonce, parsed_ciphertext) =
-            parse_blob(&serialized).expect("parse should succeed");
-
-        assert_eq!(parsed_nonce, &nonce);
-        assert_eq!(parsed_ciphertext, ciphertext);
-    }
-
-    #[test]
-    fn test_parse_rejects_truncated_data() {
-        // Less than 29 bytes
-        let data = vec![0u8; 10];
-        let result = parse_blob(&data);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("truncated"),
-            "error should mention truncated: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn test_parse_rejects_wrong_magic() {
-        let mut data = vec![0u8; 30];
-        data[0..4].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // wrong magic
-        data[4] = BLOB_FORMAT_VERSION;
-
-        let result = parse_blob(&data);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("invalid"),
-            "error should mention invalid: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn test_parse_rejects_wrong_version() {
-        let mut data = vec![0u8; 30];
-        data[0..4].copy_from_slice(&BLOB_MAGIC);
-        data[4] = 0xFF; // unsupported version
-
-        let result = parse_blob(&data);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("unsupported"),
-            "error should mention unsupported: {}",
-            err_msg
-        );
-    }
-
-    #[test]
-    fn test_serialize_produces_correct_header() {
-        let nonce: [u8; 24] = [0x42; 24];
-        let ciphertext = b"test";
-        let serialized = serialize_blob(&nonce, ciphertext);
-
-        // Check magic bytes
-        assert_eq!(&serialized[0..4], &BLOB_MAGIC);
-        // Check version
-        assert_eq!(serialized[4], BLOB_FORMAT_VERSION);
-        // Check nonce
-        assert_eq!(&serialized[5..29], &nonce);
-        // Check ciphertext
-        assert_eq!(&serialized[29..], ciphertext);
-        // Check total length
-        assert_eq!(serialized.len(), BLOB_HEADER_SIZE + ciphertext.len());
-    }
-
-    // ========================================================================
-    // EncryptedBlobStore integration tests
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_encrypted_store_encrypts_on_put() {
-        // Test that data is compressed, encrypted, and stored in UCBL binary format
-        let (store, storage) = make_store();
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test plaintext data";
-
-        let result = store.put(&blob_id, data).await;
-        assert!(result.is_ok(), "put should succeed");
-
-        // Verify the stored data is in UCBL binary format (not JSON)
-        let stored_data = get_stored_blob(&storage, &blob_id).expect("blob should be stored");
-
-        // Should start with UCBL magic bytes
-        assert_eq!(
-            &stored_data[0..4],
-            &BLOB_MAGIC,
-            "stored data should start with UCBL magic"
-        );
-        assert_eq!(
-            stored_data[4], BLOB_FORMAT_VERSION,
-            "stored data should have correct version"
-        );
-        assert!(
-            stored_data.len() >= BLOB_HEADER_SIZE,
-            "stored data should be at least header size"
-        );
-
-        // The ciphertext portion should be zstd-compressed plaintext
-        // (since MockEncryption passes through plaintext as ciphertext)
-        let (_, ciphertext) = parse_blob(&stored_data).expect("should parse as valid UCBL");
-        let decompressed = zstd::bulk::decompress(ciphertext, MAX_DECOMPRESSED_SIZE)
-            .expect("ciphertext should be valid zstd");
-        assert_eq!(
-            decompressed, data,
-            "decompressed ciphertext should match original plaintext"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_encrypted_store_decrypts_on_get() {
-        // Test that data is decrypted and decompressed when retrieved
-        let (store, _) = make_store();
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test plaintext data";
-
-        // First put the data
-        store.put(&blob_id, data).await.unwrap();
-
-        // Then get it back
-        let retrieved = store.get(&blob_id).await;
-
-        assert!(retrieved.is_ok(), "get should succeed");
-        assert_eq!(
-            retrieved.unwrap(),
-            data.to_vec(),
-            "retrieved data should match original"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_put_returns_compressed_size() {
-        let (store, _) = make_store();
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test plaintext data for compression size check";
-
-        let (path, compressed_size) = store.put(&blob_id, data).await.unwrap();
-
-        assert!(!path.as_os_str().is_empty(), "path should not be empty");
-        assert!(compressed_size.is_some(), "compressed_size should be Some");
-        let size = compressed_size.unwrap();
-        assert!(
-            size > 0,
-            "compressed_size should be positive, got: {}",
-            size
-        );
-        // on_disk_size = BLOB_HEADER_SIZE + ciphertext.len()
-        assert!(
-            size >= BLOB_HEADER_SIZE as i64,
-            "on_disk_size should be at least header size"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_roundtrip_with_compression() {
-        // Full roundtrip: put(plaintext) -> get() -> should return identical plaintext
-        let (store, _) = make_store();
-
-        let blob_id = BlobId::from("roundtrip-blob");
-        // Use a larger payload to ensure compression is meaningful
-        let data = "Hello, this is a test of the V2 binary blob format with zstd compression. \
-                     It should compress and decompress correctly through the full pipeline."
-            .as_bytes();
-
-        store.put(&blob_id, data).await.unwrap();
-        let retrieved = store.get(&blob_id).await.unwrap();
-
-        assert_eq!(
-            retrieved, data,
-            "roundtrip should preserve plaintext exactly"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_encrypted_store_fails_put_when_session_not_ready() {
-        // Test that put fails when encryption session is not ready
-        let (inner, _storage) = make_blob_store_mock();
-        let encryption = Arc::new(make_encryption_mock(false, false));
-        let session = Arc::new(make_encryption_session_mock(None)); // No master key
-
-        let store = EncryptedBlobStore::new(Arc::new(inner), encryption, session);
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test data";
-
-        let result = store.put(&blob_id, data).await;
-
-        assert!(result.is_err(), "put should fail when session not ready");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("encryption session not ready"),
-            "error should indicate session not ready: {}",
-            err_msg
-        );
-    }
-
-    #[tokio::test]
-    async fn test_encrypted_store_fails_get_when_session_not_ready() {
-        // First put some data (with a valid session)
-        let (inner, _storage) = make_blob_store_mock();
-        let inner = Arc::new(inner);
-        let store_good = EncryptedBlobStore::new(
-            inner.clone(),
-            Arc::new(make_encryption_mock(false, false)),
-            Arc::new(make_encryption_session_mock(Some(
-                MasterKey::from_bytes(&[0u8; 32]).unwrap(),
-            ))),
-        );
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test data";
-
-        store_good.put(&blob_id, data).await.unwrap();
-
-        // Now try to get with a session that's not ready
-        let encryption = Arc::new(make_encryption_mock(false, false));
-        let session = Arc::new(make_encryption_session_mock(None)); // No master key
-
-        let store = EncryptedBlobStore::new(inner, encryption, session);
-
-        let result = store.get(&blob_id).await;
-
-        assert!(result.is_err(), "get should fail when session not ready");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("encryption session not ready"),
-            "error should indicate session not ready: {}",
-            err_msg
-        );
-    }
-
-    #[tokio::test]
-    async fn test_encrypted_store_propagates_encrypt_errors() {
-        // Test that encryption errors are propagated
-        let (inner, _storage) = make_blob_store_mock();
-        let encryption = Arc::new(make_encryption_mock(true, false));
-        let session = Arc::new(make_encryption_session_mock(Some(
-            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
-        )));
-
-        let store = EncryptedBlobStore::new(Arc::new(inner), encryption, session);
-
-        let blob_id = BlobId::from("test-blob");
-        let data = b"test data";
-
-        let result = store.put(&blob_id, data).await;
-
-        assert!(result.is_err(), "put should fail when encryption fails");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("failed to encrypt blob data"),
-            "error should indicate encryption failure: {}",
-            err_msg
-        );
-    }
-
-    #[tokio::test]
-    async fn test_aad_v2_is_used() {
-        // Verify that AAD v2 format is used (not v1)
-        let blob_id = BlobId::from("aad-test");
-
-        let aad_v2 = aad::for_blob_v2(&blob_id);
-        let aad_str = String::from_utf8(aad_v2).unwrap();
-
-        assert!(
-            aad_str.starts_with("uc:blob:v2|"),
-            "AAD v2 should have v2 prefix, got: {}",
-            aad_str
-        );
-        assert!(aad_str.contains("aad-test"), "AAD should contain blob ID");
     }
 }

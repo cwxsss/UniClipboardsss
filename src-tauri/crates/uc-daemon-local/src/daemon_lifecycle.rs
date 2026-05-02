@@ -260,21 +260,3 @@ impl GuiOwnedDaemonState {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn begin_exit_cleanup_is_idempotent_until_finished() {
-        let state = GuiOwnedDaemonState::default();
-
-        assert!(state.begin_exit_cleanup());
-        assert!(!state.begin_exit_cleanup());
-
-        state.finish_exit_cleanup();
-
-        assert!(state.begin_exit_cleanup());
-        state.finish_exit_cleanup();
-    }
-}

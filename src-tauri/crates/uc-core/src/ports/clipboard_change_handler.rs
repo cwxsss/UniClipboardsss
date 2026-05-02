@@ -20,14 +20,3 @@ pub trait ClipboardChangeHandler: Send + Sync {
     /// - `snapshot`: The current clipboard state captured by platform layer
     async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> Result<()>;
 }
-
-#[cfg(test)]
-mod tests {
-    /// Test that ClipboardChangeHandler is object-safe
-    #[test]
-    fn test_clipboard_change_handler_is_object_safe() {
-        // The trait is object-safe if it can be used as a trait object
-        // This test documents that ClipboardChangeHandler can be used as &dyn ClipboardChangeHandler
-        assert!(true, "ClipboardChangeHandler is object-safe");
-    }
-}

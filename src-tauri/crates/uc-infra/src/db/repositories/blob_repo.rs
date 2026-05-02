@@ -1,3 +1,4 @@
+use crate::blob::{Blob, BlobRepositoryPort};
 use crate::db::models::blob::NewBlobRow;
 use crate::db::models::BlobRow;
 use crate::db::ports::DbExecutor;
@@ -6,8 +7,6 @@ use crate::db::schema::blob;
 use anyhow::Result;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 use tracing::debug_span;
-use uc_core::ports::BlobRepositoryPort;
-use uc_core::Blob;
 use uc_core::ContentHash;
 
 pub struct DieselBlobRepository<E, IM, RM>

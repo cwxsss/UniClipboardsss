@@ -10,27 +10,27 @@ vi.mock('@/store/hooks', () => ({
 
 vi.mock('@/store/slices/devicesSlice', () => ({
   fetchLocalDeviceInfo: vi.fn(() => ({ type: 'devices/fetchLocalDeviceInfo' })),
-  fetchPairedDevices: vi.fn(() => ({ type: 'devices/fetchPairedDevices' })),
+  fetchSpaceMembers: vi.fn(() => ({ type: 'devices/fetchSpaceMembers' })),
 }))
 
 vi.mock('@/components', () => ({
-  PairedDevicesPanel: () => <div data-testid="paired-devices-panel">PairedDevicesPanel</div>,
+  SpaceMembersPanel: () => <div data-testid="space-members-panel">SpaceMembersPanel</div>,
   ThisDeviceCard: () => <div data-testid="this-device-card">ThisDeviceCard</div>,
 }))
 
 describe('DevicesPage', () => {
-  it('renders ThisDeviceCard and PairedDevicesPanel', () => {
+  it('renders ThisDeviceCard and SpaceMembersPanel', () => {
     render(<DevicesPage />)
 
     expect(screen.getByTestId('this-device-card')).toBeInTheDocument()
-    expect(screen.getByTestId('paired-devices-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('space-members-panel')).toBeInTheDocument()
   })
 
-  it('dispatches fetchLocalDeviceInfo and fetchPairedDevices on mount', () => {
+  it('dispatches fetchLocalDeviceInfo and fetchSpaceMembers on mount', () => {
     render(<DevicesPage />)
 
     expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/fetchLocalDeviceInfo' })
-    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/fetchPairedDevices' })
+    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/fetchSpaceMembers' })
   })
 
   it('does not render legacy sections', () => {

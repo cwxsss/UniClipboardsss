@@ -5,8 +5,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use reqwest::Client;
-use uc_daemon::api::types::HealthResponse;
-use uc_daemon::socket::try_resolve_daemon_http_addr;
+use uc_daemon_contract::api::types::HealthResponse;
+use uc_daemon_local::socket::try_resolve_daemon_http_addr;
 
 const HEALTH_PATH: &str = "/health";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -124,74 +124,6 @@ pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDa
     }
 }
 
-/// Capture variant used by the `#[autostop]` proc-macro.
-///
-/// Behaves like [`ensure_local_daemon_running`] but, on success, arms an
-/// [`AutostopGuard`](crate::autostop::AutostopGuard) and stores it into the
-/// caller-provided `slot`. The guard is dropped when the caller's function
-/// returns, sending SIGTERM to the daemon iff this invocation spawned it.
-///
-/// Intended to be called only via `#[autostop]` rewrite. Direct use works too
-/// but is awkward — prefer the macro for ergonomics.
-pub async fn ensure_local_daemon_running_capture(
-    slot: &mut Option<crate::autostop::AutostopGuard>,
-) -> Result<LocalDaemonSession, LocalDaemonError> {
-    let session = ensure_local_daemon_running().await?;
-    *slot = Some(crate::autostop::AutostopGuard::arm(&session));
-    Ok(session)
-}
-
-/// One-shot variant of [`ensure_local_daemon_running`] that pairs the session
-/// with an [`AutostopGuard`](crate::autostop::AutostopGuard).
-///
-/// The guard is armed iff the daemon was spawned by this call. Callers must bind
-/// the returned tuple to two local variables so the guard lives for the whole
-/// command body:
-///
-/// ```ignore
-/// let (session, _autostop) = ensure_local_daemon_running_for_oneshot().await?;
-/// ```
-///
-/// The `#[autostop]` attribute macro in `uc-cli-macros` rewrites plain
-/// `ensure_local_daemon_running` calls into this form automatically.
-#[allow(dead_code)]
-#[cfg(test)]
-pub async fn ensure_local_daemon_running_for_oneshot(
-) -> Result<(LocalDaemonSession, crate::autostop::AutostopGuard), LocalDaemonError> {
-    let session = ensure_local_daemon_running().await?;
-    let guard = crate::autostop::AutostopGuard::arm(&session);
-    Ok((session, guard))
-}
-
-#[cfg(test)]
-async fn ensure_local_daemon_running_with<Probe, ProbeFuture, Spawn>(
-    mut probe: Probe,
-    spawn: Spawn,
-    base_url: String,
-    startup_timeout: Duration,
-    poll_interval: Duration,
-) -> Result<LocalDaemonSession, LocalDaemonError>
-where
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<bool, LocalDaemonError>>,
-    Spawn: FnOnce() -> Result<(), LocalDaemonError>,
-{
-    if probe().await? {
-        return Ok(LocalDaemonSession {
-            base_url,
-            spawned: false,
-        });
-    }
-
-    spawn()?;
-    wait_for_daemon_health(&mut probe, startup_timeout, poll_interval, &base_url).await?;
-
-    Ok(LocalDaemonSession {
-        base_url,
-        spawned: true,
-    })
-}
-
 async fn wait_for_daemon_health<Probe, ProbeFuture>(
     probe: &mut Probe,
     startup_timeout: Duration,
@@ -278,110 +210,4 @@ pub(crate) fn resolve_cli_exe_path() -> Result<PathBuf, LocalDaemonError> {
             anyhow::Error::new(error).context("failed to resolve current CLI executable"),
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    #[tokio::test]
-    async fn ensure_local_daemon_running_returns_without_spawn_when_probe_is_healthy() {
-        let spawns = Arc::new(AtomicUsize::new(0));
-        let session = ensure_local_daemon_running_with(
-            || async { Ok(true) },
-            {
-                let spawns = Arc::clone(&spawns);
-                move || {
-                    spawns.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            "http://127.0.0.1:42716".to_string(),
-            Duration::from_millis(10),
-            Duration::from_millis(1),
-        )
-        .await
-        .expect("healthy daemon should not require spawn");
-
-        assert_eq!(session.base_url, "http://127.0.0.1:42716");
-        assert!(!session.spawned);
-        assert_eq!(spawns.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn ensure_local_daemon_running_spawns_and_polls_until_healthy() {
-        let spawns = Arc::new(AtomicUsize::new(0));
-        let probes = Arc::new(AtomicUsize::new(0));
-        let session = ensure_local_daemon_running_with(
-            {
-                let probes = Arc::clone(&probes);
-                move || {
-                    let probes = Arc::clone(&probes);
-                    async move {
-                        let attempt = probes.fetch_add(1, Ordering::SeqCst);
-                        Ok(attempt >= 2)
-                    }
-                }
-            },
-            {
-                let spawns = Arc::clone(&spawns);
-                move || {
-                    spawns.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            },
-            "http://127.0.0.1:42717".to_string(),
-            Duration::from_millis(50),
-            Duration::from_millis(1),
-        )
-        .await
-        .expect("spawned daemon should become healthy during polling");
-
-        assert!(session.spawned);
-        assert_eq!(spawns.load(Ordering::SeqCst), 1);
-        assert!(probes.load(Ordering::SeqCst) >= 3);
-    }
-
-    #[tokio::test]
-    async fn probe_daemon_health_accepts_healthy_response() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test listener should bind");
-        let addr = listener
-            .local_addr()
-            .expect("listener address should resolve");
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
-            let mut buffer = [0_u8; 1024];
-            let _ = stream
-                .read(&mut buffer)
-                .await
-                .expect("request should be readable");
-            let body = r#"{"status":"ok","packageVersion":"0.1.0","apiRevision":"v1"}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("response should be written");
-        });
-
-        let client = Client::builder()
-            .timeout(PROBE_TIMEOUT)
-            .build()
-            .expect("probe client should build");
-        let is_healthy = probe_daemon_health(&client, &format!("http://{addr}"))
-            .await
-            .expect("probe should succeed");
-
-        assert!(is_healthy);
-        server.await.expect("server should finish");
-    }
 }

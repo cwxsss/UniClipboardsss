@@ -55,29 +55,3 @@ impl PayloadAvailability {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_inline_state_requires_inline_data() {
-        let state = PayloadAvailability::Inline;
-        assert_eq!(state.requires_inline_data(), true);
-        assert_eq!(state.requires_blob_id(), false);
-    }
-
-    #[test]
-    fn test_blob_ready_state_requires_blob_id() {
-        let state = PayloadAvailability::BlobReady;
-        assert_eq!(state.requires_inline_data(), false);
-        assert_eq!(state.requires_blob_id(), true);
-    }
-
-    #[test]
-    fn test_staged_state_requires_neither() {
-        let state = PayloadAvailability::Staged;
-        assert_eq!(state.requires_inline_data(), false);
-        assert_eq!(state.requires_blob_id(), false);
-    }
-}

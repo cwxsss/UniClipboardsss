@@ -21,9 +21,7 @@ const TransferProgressBar: React.FC<TransferProgressBarProps> = ({
   const percent =
     progress.totalBytes && progress.totalBytes > 0
       ? Math.round((progress.bytesTransferred / progress.totalBytes) * 100)
-      : progress.totalChunks > 0
-        ? Math.round((progress.chunksCompleted / progress.totalChunks) * 100)
-        : 0
+      : 0
   const speedLabel = progress.bytesPerSecond ? formatFileSize(progress.bytesPerSecond) + '/s' : null
   const remainingLabel =
     progress.estimatedRemainingSeconds !== null
@@ -109,14 +107,6 @@ const TransferProgressBar: React.FC<TransferProgressBarProps> = ({
                       transferred: formatFileSize(progress.bytesTransferred),
                       total: progress.totalBytes ? formatFileSize(progress.totalBytes) : '?',
                       percent,
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span>
-                    {t('clipboard.transfer.chunks', {
-                      completed: progress.chunksCompleted,
-                      total: progress.totalChunks,
                     })}
                   </span>
                 </div>

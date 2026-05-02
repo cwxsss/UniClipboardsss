@@ -1,33 +1,49 @@
 [package]
 name = "uc-cli"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Command-line interface for UniClipboard"
 
 [[bin]]
-name = "uniclipboard-cli"
+name = "uniclip"
 path = "src/main.rs"
 
 [dependencies]
 uc-bootstrap = { path = "../uc-bootstrap" }
 uc-observability = { path = "../uc-observability" }
-uc-app = { path = "../uc-app" }
 uc-core = { path = "../uc-core" }
-uc-daemon = { path = "../uc-daemon" }
-uc-daemon-client = { path = "../uc-daemon-client" }
-uc-cli-macros = { path = "../uc-cli-macros" }
+uc-desktop = { path = "../uc-desktop" }
+uc-daemon-contract = { path = "../uc-daemon-contract" }
+uc-daemon-local = { path = "../uc-daemon-local" }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1.0"
+base64 = "0.22"
+bytes = "1.7"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-dialoguer = "0.11"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 console = "0.15"
 indicatif = "0.17"
 libc = "0.2"
+hostname = "0.4"
+uc-application = { path = "../uc-application" }
+# Slice 2 Phase 3 · T9 — `send` constructs a single-text-representation
+# `SystemClipboardSnapshot` and dispatches via `dispatch_snapshot`. V3
+# envelope encoding + snapshot_hash derivation happen inside
+# `ClipboardSyncFacade`, so `bytes` + `sha2` are no longer needed by CLI
+# directly. `watch` reads `InboundNotice.plaintext: Bytes` which is
+# re-exported from `uc-core`'s dependency chain.
+# Installs the default `rustls` crypto provider process-wide at `main()`
+# start — iroh-quinn and reqwest both consume rustls 0.23+, which now
+# requires an explicit `CryptoProvider` before the first TLS handshake.
+# Without this the first party to set up a `ClientConfig` (today iroh)
+# leaves later consumers (reqwest → rendezvous) with a provider that
+# surfaces certs as `CertificateError::BadEncoding`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [dev-dependencies]
 axum = { version = "0.7", features = ["ws", "tokio", "http1", "http2"] }

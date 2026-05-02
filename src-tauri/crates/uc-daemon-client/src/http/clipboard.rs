@@ -44,7 +44,7 @@ impl DaemonClipboardClient {
             .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
         let path = format!(
             "{}/{entry_id}",
-            uc_core::network::daemon_api_strings::http_route::CLIPBOARD_RESTORE
+            uc_daemon_contract::constants::http_route::CLIPBOARD_RESTORE
         );
         let request = authorized_daemon_request_with_type(
             &*self.http,

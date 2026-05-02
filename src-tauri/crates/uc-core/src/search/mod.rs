@@ -8,11 +8,13 @@
 pub mod document;
 pub mod error;
 pub mod key;
+pub mod pipeline_input;
 pub mod query;
 pub mod result;
 
 pub use document::{ContentType, SearchDocument, SearchIndexMeta, SearchPosting};
 pub use error::SearchError;
 pub use key::SearchKey;
+pub use pipeline_input::SearchPipelineInput;
 pub use query::{QueryOperator, SearchQuery, TimeRangeFilter};
 pub use result::{RebuildProgress, RebuildStage, SearchResult, SearchResultsPage};

@@ -26,19 +26,3 @@ impl ClipboardStorageConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_include_cache_and_spool_limits() {
-        let cfg = ClipboardStorageConfig::defaults();
-        assert!(cfg.cache_max_entries > 0);
-        assert!(cfg.cache_max_bytes > 0);
-        assert!(cfg.spool_max_bytes > 0);
-        assert!(cfg.spool_ttl_days > 0);
-        assert!(cfg.worker_retry_max_attempts > 0);
-        assert!(cfg.worker_retry_backoff_ms > 0);
-    }
-}

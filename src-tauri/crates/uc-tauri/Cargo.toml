@@ -1,13 +1,14 @@
 [package]
 name = "uc-tauri"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Tauri adapter layer for UniClipboard"
 
 [dependencies]
 # Workspace crates
 uc-core = { path = "../uc-core" }
-uc-app = { path = "../uc-app" }
+uc-application = { path = "../uc-application" }
 uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
@@ -26,6 +27,7 @@ tauri-plugin-autostart = { workspace = true }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-shell = { workspace = true }
+tauri-plugin-opener = "2"
 url = "2"
 
 # Async
@@ -34,7 +36,7 @@ tokio-util = "0.7"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

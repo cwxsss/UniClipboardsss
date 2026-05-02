@@ -1,22 +1,25 @@
+mod blob_reference_repo;
 mod blob_repo;
 mod clipboard_entry_repo;
 mod clipboard_event_repo;
 mod clipboard_selection_repo;
-mod device_repo;
 mod file_transfer_repo;
-mod paired_device_repo;
+mod migration_repo;
+mod peer_address_repo;
 mod representation_repo;
+mod space_member_repo;
 mod thumbnail_repo;
+mod trusted_peer_repo;
 
+pub use blob_reference_repo::*;
 pub use blob_repo::*;
 pub use clipboard_entry_repo::*;
 pub use clipboard_event_repo::*;
 pub use clipboard_selection_repo::*;
-pub use device_repo::*;
 pub use file_transfer_repo::*;
-pub use paired_device_repo::*;
+pub use migration_repo::*;
+pub use peer_address_repo::*;
 pub use representation_repo::*;
+pub use space_member_repo::*;
 pub use thumbnail_repo::*;
-
-#[cfg(test)]
-mod representation_repo_test;
+pub use trusted_peer_repo::*;

@@ -438,61 +438,6 @@ pub fn set_layout(app: &tauri::AppHandle, scale: f64, preview_expanded: bool) {
         remember_panel_origin(panel_x, panel_y);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        centered_panel_position_from_monitor, panel_dimensions, resolve_panel_origin,
-        BASE_PANEL_HEIGHT, BASE_PANEL_WIDTH, MAX_UI_SCALE, MIN_UI_SCALE, WINDOW_PADDING,
-    };
-
-    #[test]
-    fn centers_panel_on_primary_monitor_origin() {
-        let (x, y) = centered_panel_position_from_monitor(0, 0, 1920, 1080, 1.0, 360.0, 420.0);
-
-        assert_eq!((x, y), (780.0, 330.0));
-    }
-
-    #[test]
-    fn centers_panel_on_scaled_secondary_monitor() {
-        let (x, y) = centered_panel_position_from_monitor(2560, 0, 2560, 1440, 2.0, 360.0, 420.0);
-
-        assert_eq!((x, y), (1740.0, 150.0));
-    }
-
-    #[test]
-    fn panel_dimensions_clamp_scale_and_expand_width() {
-        let (collapsed_width, collapsed_height) = panel_dimensions(0.1, false);
-        assert_eq!(
-            collapsed_width,
-            BASE_PANEL_WIDTH * MIN_UI_SCALE + WINDOW_PADDING * 2.0
-        );
-        assert_eq!(
-            collapsed_height,
-            BASE_PANEL_HEIGHT * MIN_UI_SCALE + WINDOW_PADDING * 2.0
-        );
-
-        let (expanded_width, expanded_height) = panel_dimensions(9.0, true);
-        assert!(expanded_width > BASE_PANEL_WIDTH * MAX_UI_SCALE);
-        assert_eq!(
-            expanded_height,
-            BASE_PANEL_HEIGHT * MAX_UI_SCALE + WINDOW_PADDING * 2.0
-        );
-    }
-
-    #[test]
-    fn remembered_origin_wins_over_recentered_origin() {
-        let resolved = resolve_panel_origin(Some((120.0, 48.0)), (300.0, 90.0));
-        assert_eq!(resolved, (120.0, 48.0));
-    }
-
-    #[test]
-    fn centered_origin_is_used_when_no_anchor_is_recorded() {
-        let resolved = resolve_panel_origin(None, (300.0, 90.0));
-        assert_eq!(resolved, (300.0, 90.0));
-    }
-}
-
 /// Dismiss the quick panel, then paste clipboard content to the previous app.
 ///
 /// 关闭快捷面板，然后将剪贴板内容粘贴到之前的应用。

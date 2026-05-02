@@ -16,91 +16,60 @@
 //! If all three answers are **yes**, place it in `uc-core/ports`.
 //! Otherwise, place it in the relevant `domain` submodule.
 
-pub mod app_runtime;
-pub mod blob_repository;
-mod blob_store;
-mod blob_writer;
+pub mod app_version;
+pub mod blob;
 pub mod cache_fs;
 pub mod clipboard;
 mod clipboard_change_handler;
 mod clipboard_event;
-pub mod clipboard_transport;
 mod clock;
-pub mod connection_policy;
 pub mod device_identity;
-pub mod device_repository;
-mod discovery;
 pub mod errors;
-pub mod file_manager;
 pub mod file_transfer_repository;
-pub mod file_transport;
 mod hash;
-pub mod host_event_emitter;
-pub mod network_control;
-pub mod network_events;
-pub mod paired_device_repository;
-pub mod pairing_transport;
-pub mod peer_directory;
-pub mod realtime;
+pub mod local_identity;
+pub mod pairing;
+pub mod pairing_invitation;
+pub mod peer_address;
+pub mod presence;
 pub mod search;
 pub mod security;
 pub mod settings;
 pub mod setup;
-pub mod setup_event_port;
 pub mod space;
 mod timer;
-pub mod transfer_progress;
 
-pub use blob_repository::BlobRepositoryPort;
-pub use blob_store::BlobStorePort;
-pub use blob_writer::BlobWriterPort;
+pub use app_version::{AppVersionStateError, AppVersionStatePort};
 pub use cache_fs::{CacheFsPort, DirEntry as CacheFsDirEntry};
 pub use clipboard_event::*;
 pub use clock::*;
-pub use connection_policy::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
-pub use discovery::DiscoveryPort;
 pub use hash::*;
 pub use timer::TimerPort;
 
-pub use app_runtime::AppRuntimePort;
 pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
-pub use clipboard_transport::ClipboardTransportPort;
 pub use device_identity::DeviceIdentityPort;
-pub use device_repository::DeviceRepositoryPort;
-pub use errors::{AppDirsError, DeviceRepositoryError, PairedDeviceRepositoryError};
-pub use file_manager::{FileManagerError, FileManagerPort};
+pub use errors::AppDirsError;
 pub use file_transfer_repository::{
     compute_aggregate_status, EntryTransferSummary, ExpiredInflightTransfer,
     FileTransferRepositoryPort, NoopFileTransferRepositoryPort, PendingInboundTransfer,
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
-pub use file_transport::{FileTransportPort, NoopFileTransportPort};
-pub use host_event_emitter::{
-    ClipboardHostEvent, ClipboardOriginKind, EmitError, HostEvent, HostEventEmitterPort,
-    TransferHostEvent,
+pub use local_identity::{LocalIdentityError, LocalIdentityPort};
+pub use pairing::{
+    DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
+    SessionError,
 };
-pub use network_control::NetworkControlPort;
-pub use network_events::NetworkEventPort;
-pub use paired_device_repository::PairedDeviceRepositoryPort;
-pub use pairing_transport::PairingTransportPort;
-pub use peer_directory::PeerDirectoryPort;
-pub use realtime::{
-    PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
-    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
-    PeerNameUpdatedEvent, RealtimeEvent, RealtimePairedDeviceSummary, RealtimePeerSummary,
-    RealtimeTopic, RealtimeTopicPort,
+pub use pairing_invitation::{
+    ConsumeInvitationError, InvitationCode, InvitationError, IssuedInvitation,
+    PairingInvitationPort,
 };
+pub use peer_address::{PeerAddressError, PeerAddressRecord, PeerAddressRepositoryPort};
+pub use presence::{PresenceError, PresenceEvent, PresencePort, ReachabilityState};
 pub use search::search_index::SearchIndexPort;
 pub use search::search_key::SearchKeyDerivationPort;
-pub use security::encryption::EncryptionPort;
-pub use security::encryption_session::EncryptionSessionPort;
-pub use security::key_material::KeyMaterialPort;
 pub use security::secure_storage::{SecureStorageError, SecureStoragePort};
-pub use security::transfer_crypto::{
-    TransferCryptoError, TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
-};
+pub use security::transfer_cipher::{TransferCipherError, TransferCipherPort};
+pub use security::{BlobCipherError, BlobCipherPort};
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
-pub use setup_event_port::SetupEventPort;
-pub use transfer_progress::{TransferDirection, TransferProgress, TransferProgressPort};

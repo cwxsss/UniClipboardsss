@@ -43,40 +43,44 @@ export { getStorageStats, clearCache } from './storage'
 export type { StorageStats } from './storage'
 export {
   getSetupState,
-  startNewSpace,
-  startJoinSpace,
-  selectJoinPeer,
-  submitPassphrase,
-  verifyPassphrase,
-  confirmPeerTrust,
-  cancelSetup,
-} from './setup'
-export type { SetupError, SetupState } from './setup'
+  initializeSpace,
+  issuePairingInvitation,
+  redeemInvitation,
+  cancelInvitation,
+  resetSetup,
+  switchSpace,
+  queryMigrationProgress,
+  SetupV2Error,
+} from './setupV2'
+export type {
+  CurrentInvitation,
+  InitializeSpaceErrorKind,
+  InitializeSpaceRequest,
+  InitializeSpaceResponse,
+  IssueInvitationErrorKind,
+  IssueInvitationResponse,
+  MigrationPhase,
+  MigrationProgressResponse,
+  QueryMigrationProgressErrorKind,
+  RedeemInvitationErrorKind,
+  RedeemRequest,
+  RedeemResponse,
+  SetupStateResponse,
+  SwitchSpaceErrorKind,
+  SwitchSpaceRequest,
+  SwitchSpaceResponse,
+} from './setupV2'
 export {
-  getP2PPeers,
+  getLocalDeviceInfo,
   getPairedPeers,
   getPairedPeersWithStatus,
-  initiateP2PPairing,
-  acceptP2PPairing,
-  rejectP2PPairing,
-  verifyP2PPairingPin,
-  unpairP2PDevice,
-} from './pairing'
-export type {
-  P2PPeerInfo,
-  LocalDeviceInfo,
-  PairedPeer,
-  P2PPairingRequest,
-  P2PPairingResponse,
-  P2PPinVerifyRequest,
-  P2PPairingVerificationKind,
-  PairingErrorKind,
-  P2PPairingVerificationEvent,
-  P2PPeerConnectionEvent,
-  P2PPeerNameUpdatedEvent,
-  P2PPeerDiscoveryChangedEvent,
-} from './pairing'
-export type { SpaceAccessCompletedEvent } from './setup'
+  unpairDevice,
+} from './members'
+export type { LocalDeviceInfo, SpaceMember } from './members'
+export { refreshPresence } from './presence'
+export type { PresenceRefreshResult } from './presence'
+export { classifyPairingError } from './events'
+export type { PairingErrorKind } from './events'
 export { querySearch, getSearchStatus, triggerSearchRebuild } from './search'
 export type {
   SearchResultDto,
@@ -85,3 +89,5 @@ export type {
   SearchStatusData,
   SearchStatusResponse,
 } from './search'
+export { getUpgradeStatus, acknowledgeUpgrade } from './upgrade'
+export type { UpgradeStatus } from './upgrade'

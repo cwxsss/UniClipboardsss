@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { contentTypeEntries, getDeviceIcon } from './device-utils'
-import type { PairedPeer } from '@/api/daemon/pairing'
-import type { ContentTypes } from '@/api/daemon/device'
+import type { ContentTypes } from '@/api/daemon/member'
+import { DEFAULT_SEND_CONTENT_TYPES } from '@/api/daemon/member'
+import type { SpaceMember } from '@/api/daemon/members'
 import { SettingRow } from '@/components/setting/SettingRow'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,13 +20,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { formatPeerIdForDisplay } from '@/lib/utils'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import { fetchDeviceSyncSettings, updateDeviceSyncSettings } from '@/store/slices/devicesSlice'
+import {
+  fetchMemberSyncPreferences,
+  updateMemberSyncPreferences,
+} from '@/store/slices/devicesSlice'
 
 interface DeviceSettingsSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   deviceId: string
-  device: PairedPeer | undefined
+  device: SpaceMember | undefined
   globalAutoSyncOff: boolean
   globalFileSyncOff: boolean
   onUnpair: (peerId: string) => void
@@ -43,52 +47,54 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
 
-  const settings = useAppSelector(state => state.devices.deviceSyncSettings[deviceId])
+  const preferences = useAppSelector(state => state.devices.memberSyncPreferences[deviceId])
   const isLoading = useAppSelector(
-    state => state.devices.deviceSyncSettingsLoading[deviceId] ?? false
+    state => state.devices.memberSyncPreferencesLoading[deviceId] ?? false
   )
 
   useEffect(() => {
     if (open && deviceId) {
-      dispatch(fetchDeviceSyncSettings(deviceId))
+      dispatch(fetchMemberSyncPreferences(deviceId))
     }
   }, [dispatch, deviceId, open])
 
-  const handleAutoSyncToggle = useCallback(
+  const handleSendEnabledToggle = useCallback(
     (checked: boolean) => {
-      if (!settings) return
       dispatch(
-        updateDeviceSyncSettings({
-          peerId: deviceId,
-          settings: { ...settings, autoSync: checked },
+        updateMemberSyncPreferences({
+          deviceId,
+          patch: { sendEnabled: checked },
         })
       )
     },
-    [dispatch, deviceId, settings]
+    [dispatch, deviceId]
   )
 
-  const handleContentTypeToggle = useCallback(
+  const handleSendContentTypeToggle = useCallback(
     (field: keyof ContentTypes, checked: boolean) => {
-      if (!settings) return
       dispatch(
-        updateDeviceSyncSettings({
-          peerId: deviceId,
-          settings: {
-            ...settings,
-            contentTypes: {
-              ...settings.contentTypes,
-              [field]: checked,
-            },
-          },
+        updateMemberSyncPreferences({
+          deviceId,
+          patch: { sendContentTypes: { [field]: checked } },
         })
       )
     },
-    [dispatch, deviceId, settings]
+    [dispatch, deviceId]
   )
 
   const handleRestoreDefaults = useCallback(async () => {
-    await dispatch(updateDeviceSyncSettings({ peerId: deviceId, settings: null }))
-    dispatch(fetchDeviceSyncSettings(deviceId))
+    // Phase 4b PR-3：UX 只露 send 列,所以 restore 仅重置 send 字段。
+    // receive 字段保留服务端当前值（新 admit 的成员默认就是 true + 全开）。
+    await dispatch(
+      updateMemberSyncPreferences({
+        deviceId,
+        patch: {
+          sendEnabled: true,
+          sendContentTypes: DEFAULT_SEND_CONTENT_TYPES,
+        },
+      })
+    )
+    dispatch(fetchMemberSyncPreferences(deviceId))
   }, [dispatch, deviceId])
 
   const deviceName = device?.deviceName || t('devices.list.labels.unknownDevice')
@@ -117,7 +123,7 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
 
         <ScrollArea className="flex-1 min-h-0 -mx-4">
           <div className="px-4 py-1">
-            {isLoading && !settings ? (
+            {isLoading && !preferences ? (
               <div className="space-y-3">
                 {[1, 2, 3, 4].map(i => (
                   <div key={i} className="flex items-center justify-between py-3 px-1">
@@ -135,27 +141,27 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
                   {t('devices.settings.sync.title')}
                 </h3>
                 <div className="divide-y divide-border/40">
-                  {/* Auto Sync toggle */}
+                  {/* Send enabled toggle */}
                   <SettingRow
-                    label={t('devices.settings.sync.rules.autoSync.title')}
-                    description={t('devices.settings.sync.rules.autoSync.description')}
+                    label={t('devices.settings.sync.rules.sendEnabled.title')}
+                    description={t('devices.settings.sync.rules.sendEnabled.description')}
                   >
                     <Switch
                       size="sm"
-                      checked={settings?.autoSync ?? true}
-                      onCheckedChange={handleAutoSyncToggle}
+                      checked={preferences?.sendEnabled ?? true}
+                      onCheckedChange={handleSendEnabledToggle}
                       disabled={globalAutoSyncOff || isLoading}
                     />
                   </SettingRow>
 
-                  {/* Content type toggles */}
+                  {/* Send content type toggles */}
                   {contentTypeEntries.map(({ field, i18nKey, status }) => {
                     const isComingSoon = status === 'coming_soon'
-                    const isAutoSyncOff = !settings?.autoSync
+                    const isSendDisabled = !preferences?.sendEnabled
                     const isGlobalFileSyncDisabled = field === 'file' && globalFileSyncOff
                     const isDisabled =
                       isComingSoon ||
-                      isAutoSyncOff ||
+                      isSendDisabled ||
                       globalAutoSyncOff ||
                       isGlobalFileSyncDisabled ||
                       isLoading
@@ -185,8 +191,8 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
                       >
                         <Switch
                           size="sm"
-                          checked={settings?.contentTypes[field] ?? true}
-                          onCheckedChange={checked => handleContentTypeToggle(field, checked)}
+                          checked={preferences?.sendContentTypes[field] ?? true}
+                          onCheckedChange={checked => handleSendContentTypeToggle(field, checked)}
                           disabled={isDisabled}
                         />
                       </SettingRow>

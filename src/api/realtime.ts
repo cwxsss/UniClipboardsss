@@ -1,9 +1,7 @@
 /**
  * Realtime event bridge — frontend WebSocket direct connection.
  *
- * Uses `daemonWs.subscribe()` to listen for daemon WS events. The
- * `onDaemonRealtimeEvent()` API is preserved so all existing callers
- * (useDeviceDiscovery, setup, p2p) do not need changes.
+ * Uses `daemonWs.subscribe()` to listen for daemon WS events.
  *
  * Requires `daemonWs` to be connected first (call `connectDaemonWs()` at startup).
  */
@@ -13,7 +11,6 @@ import { daemonWs } from '@/lib/daemon-ws'
 /**
  * Event envelope forwarded to callers.
  *
- * Matches the shape callers (useDeviceDiscovery, setup, p2p) already expect:
  *   - `topic`  — string like "peers", "pairing", "setup", "clipboard"
  *   - `type`  — snake_case event type like "peers.changed", "pairing.complete"
  *   - `ts`    — Unix timestamp (milliseconds)
@@ -61,7 +58,7 @@ export async function onDaemonRealtimeEvent(
   }
 
   // Subscribe to all topics that the daemon emits realtime events for.
-  const topics = ['clipboard', 'peers', 'pairing', 'setup', 'space-access', 'paired-devices']
+  const topics = ['clipboard', 'peers', 'pairing', 'setup', 'paired-devices']
 
   return daemonWs.subscribe(topics, handler)
 }

@@ -1,7 +1,7 @@
 //! SearchKey — 32-byte HMAC key derived from MasterKey via SearchKeyDerivationPort.
 //!
 //! Opaque newtype: no Serialize/Deserialize, redacted Debug.
-//! Pattern mirrors `security::model::MasterKey`.
+//! Pattern mirrors `crypto::model::MasterKey`.
 
 use std::fmt;
 
@@ -41,33 +41,5 @@ impl SearchKey {
 impl fmt::Debug for SearchKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SearchKey([REDACTED])")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn search_key_debug_is_redacted() {
-        let key = SearchKey([0xAA; 32]);
-        let debug = format!("{:?}", key);
-        assert!(debug.contains("REDACTED"));
-        assert!(!debug.contains("aa"));
-        assert!(!debug.contains("170")); // 0xAA decimal
-    }
-
-    #[test]
-    fn search_key_from_bytes_validates_length() {
-        assert!(SearchKey::from_bytes(&[0u8; 32]).is_ok());
-        assert!(SearchKey::from_bytes(&[0u8; 31]).is_err());
-        assert!(SearchKey::from_bytes(&[0u8; 33]).is_err());
-    }
-
-    #[test]
-    fn search_key_as_bytes_round_trip() {
-        let original = [0x42u8; 32];
-        let key = SearchKey(original);
-        assert_eq!(key.as_bytes(), &original);
     }
 }

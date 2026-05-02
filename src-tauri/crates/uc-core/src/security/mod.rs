@@ -1,13 +1,9 @@
-pub mod aad;
-pub mod filename_validation;
-pub mod model;
-pub mod secret;
-pub mod space_access;
-pub mod state;
+//! Core security domain types shared across pairing / membership / trust.
+//!
+//! Only algorithm-agnostic value objects live here. Concrete cryptographic
+//! derivations (SHA-256, Base32 encoding of public keys, KDFs) belong in
+//! `uc-infra`.
 
-pub use aad::*;
-pub use filename_validation::{validate_filename, FilenameValidationError};
-pub use model::*;
-pub use secret::*;
-pub use space_access::*;
-pub use state::*;
+pub mod identity_fingerprint;
+
+pub use identity_fingerprint::{FingerprintError, IdentityFingerprint};

@@ -1,93 +1,75 @@
-//! Status command -- queries daemon runtime status over HTTP via `GET /status`.
+//! Status 命令:直连应用层显示应用状态。
+
+use serde::Serialize;
+use std::fmt;
 
 use crate::exit_codes;
-use uc_daemon::api::types::{StatusResponse, WorkerStatusDto};
+use crate::output;
 
-/// Format an uptime duration in human-readable form.
-///
-/// Examples: "45s", "2m 15s", "2h 15m", "1d 3h".
-fn format_uptime(seconds: u64) -> String {
-    if seconds < 60 {
-        return format!("{}s", seconds);
-    }
-    let days = seconds / 86400;
-    let hours = (seconds % 86400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-
-    let mut parts = Vec::new();
-    if days > 0 {
-        parts.push(format!("{}d", days));
-    }
-    if hours > 0 {
-        parts.push(format!("{}h", hours));
-    }
-    if minutes > 0 {
-        parts.push(format!("{}m", minutes));
-    }
-    if secs > 0 && days == 0 && hours == 0 {
-        parts.push(format!("{}s", secs));
-    }
-
-    parts.join(" ")
+#[derive(Serialize)]
+struct StatusOutput {
+    setup_completed: bool,
+    encryption_ready: bool,
+    search_state: String,
+    search_reason: Option<String>,
 }
 
-/// Run the status command.
-pub async fn run(json: bool, _verbose: bool) -> i32 {
-    let ctx = match uc_daemon_client::DaemonClientContext::from_env() {
-        Ok(ctx) => ctx,
-        Err(error) => {
-            eprintln!("Error: failed to connect to daemon: {error}");
-            return exit_codes::EXIT_DAEMON_UNREACHABLE;
-        }
+impl fmt::Display for StatusOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let setup = if self.setup_completed { "yes" } else { "no" };
+        let encryption = if self.encryption_ready { "yes" } else { "no" };
+        let reason = self.search_reason.as_deref().unwrap_or("none");
+
+        writeln!(f, "Setup completed: {setup}")?;
+        writeln!(f, "Encryption ready: {encryption}")?;
+        writeln!(f, "Search state: {}", self.search_state)?;
+        write!(f, "Search reason: {reason}")?;
+        Ok(())
+    }
+}
+
+pub async fn run(json: bool, verbose: bool) -> i32 {
+    let profile = if verbose {
+        Some(uc_observability::LogProfile::Dev)
+    } else {
+        Some(uc_observability::LogProfile::Cli)
     };
 
-    let status = match ctx.query_client().get_status().await {
-        Ok(status) => status,
-        Err(error) => {
-            eprintln!("Error: failed to get daemon status: {error}");
+    let app_facade = match uc_bootstrap::build_cli_app_facade(profile) {
+        Ok(facade) => facade,
+        Err(err) => {
+            eprintln!("Error: failed to build CLI runtime: {err}");
             return exit_codes::EXIT_ERROR;
         }
     };
 
-    let output = if json {
-        match serde_json::to_string_pretty(&status) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Error: failed to serialize status: {error}");
-                return exit_codes::EXIT_ERROR;
-            }
+    let encryption = match app_facade.encryption_state().await {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("Error: failed to query application status: {err}");
+            return exit_codes::EXIT_ERROR;
         }
-    } else {
-        render_status_output(&status)
     };
 
-    println!("{output}");
+    let search = match app_facade.search_status().await {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("Error: failed to query search status: {err}");
+            return exit_codes::EXIT_ERROR;
+        }
+    };
+
+    let result = StatusOutput {
+        setup_completed: encryption.initialized,
+        encryption_ready: encryption.session_ready,
+        search_state: search.state,
+        search_reason: search.reason,
+    };
+
+    if let Err(err) = output::print_result(&result, json) {
+        eprintln!("Error: {err}");
+        return exit_codes::EXIT_ERROR;
+    }
+
     exit_codes::EXIT_SUCCESS
-}
-
-fn render_status_output(status: &StatusResponse) -> String {
-    let healthy_count = status
-        .workers
-        .iter()
-        .filter(|worker| worker.health == "healthy")
-        .count();
-    let total_count = status.workers.len();
-
-    let mut lines = vec![
-        "Status: running".to_string(),
-        format!("Uptime: {}", format_uptime(status.uptime_seconds)),
-        format!("Version: {}", status.package_version),
-        format!("API revision: {}", status.api_revision),
-        format!("Workers: {healthy_count}/{total_count} healthy"),
-    ];
-
-    lines.extend(status.workers.iter().map(render_worker_line));
-    lines.push(format!("Connected peers: {}", status.connected_peers));
-
-    lines.join("\n")
-}
-
-fn render_worker_line(worker: &WorkerStatusDto) -> String {
-    format!("  {}: {}", worker.name, worker.health)
 }

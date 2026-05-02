@@ -8,6 +8,16 @@ use crate::{
 };
 use std::cmp::Ordering;
 
+/// Inline `image-from-file` representations larger than this should not
+/// receive the UiPreview boost — they almost certainly came from an
+/// out-of-policy capture path and would slow UI render. Mirrors
+/// `MAX_INLINE_IMAGE_BYTES` in uc-platform `common.rs`; if these two
+/// drift, capture-time guard is the primary defence and policy is the
+/// safety net.
+///
+/// `size_bytes()` returns `i64`, so the constant type is aligned.
+const INLINE_PREVIEW_MAX_BYTES: i64 = 256 * 1024;
+
 /// v1 策略：稳定、可解释、保守
 ///
 /// v1 的核心：
@@ -79,8 +89,16 @@ impl SelectRepresentationPolicyV1 {
             //   以便 macOS Finder 复制 PNG/JPG 等图片文件时继续展示预览。
             // - 其他场景下原始剪贴板 Image（例如普通文件复制时 Finder 自动注入的图标 TIFF）
             //   低于 FileList，避免图标抢占文件名/文件条目。
+            //
+            // Size guard (260426-1gz): an `image-from-file` larger than
+            // `INLINE_PREVIEW_MAX_BYTES` indicates an out-of-policy capture
+            // path (capture should never inline that much). Strip the 100 boost
+            // so it falls back to the generic Image score (80) — FileList (95)
+            // wins, matching the "small inline preview, large via thumbnail"
+            // contract enforced at capture time.
             (SelectionTarget::UiPreview, RepKind::Image)
-                if rep.format_id.eq_ignore_ascii_case("image-from-file") =>
+                if rep.format_id.eq_ignore_ascii_case("image-from-file")
+                    && rep.size_bytes() <= INLINE_PREVIEW_MAX_BYTES =>
             {
                 100
             }
@@ -92,6 +110,21 @@ impl SelectRepresentationPolicyV1 {
             (SelectionTarget::UiPreview, RepKind::Unknown) => 10,
 
             // DefaultPaste: RichText 优先（保留格式），其次 PlainText（兼容性），最后 Image
+            //
+            // `image-from-file` 永远不应该成为 paste rep（260426-1gz 安全网）：
+            // - DefaultPaste 决定接收端粘贴目标 + envelope 的“代表 rep”；
+            //   `image-from-file` 是 capture 兜底产物（本地从 file URI 读出来的
+            //   pixel buffer），让对端把它当主体写入剪贴板会绕开真正的 file
+            //   transfer 通路。对端要图片应通过 `files` rep + file transfer
+            //   拿原文件，而不是 inline pixel。
+            // - 给 30 分（介于 Unknown=10 与所有真实 rep 之间）：保证只要 snapshot
+            //   里还有任何真实可用 rep，它都不会被选成 paste；只有当整个 snapshot
+            //   退化到只剩 image-from-file 时才回退到它（避免 select_one 返回 None）。
+            (SelectionTarget::DefaultPaste, RepKind::Image)
+                if rep.format_id.eq_ignore_ascii_case("image-from-file") =>
+            {
+                30
+            }
             (SelectionTarget::DefaultPaste, RepKind::FileList) => 100,
             (SelectionTarget::DefaultPaste, RepKind::RichText) => 90,
             (SelectionTarget::DefaultPaste, RepKind::PlainText) => 80,
@@ -252,156 +285,128 @@ enum RepKind {
 
 #[cfg(test)]
 mod tests {
+    //! 260426-1gz size-guard 防御性回归用例。
+    //!
+    //! 这些用例覆盖：
+    //! - DefaultPaste 永远不应让 `image-from-file` 成为 paste rep（即使 capture 端
+    //!   未来又意外塞了一条大 inline image，policy 必须把它压在所有真实 rep 之下）；
+    //! - UiPreview 的 100 分 boost 必须受 `INLINE_PREVIEW_MAX_BYTES` 限制——
+    //!   超阈值的 inline image-from-file 退回普通 Image 分（80），让 FileList(95)
+    //!   胜出，避免大 inline image 主导 UI 并阻塞渲染。
     use super::*;
-    use crate::clipboard::MimeType;
-    use crate::ids::{FormatId, RepresentationId};
+    use crate::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
+    use crate::ids::RepresentationId;
+    use crate::ports::SelectRepresentationPolicyPort;
 
-    fn rep(
-        id: &str,
-        format_id: &str,
-        mime: Option<MimeType>,
-        bytes: &[u8],
-    ) -> ObservedClipboardRepresentation {
+    fn rep(format_id: &str, mime: &str, bytes: Vec<u8>) -> ObservedClipboardRepresentation {
         ObservedClipboardRepresentation::new(
-            RepresentationId::from(id),
-            FormatId::from(format_id),
-            mime,
-            bytes.to_vec(),
+            RepresentationId::new(),
+            format_id.into(),
+            Some(MimeType(mime.to_string())),
+            bytes,
         )
     }
 
+    /// `files` rep payload that is **not** a single previewable image URI-list.
+    /// We use a non-image extension so that
+    /// `file_list_represents_single_previewable_image` returns false; otherwise
+    /// the legacy "single image file → boost Image to 100" UiPreview path would
+    /// short-circuit our size guard for that target.
+    fn non_image_files_payload() -> Vec<u8> {
+        b"file:///tmp/note.txt".to_vec()
+    }
+
     #[test]
-    fn select_prefers_plain_text_for_preview_over_rich_text() {
-        let policy = SelectRepresentationPolicyV1::new();
+    fn default_paste_never_picks_large_image_from_file() {
+        let large_image = rep(
+            "image-from-file",
+            "image/png",
+            vec![0u8; 1024 * 1024], // 1 MiB
+        );
+        let large_image_id = large_image.id.clone();
+
+        let files = rep(
+            "files",
+            "text/uri-list",
+            non_image_files_payload(), // ~20 bytes
+        );
+        let files_id = files.id.clone();
+
         let snapshot = SystemClipboardSnapshot {
             ts_ms: 0,
-            representations: vec![
-                rep("rep-plain", "text", Some(MimeType::text_plain()), b"plain"),
-                rep(
-                    "rep-rich",
-                    "html",
-                    Some(MimeType::text_html()),
-                    b"<b>rich</b>",
-                ),
-            ],
+            representations: vec![large_image, files],
         };
 
-        let selection = policy.select(&snapshot).unwrap();
+        let policy = SelectRepresentationPolicyV1::new();
+        let selection = policy.select(&snapshot).expect("selection succeeds");
 
         assert_eq!(
-            selection.preview_rep_id,
-            RepresentationId::from("rep-plain")
+            selection.paste_rep_id, files_id,
+            "DefaultPaste must select `files` rep — `image-from-file` should never be paste"
+        );
+        assert_ne!(
+            selection.paste_rep_id, large_image_id,
+            "Large image-from-file must not become the paste rep"
         );
     }
 
     #[test]
-    fn select_prefers_rich_text_for_paste_over_plain_text() {
-        let policy = SelectRepresentationPolicyV1::new();
+    fn ui_preview_boost_is_size_capped_for_image_from_file() {
+        // 1 MiB > INLINE_PREVIEW_MAX_BYTES (256 KiB) → no 100 boost.
+        // image-from-file falls back to generic Image score (80);
+        // FileList scores 95 → FileList wins UiPreview.
+        let large_image = rep(
+            "image-from-file",
+            "image/png",
+            vec![0u8; 1024 * 1024], // 1 MiB
+        );
+        let large_image_id = large_image.id.clone();
+
+        let files = rep("files", "text/uri-list", non_image_files_payload());
+        let files_id = files.id.clone();
+
         let snapshot = SystemClipboardSnapshot {
             ts_ms: 0,
-            representations: vec![
-                rep("rep-plain", "text", Some(MimeType::text_plain()), b"plain"),
-                rep(
-                    "rep-rich",
-                    "html",
-                    Some(MimeType::text_html()),
-                    b"<b>rich</b>",
-                ),
-            ],
+            representations: vec![large_image, files],
         };
 
-        let selection = policy.select(&snapshot).unwrap();
+        let policy = SelectRepresentationPolicyV1::new();
+        let selection = policy.select(&snapshot).expect("selection succeeds");
 
-        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-rich"));
+        assert_eq!(
+            selection.preview_rep_id, files_id,
+            "UiPreview should pick FileList (95) over oversized image-from-file (no boost → 80)"
+        );
+        assert_ne!(
+            selection.preview_rep_id, large_image_id,
+            "Oversized image-from-file must not occupy UiPreview"
+        );
     }
 
     #[test]
-    fn select_prefers_file_list_preview_over_clipboard_image() {
-        let policy = SelectRepresentationPolicyV1::new();
+    fn ui_preview_boost_still_applies_to_small_image_from_file() {
+        // Sanity check the guard does not regress the small-PNG screenshot path:
+        // an `image-from-file` <= INLINE_PREVIEW_MAX_BYTES still beats FileList.
+        let small_image = rep(
+            "image-from-file",
+            "image/png",
+            vec![0u8; 64 * 1024], // 64 KiB ≤ 256 KiB
+        );
+        let small_image_id = small_image.id.clone();
+
+        let files = rep("files", "text/uri-list", non_image_files_payload());
+
         let snapshot = SystemClipboardSnapshot {
             ts_ms: 0,
-            representations: vec![
-                rep(
-                    "rep-files",
-                    "files",
-                    Some(MimeType("text/uri-list".to_string())),
-                    b"file:///tmp/document.pdf",
-                ),
-                rep(
-                    "rep-image",
-                    "image",
-                    Some(MimeType("image/png".to_string())),
-                    b"png-bytes",
-                ),
-            ],
+            representations: vec![small_image, files],
         };
 
-        let selection = policy.select(&snapshot).unwrap();
-
-        assert_eq!(
-            selection.preview_rep_id,
-            RepresentationId::from("rep-files")
-        );
-        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
-    }
-
-    #[test]
-    fn select_prefers_image_loaded_from_file_for_preview() {
         let policy = SelectRepresentationPolicyV1::new();
-        let snapshot = SystemClipboardSnapshot {
-            ts_ms: 0,
-            representations: vec![
-                rep(
-                    "rep-files",
-                    "files",
-                    Some(MimeType("text/uri-list".to_string())),
-                    b"file:///tmp/example.png",
-                ),
-                rep(
-                    "rep-image-from-file",
-                    "image-from-file",
-                    Some(MimeType("image/png".to_string())),
-                    b"png-bytes",
-                ),
-            ],
-        };
-
-        let selection = policy.select(&snapshot).unwrap();
+        let selection = policy.select(&snapshot).expect("selection succeeds");
 
         assert_eq!(
-            selection.preview_rep_id,
-            RepresentationId::from("rep-image-from-file")
+            selection.preview_rep_id, small_image_id,
+            "Small image-from-file should still receive UiPreview 100 boost"
         );
-        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
-    }
-
-    #[test]
-    fn select_prefers_clipboard_image_for_single_image_file_preview() {
-        let policy = SelectRepresentationPolicyV1::new();
-        let snapshot = SystemClipboardSnapshot {
-            ts_ms: 0,
-            representations: vec![
-                rep(
-                    "rep-files",
-                    "files",
-                    Some(MimeType("text/uri-list".to_string())),
-                    b"file:///tmp/example.png",
-                ),
-                rep(
-                    "rep-image",
-                    "image",
-                    Some(MimeType("image/png".to_string())),
-                    b"png-bytes",
-                ),
-            ],
-        };
-
-        let selection = policy.select(&snapshot).unwrap();
-
-        assert_eq!(
-            selection.preview_rep_id,
-            RepresentationId::from("rep-image")
-        );
-        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
     }
 }

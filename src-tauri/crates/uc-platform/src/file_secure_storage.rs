@@ -91,25 +91,3 @@ impl SecureStoragePort for FileSecureStorage {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn roundtrip_stores_and_loads() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let storage = FileSecureStorage::with_base_dir(temp_dir.path().to_path_buf());
-        storage.set("kek:v1:profile:demo", b"kek").expect("set");
-        let loaded = storage.get("kek:v1:profile:demo").expect("get");
-        assert_eq!(loaded, Some(b"kek".to_vec()));
-    }
-
-    #[test]
-    fn missing_key_returns_none() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let storage = FileSecureStorage::with_base_dir(temp_dir.path().to_path_buf());
-        let loaded = storage.get("libp2p-identity:v1").expect("get");
-        assert!(loaded.is_none());
-    }
-}

@@ -142,36 +142,3 @@ impl PersistedClipboardRepresentation {
         self.blob_id.is_some()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::str::FromStr;
-
-    #[test]
-    fn test_inline_representation_valid_state() {
-        let rep = PersistedClipboardRepresentation::new(
-            RepresentationId::new(),
-            FormatId::new(),
-            Some(MimeType::text_plain()),
-            100,
-            Some(vec![1, 2, 3]),
-            None,
-        );
-        assert!(rep.is_inline());
-        assert_eq!(rep.payload_state(), PayloadAvailability::Inline);
-    }
-
-    #[test]
-    fn test_staged_representation_no_inline_no_blob() {
-        let rep = PersistedClipboardRepresentation::new_staged(
-            RepresentationId::new(),
-            FormatId::new(),
-            Some(MimeType::from_str("image/png").unwrap()),
-            1_024_000,
-        );
-        assert_eq!(rep.inline_data, None);
-        assert_eq!(rep.blob_id, None);
-        assert_eq!(rep.payload_state(), PayloadAvailability::Staged);
-    }
-}

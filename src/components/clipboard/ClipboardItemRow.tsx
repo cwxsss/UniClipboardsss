@@ -143,9 +143,6 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
         className={cn(
           'flex flex-col gap-1 py-2.5 px-3 rounded-lg cursor-pointer select-none transition-colors shrink-0 overflow-hidden',
           isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80',
-          isTransferring && 'ring-1 ring-primary/20',
-          isTransferFailed && 'ring-1 ring-destructive/20',
-          isPending && 'ring-1 ring-muted-foreground/20',
           extraClassName
         )}
         onClick={onClick}
@@ -200,7 +197,13 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
                   />
                 </TooltipTrigger>
                 <TooltipContent side="left">
-                  <p className="text-xs">{t('clipboard.transfer.transferring')}</p>
+                  <p className="text-xs">
+                    {transfer?.direction === 'Sending'
+                      ? t('clipboard.transfer.sending')
+                      : transfer?.direction === 'Receiving'
+                        ? t('clipboard.transfer.receiving')
+                        : t('clipboard.transfer.transferring')}
+                  </p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

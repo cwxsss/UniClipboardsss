@@ -1,4 +1,4 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use clipboard_rs::{common::RustImage, Clipboard, ContentFormat};
 use tracing::{debug, info, warn};
 use uc_core::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
@@ -452,13 +452,37 @@ impl CommonClipboardImpl {
         }
 
         // If the clipboard carried file references (but no image bytes were
-        // captured above) and any of those files look like image files,
-        // load their bytes and add them as image representations. This makes
-        // screenshot tools that copy a temp PNG path render as a real image
-        // preview in the UI rather than showing a filename.
+        // captured above) and any of those files look like image files, this
+        // fallback may load their bytes as inline `image-from-file` reps so
+        // that screenshot tools (which copy a temp PNG path) render as a real
+        // image preview in the UI rather than showing only a filename.
+        //
+        // Contract (post 260426-1gz quick task):
+        // - Only "small" image files (< MAX_INLINE_IMAGE_BYTES) become inline
+        //   `image-from-file` reps for immediate UI preview. Daily screenshots
+        //   from system tools are typically well under this threshold.
+        // - Large image files are intentionally NOT inlined here. Locally the
+        //   UI still has the `files` rep (filename / file list) and the
+        //   `BackgroundBlobWorker.try_generate_thumbnail` path will populate
+        //   `clipboard_representation_thumbnail` asynchronously, so the
+        //   history list still gets a thumbnail. Cross-device transfer of the
+        //   actual pixels is the responsibility of the file transfer / blob
+        //   ref path, not this fallback.
+        // - This guarantees that no single rep produced by capture exceeds
+        //   the V3 envelope budget, preventing the
+        //   `peer rejected: payload ... exceeds local maximum 2097152`
+        //   dispatch failure observed when a >= 2 MiB PNG file URI is copied.
         if !image_already_read && !captured_file_paths.is_empty() {
-            // Safety cap to avoid blocking capture on huge files.
+            // Hard upper safety cap: never read an image file larger than this
+            // even if the inline-budget check below were somehow bypassed.
             const MAX_IMAGE_FILE_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
+                                                                // Conservative inline budget: stays well under the 2 MiB envelope
+                                                                // (`MAX_PAYLOAD_SIZE` in `clipboard_wire.rs`) so that even after
+                                                                // V3 header + AEAD tag + co-existing reps (plain text, files,
+                                                                // html, ...) the encrypted envelope fits with ~8x headroom.
+                                                                // 256 KiB still covers typical screenshot-tool PNGs (usually
+                                                                // < 200 KiB), so the immediate inline preview UX does not regress.
+            const MAX_INLINE_IMAGE_BYTES: u64 = 256 * 1024; // 256 KiB
 
             for path in &captured_file_paths {
                 let ext = match path.extension().and_then(|e| e.to_str()) {
@@ -492,6 +516,25 @@ impl CommonClipboardImpl {
                         "Skipping clipboard image file (size out of range)"
                     );
                     continue;
+                }
+                if meta.len() > MAX_INLINE_IMAGE_BYTES {
+                    // Intentionally do NOT read or push an inline rep here.
+                    // The downstream `files` rep + BackgroundBlobWorker
+                    // thumbnail path covers local UI; cross-device pixel
+                    // transfer is handled by file transfer / blob ref. This
+                    // prevents the snapshot from carrying a multi-MiB inline
+                    // rep that would blow the V3 envelope budget.
+                    //
+                    // Note (per uc-platform AGENTS §12.3): only path/size/
+                    // mime/threshold are logged — never any file bytes.
+                    debug!(
+                        path = %path.display(),
+                        size_bytes = meta.len(),
+                        mime = mime,
+                        threshold = MAX_INLINE_IMAGE_BYTES,
+                        "Skipping inline image-from-file rep (too large for envelope); files rep + background thumbnail will handle it"
+                    );
+                    break;
                 }
                 match std::fs::read(path) {
                     Ok(bytes) => {
@@ -568,43 +611,42 @@ impl CommonClipboardImpl {
         ))
     }
 
-    /// TODO(clipboard/multi-representation):
+    /// 写入 `SystemClipboardSnapshot` 到系统剪贴板。
     ///
-    /// This implementation writes clipboard content via `clipboard-rs` high-level APIs,
-    /// which implicitly overwrite the clipboard on each call.
+    /// 分流策略：
+    /// 1. `representations.len() == 1`：走 `clipboard-rs` 高层 API 快路径（跨平台）。
+    ///    —— 由 `clipboard-rs` 封装 set_text / set_html / set_image / set_files 等，
+    ///    行为与早期版本完全一致。
+    /// 2. `representations.len() > 1`：进入 `write_snapshot_multi` 分流：
+    ///    - Windows：原子多 rep 写入（`write_snapshot_multi_windows`）——在单次
+    ///      `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT
+    ///      + CF_HTML 等多个 format，确保纯文本目的地也能粘贴。
+    ///    - macOS：原子多 rep 写入（`write_snapshot_multi_macos`）——在单次
+    ///      `NSPasteboard::writeObjects:` 调用内提交 `NSPasteboardItem`，承载
+    ///      `NSPasteboardTypeString` + `NSPasteboardTypeHTML`，与 Windows 语义对齐。
+    ///    - Linux / 其他 Unix：暂不支持原子多 rep（Wayland `wl-clipboard-rs` 与 X11
+    ///      selection owner 模型与 `clipboard-rs` 不兼容，工作量独立），当前降级为
+    ///      "用 `SelectRepresentationPolicyV1` 选出 paste-priority rep 再走单 rep
+    ///      快路径"并 warn 日志。后续 phase 补齐（FIXME 见分支内注释）。
     ///
-    /// As a result, **multiple representations cannot be written as a single clipboard item**.
-    /// Only the last written representation is reliably preserved.
-    ///
-    /// This is acceptable for now, but it prevents high-fidelity restore of clipboard snapshots
-    /// that contain multiple representations (e.g. text + html + rtf + private formats).
-    ///
-    /// Proper support requires a platform-specific implementation that:
-    /// - Constructs a single clipboard item
-    /// - Attaches multiple representations to that item
-    /// - Commits it atomically (e.g. `NSPasteboardItem` on macOS)
-    ///
-    /// Tracked in: https://github.com/UniClipboard/UniClipboard/issues/92
+    /// 历史背景见 https://github.com/UniClipboard/UniClipboard/issues/92
+    /// 以及 `uc-platform/src/clipboard/platform/{windows,macos}.rs`。
     pub fn write_snapshot(
         ctx: &mut clipboard_rs::ClipboardContext,
         snapshot: SystemClipboardSnapshot,
     ) -> Result<()> {
-        #[cfg(debug_assertions)]
-        {
-            if snapshot.representations.len() > 1 {
-                eprintln!(
-                    "warning: writing {} clipboard representations via clipboard-rs; \
-             multi-representation restore is lossy in current implementation",
-                    snapshot.representations.len()
-                );
-            }
+        use anyhow::bail;
+
+        if snapshot.representations.is_empty() {
+            bail!("platform::write expects at least ONE representation, got 0");
         }
 
-        ensure!(
-            snapshot.representations.len() == 1,
-            "platform::write expects exactly ONE representation"
-        );
+        // 多 rep 分流入口：Windows 走原子写入，其他平台显式降级（§9.3 不允许静默降级）。
+        if snapshot.representations.len() > 1 {
+            return Self::write_snapshot_multi(ctx, snapshot);
+        }
 
+        // 单 rep 快路径：走既有 clipboard-rs 高层 API（行为与改动前完全一致）。
         let rep = &snapshot.representations[0];
 
         // Use explicit MIME if present, otherwise infer from macOS/cross-platform format_id.
@@ -715,6 +757,104 @@ impl CommonClipboardImpl {
         }
 
         Ok(())
+    }
+
+    /// 多 representation 写入入口。
+    ///
+    /// 平台能力差异：
+    /// - Windows：具备真正的原子多 rep 写入（`write_snapshot_multi_windows`），在单次
+    ///   `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT + CF_HTML，
+    ///   确保纯文本目的地（记事本等）也能粘贴到正确内容。
+    /// - macOS：具备真正的原子多 rep 写入（`write_snapshot_multi_macos`），在单次
+    ///   `NSPasteboard::writeObjects:` 调用内提交 `NSPasteboardItem`。
+    /// - Linux / 其他 Unix：当前尚未支持（需 `wl-clipboard-rs` DataSource 或 X11
+    ///   selection owner 重写），本次降级为 "用 `SelectRepresentationPolicyV1` 选出
+    ///   paste-priority rep 再走单 rep 快路径"，并以 `warn!` 日志显式说明。行为与
+    ///   应用层原 `narrow_to_primary` 等价，保证 Linux 粘贴语义零回归。后续 phase
+    ///   再统一（§9.3：不允许静默降级）。
+    ///
+    /// 注意：本方法不应被"单 rep 快路径"调用。调用者需保证 `snapshot.representations.len() >= 1`。
+    fn write_snapshot_multi(
+        ctx: &mut clipboard_rs::ClipboardContext,
+        snapshot: SystemClipboardSnapshot,
+    ) -> Result<()> {
+        let rep_count = snapshot.representations.len();
+
+        #[cfg(target_os = "windows")]
+        {
+            // 把实际实现委托给平台子模块。
+            // common.rs 通过 `crate::clipboard::platform::windows::write_snapshot_multi_windows`
+            // 调用，不跨 crate 暴露，符合 §4.4 cfg 收敛原则。
+            return crate::clipboard::platform::windows::write_snapshot_multi_windows(snapshot);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS：具备真正的原子多 rep 写入能力（NSPasteboardItem + writeObjects:）。
+            // 实现在 `clipboard::platform::macos::write_snapshot_multi_macos`。
+            // 该函数自己通过 `NSPasteboard::generalPasteboard()` 拿系统剪贴板单例，
+            // 不使用传入的 clipboard-rs `ctx`，也不需要 "提前 drop + dummy_ctx" 的绕道
+            //（与 Windows 不同：macOS NSPasteboard 不是独占句柄模型）。
+            let _ = ctx; // 显式标注未使用，消除 unused-variable warning。
+            let _ = rep_count; // macOS 分支不需要 rep_count，显式忽略。
+            return crate::clipboard::platform::macos::write_snapshot_multi_macos(snapshot);
+        }
+
+        // Linux 与其他非 Windows / 非 macOS 的 Unix：显式降级（§9.3 不允许静默降级）。
+        //
+        // FIXME(260423-mxu-next-phase)：Linux 的真正多 rep 原子写入需要 Wayland
+        // `wl-clipboard-rs` 的 DataSource 接口（多 MIME type 注册）或 X11 的
+        // selection owner 持久持有模型；二者与 `clipboard-rs` 高层 API 不兼容，
+        // 工作量与 macOS 相当，留到下一个独立 phase 补齐。本次保留以下 V1-policy
+        // 降级逻辑，语义与 260423-9do 改造前完全一致，保证浏览器复制到 Linux 的
+        // 粘贴行为不回归。
+        #[cfg(any(
+            target_os = "linux",
+            not(any(target_os = "windows", target_os = "macos"))
+        ))]
+        {
+            // 用 V1 policy 选出 paste-priority rep —— 与应用层原 `narrow_to_primary`
+            // 等价。硬编码 V1：当前 uc-core 只有这一个 `SelectRepresentationPolicyPort`
+            // 实现；出现 V2 时再考虑从调用方注入 policy。
+            use uc_core::clipboard::SelectRepresentationPolicyV1;
+            use uc_core::ports::SelectRepresentationPolicyPort;
+
+            let policy = SelectRepresentationPolicyV1::default();
+            let selection = policy
+                .select(&snapshot)
+                .map_err(|e| anyhow!("representation policy failed: {e}"))?;
+            let paste_id = selection.paste_rep_id.clone();
+
+            let chosen_idx = snapshot
+                .representations
+                .iter()
+                .position(|rep| rep.id == paste_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "policy selected paste_rep_id {:?} not present in snapshot",
+                        paste_id
+                    )
+                })?;
+
+            warn!(
+                rep_count,
+                paste_rep_id = ?paste_id,
+                chosen_format_id = %snapshot.representations[chosen_idx].format_id,
+                "Linux: multi-representation atomic write not yet supported; \
+                 falling back to single-rep path via SelectRepresentationPolicyV1 \
+                 — will be addressed in a follow-up phase (wl-clipboard-rs / X11 \
+                 selection owner)."
+            );
+
+            let ts_ms = snapshot.ts_ms;
+            let mut reps = snapshot.representations;
+            let chosen = reps.remove(chosen_idx);
+            let reduced = SystemClipboardSnapshot {
+                ts_ms,
+                representations: vec![chosen],
+            };
+            return Self::write_snapshot(ctx, reduced);
+        }
     }
 }
 

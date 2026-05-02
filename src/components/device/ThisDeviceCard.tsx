@@ -1,7 +1,8 @@
-import { RefreshCw } from 'lucide-react'
-import React from 'react'
+import { ArrowRightLeft, RefreshCw } from 'lucide-react'
+import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getDeviceIcon } from './device-utils'
+import SwitchSpaceDialog from './SwitchSpaceDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,11 +14,12 @@ import { clearLocalDeviceError, fetchLocalDeviceInfo } from '@/store/slices/devi
 const ThisDeviceCard: React.FC = () => {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
-  const { localDevice, localDeviceLoading, localDeviceError, pairedDevices } = useAppSelector(
+  const { localDevice, localDeviceLoading, localDeviceError, spaceMembers } = useAppSelector(
     state => state.devices
   )
   const { setting } = useSetting()
   const syncActive = setting?.sync.autoSync !== false
+  const [switchSpaceOpen, setSwitchSpaceOpen] = useState(false)
 
   const handleRetry = () => {
     dispatch(clearLocalDeviceError())
@@ -66,8 +68,9 @@ const ThisDeviceCard: React.FC = () => {
 
   if (!localDevice) return null
 
-  const onlineCount = pairedDevices.filter(d => d.connected).length
-  const pairedCount = pairedDevices.length
+  const peers = spaceMembers.filter(d => d.peerId !== localDevice.peerId)
+  const onlineCount = peers.filter(d => d.connected).length
+  const pairedCount = peers.length
 
   return (
     <div className="rounded-xl border border-border/60 bg-card p-5">
@@ -104,6 +107,22 @@ const ThisDeviceCard: React.FC = () => {
           </>
         )}
       </div>
+
+      {/* "加入其他空间" 入口——次要操作，按钮放在卡片底部右侧，对齐
+          已 setup 设备的"切换归属"语义。 */}
+      <div className="mt-4 flex justify-end border-t border-border/40 pt-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setSwitchSpaceOpen(true)}
+        >
+          <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
+          {t('devices.switchSpace.button')}
+        </Button>
+      </div>
+
+      <SwitchSpaceDialog open={switchSpaceOpen} onOpenChange={setSwitchSpaceOpen} />
     </div>
   )
 }

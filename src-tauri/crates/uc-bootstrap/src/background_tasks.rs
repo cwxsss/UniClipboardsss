@@ -11,13 +11,15 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use tokio::sync::mpsc;
-use uc_app::task_registry::TaskRegistry;
-use uc_app::AppDeps;
+use uc_application::deps::AppDeps;
+
+use crate::task_registry::TaskRegistry;
 use uc_core::ids::RepresentationId;
 use uc_core::ports::clipboard::{
     ClipboardRepresentationRepositoryPort, ThumbnailGeneratorPort, ThumbnailRepositoryPort,
 };
-use uc_core::ports::{BlobWriterPort, ClockPort, ContentHashPort};
+use uc_core::ports::{ClockPort, ContentHashPort};
+use uc_infra::blob::BlobWriterPort;
 use uc_infra::clipboard::{BackgroundBlobWorker, SpoolJanitor, SpoolScanner, SpoolerTask};
 
 use crate::BackgroundRuntimeDeps;
@@ -69,7 +71,6 @@ pub async fn spawn_blob_processing_tasks(
     task_registry: &Arc<TaskRegistry>,
 ) {
     let BackgroundRuntimeDeps {
-        libp2p_network: _,
         representation_cache,
         spool_manager,
         spool_tx: _spool_tx, // Kept alive by the caller — we just need to not drop it here
@@ -80,7 +81,7 @@ pub async fn spawn_blob_processing_tasks(
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
-        file_transfer_orchestrator: _,
+        file_transfer_lifecycle: _,
         clipboard_write_coordinator: _,
     } = background;
 

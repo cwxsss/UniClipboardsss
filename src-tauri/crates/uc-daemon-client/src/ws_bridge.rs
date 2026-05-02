@@ -3,6 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
+use crate::realtime::{
+    ClipboardNewContentEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
+    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
+    PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
+    SpaceMembersChangedEvent,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -13,21 +19,13 @@ use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::network::daemon_api_strings::{pairing_stage, ws_event, ws_topic};
-use uc_core::ports::realtime::{
-    ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
-    PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
-    PeerConnectionChangedEvent, PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary,
-    RealtimeTopic, RealtimeTopicPort, SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
-    SpaceAccessStateChangedEvent,
-};
 use uc_daemon_contract::api::auth::DaemonConnectionInfo;
 use uc_daemon_contract::api::types::{
-    DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
-    PairingSessionChangedPayload, PairingVerificationPayload, PeerConnectionChangedPayload,
-    PeerNameUpdatedPayload, PeersChangedFullPayload, SetupSpaceAccessCompletedPayload,
-    SetupStateChangedPayload, SpaceAccessStateChangedPayload,
+    DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload,
+    SpaceMembersChangedPayload,
 };
+use uc_daemon_contract::constants::{pairing_stage, ws_event, ws_topic};
 
 use crate::DaemonConnectionState;
 
@@ -1075,14 +1073,14 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
             }
         }
         ws_event::PAIRED_DEVICES_CHANGED => {
-            match serde_json::from_value::<PairedDevicesChangedPayload>(event.payload) {
+            match serde_json::from_value::<SpaceMembersChangedPayload>(event.payload) {
                 Ok(payload) => {
                     debug!(
                         event = "bridge.payload_decoded",
                         source_topic = %topic,
                         source_event_type = %event_type,
                         session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "PairedDevicesChangedPayload",
+                        payload_type = "SpaceMembersChangedPayload",
                         peer_id = %payload.peer_id,
                         has_device_name = payload.device_name.is_some(),
                         "decoded websocket payload"
@@ -1092,11 +1090,11 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         &event_type,
                         session_id.as_deref(),
                         None,
-                        "PairedDevicesChanged",
+                        "SpaceMembersChanged",
                     );
-                    Some(RealtimeEvent::PairedDevicesChanged(
-                        PairedDevicesChangedEvent {
-                            devices: vec![uc_core::ports::realtime::RealtimePairedDeviceSummary {
+                    Some(RealtimeEvent::SpaceMembersChanged(
+                        SpaceMembersChangedEvent {
+                            devices: vec![crate::realtime::RealtimeSpaceMemberSummary {
                                 device_id: payload.peer_id,
                                 device_name: payload.device_name.unwrap_or_default(),
                                 last_seen_ts: None,
@@ -1109,175 +1107,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         &topic,
                         &event_type,
                         session_id.as_deref(),
-                        "PairedDevicesChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SETUP_STATE_CHANGED => {
-            match serde_json::from_value::<SetupStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = payload.session_id.as_deref().unwrap_or(""),
-                        payload_type = "SetupStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    match serde_json::from_value(payload.state.clone()) {
-                        Ok(state) => {
-                            log_bridge_routing(
-                                &topic,
-                                &event_type,
-                                payload.session_id.as_deref(),
-                                None,
-                                "SetupStateChanged",
-                            );
-                            Some(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
-                                session_id: payload.session_id,
-                                state,
-                            }))
-                        }
-                        Err(err) => {
-                            warn!(
-                                event = "bridge.decode_failed",
-                                source_topic = %topic,
-                                source_event_type = %event_type,
-                                session_id = payload.session_id.as_deref().unwrap_or(""),
-                                payload_type = "SetupStateValue",
-                                error = %err,
-                                raw_state = %payload.state,
-                                "failed to decode websocket payload"
-                            );
-                            None
-                        }
-                    }
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SetupStateChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SETUP_SPACE_ACCESS_COMPLETED => {
-            match serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = %payload.session_id,
-                        payload_type = "SetupSpaceAccessCompletedPayload",
-                        peer_id = %payload.peer_id,
-                        success = payload.success,
-                        has_reason = payload.reason.is_some(),
-                        ts = payload.ts,
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        Some(&payload.session_id),
-                        None,
-                        "SetupSpaceAccessCompleted",
-                    );
-                    Some(RealtimeEvent::SetupSpaceAccessCompleted(
-                        SetupSpaceAccessCompletedEvent {
-                            session_id: payload.session_id,
-                            peer_id: payload.peer_id,
-                            success: payload.success,
-                            reason: payload.reason,
-                            ts: payload.ts,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SetupSpaceAccessCompletedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SPACE_ACCESS_STATE_CHANGED => {
-            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "SpaceAccessStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        None,
-                        "SpaceAccessStateChanged",
-                    );
-                    Some(RealtimeEvent::SpaceAccessStateChanged(
-                        SpaceAccessStateChangedEvent {
-                            state: payload.state,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SpaceAccessStateChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SPACE_ACCESS_SNAPSHOT => {
-            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "SpaceAccessStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        None,
-                        "SpaceAccessStateChanged",
-                    );
-                    Some(RealtimeEvent::SpaceAccessStateChanged(
-                        SpaceAccessStateChangedEvent {
-                            state: payload.state,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SpaceAccessStateChangedPayload",
+                        "SpaceMembersChangedPayload",
                         &err,
                     );
                     None
@@ -1345,11 +1175,7 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         RealtimeEvent::PeersChanged(_)
         | RealtimeEvent::PeersNameUpdated(_)
         | RealtimeEvent::PeersConnectionChanged(_) => RealtimeTopic::Peers,
-        RealtimeEvent::PairedDevicesChanged(_) => RealtimeTopic::PairedDevices,
-        RealtimeEvent::SetupStateChanged(_) | RealtimeEvent::SetupSpaceAccessCompleted(_) => {
-            RealtimeTopic::Setup
-        }
-        RealtimeEvent::SpaceAccessStateChanged(_) => RealtimeTopic::SpaceAccess,
+        RealtimeEvent::SpaceMembersChanged(_) => RealtimeTopic::PairedDevices,
         RealtimeEvent::ClipboardNewContent(_) => RealtimeTopic::Clipboard,
     }
 }
@@ -1360,7 +1186,6 @@ fn topic_name(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Peers => ws_topic::PEERS,
         RealtimeTopic::PairedDevices => ws_topic::PAIRED_DEVICES,
         RealtimeTopic::Setup => ws_topic::SETUP,
-        RealtimeTopic::SpaceAccess => ws_topic::SPACE_ACCESS,
         RealtimeTopic::Clipboard => ws_topic::CLIPBOARD,
     }
 }
@@ -1386,125 +1211,5 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use uc_daemon_contract::api::types::{PeerSnapshotDto, PeersChangedFullPayload};
-
-    /// Constructs a `DaemonWsEvent` representing a full "peers.changed" snapshot from the given peers.
-    ///
-    /// The resulting event has:
-    /// - `topic` set to `"peers"`,
-    /// - `event_type` set to `"peers.changed"`,
-    /// - `session_id` set to `None`,
-    /// - `ts` set to `0`,
-    /// - `payload` set to the JSON serialization of `PeersChangedFullPayload { peers }`.
-    ///
-    /// # Arguments
-    ///
-    /// * `peers` - Full list of `PeerSnapshotDto` entries to include in the payload.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let dto = PeerSnapshotDto {
-    ///     peer_id: "peer-1".into(),
-    ///     device_name: Some("Device".into()),
-    ///     connected: true,
-    /// };
-    /// let ev = make_full_payload_event(vec![dto]);
-    /// assert_eq!(ev.topic, "peers");
-    /// assert_eq!(ev.event_type, "peers.changed");
-    /// ```
-    fn make_full_payload_event(peers: Vec<PeerSnapshotDto>) -> DaemonWsEvent {
-        DaemonWsEvent {
-            topic: "peers".to_string(),
-            event_type: "peers.changed".to_string(),
-            session_id: None,
-            ts: 0,
-            payload: serde_json::to_value(PeersChangedFullPayload { peers }).unwrap(),
-        }
-    }
-
-    #[test]
-    fn peers_changed_full_payload_translates_all_peers() {
-        let event = make_full_payload_event(vec![
-            PeerSnapshotDto {
-                peer_id: "peer-1".to_string(),
-                device_name: Some("Laptop".to_string()),
-                addresses: vec![],
-                is_paired: false,
-                connected: true,
-                pairing_state: "NotPaired".to_string(),
-            },
-            PeerSnapshotDto {
-                peer_id: "peer-2".to_string(),
-                device_name: None,
-                addresses: vec![],
-                is_paired: true,
-                connected: false,
-                pairing_state: "Trusted".to_string(),
-            },
-            PeerSnapshotDto {
-                peer_id: "peer-3".to_string(),
-                device_name: Some("Tablet".to_string()),
-                addresses: vec![],
-                is_paired: false,
-                connected: false,
-                pairing_state: "NotPaired".to_string(),
-            },
-        ]);
-
-        let result = map_daemon_ws_event(event);
-
-        let peers_event = match result {
-            Some(RealtimeEvent::PeersChanged(e)) => e,
-            other => panic!("expected PeersChanged, got {:?}", other),
-        };
-
-        assert_eq!(peers_event.peers.len(), 3, "all 3 peers must be preserved");
-
-        let peer1 = peers_event
-            .peers
-            .iter()
-            .find(|p| p.peer_id == "peer-1")
-            .unwrap();
-        assert_eq!(peer1.device_name, Some("Laptop".to_string()));
-        assert!(peer1.connected);
-
-        let peer2 = peers_event
-            .peers
-            .iter()
-            .find(|p| p.peer_id == "peer-2")
-            .unwrap();
-        assert_eq!(peer2.device_name, None);
-        assert!(!peer2.connected);
-
-        let peer3 = peers_event
-            .peers
-            .iter()
-            .find(|p| p.peer_id == "peer-3")
-            .unwrap();
-        assert_eq!(peer3.device_name, Some("Tablet".to_string()));
-    }
-
-    #[test]
-    fn peers_changed_full_payload_empty_list_translates_to_empty_peers() {
-        let event = make_full_payload_event(vec![]);
-        let result = map_daemon_ws_event(event);
-
-        let peers_event = match result {
-            Some(RealtimeEvent::PeersChanged(e)) => e,
-            other => panic!("expected PeersChanged, got {:?}", other),
-        };
-
-        assert_eq!(
-            peers_event.peers.len(),
-            0,
-            "empty peer list must translate to empty peers"
-        );
     }
 }

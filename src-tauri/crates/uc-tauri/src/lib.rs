@@ -11,6 +11,3 @@ pub mod commands;
 
 pub mod quick_panel;
 pub mod tray;
-
-#[cfg(test)]
-pub mod test_utils;

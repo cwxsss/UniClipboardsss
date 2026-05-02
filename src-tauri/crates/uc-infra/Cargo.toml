@@ -1,6 +1,7 @@
 [package]
 name = "uc-infra"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Infrastructure utilities and shared components for UniClipboard"
 
@@ -21,6 +22,9 @@ thiserror = "2.0"
 
 # Async traits
 async-trait = "0.1"
+
+# Stream consumption for iroh-blobs Downloader progress events
+futures-util = "0.3"
 
 # ===== 数据库 =====
 diesel = { version = "2.3.5", features = [
@@ -49,6 +53,7 @@ tokio = { version = "1", features = [
 log = "0.4.29"
 tracing = "0.1"
 argon2 = "0.5.3"
+subtle = "2.5.0"
 chacha20poly1305 = "0.10.1"
 rand = "0.9.2"
 blake3 = "1.8.2"
@@ -56,12 +61,35 @@ hex = "0.4.3"
 hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
+base32 = "0.5"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
 url = "2"
 config = "0.15.19"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
 zstd = { version = "0.13", features = ["zstdmt"] }
+
+# ===== Network stack (iroh + rendezvous HTTP) =====
+# `address-lookup-mdns` enables `iroh::address_lookup::MdnsAddressLookup`
+# (swarm-discovery TXT records over LAN multicast) so two peers on the same
+# Wi-Fi advertise their LAN IPs to each other directly. UniClipboard#486
+# §三 B: drops the dependency on pkarr/rendezvous for LAN discovery,
+# bypassing the latency that left magicsock with relay-only candidates and
+# pushing it onto Clash TUN paths.
+iroh = { version = "0.98", features = ["address-lookup-mdns"] }
+iroh-blobs = "0.100"
+iroh-tickets = "0.5"
+# iroh 0.97 forked quinn-proto into noq-proto (Custom Transports & noq).
+# Used solely to reach `congestion::BbrConfig` when wiring the QUIC
+# TransportConfig — iroh re-exports the trait but not the BBR factory itself.
+noq-proto = "0.17"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
+# Slice 1 pairing session wire codec — binary, compact, serde-compatible.
+postcard = { version = "1", features = ["use-std"] }
+# Slice 2 Phase 2 clipboard wire codec — carry zero-copy ciphertext across
+# the stream/facade boundary without extra clones. Same crate uc-core already
+# pulls in on its own port contracts.
+bytes = "1.7"
 
 [dependencies.uuid]
 version = "1.10.0"
@@ -71,3 +99,4 @@ features = ["v4"]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 mockall = "0.13"
+wiremock = "0.6"

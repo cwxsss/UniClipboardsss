@@ -181,8 +181,6 @@ describe('useTransferProgress', () => {
           entryId: 'entry-progress',
           peerId: 'peer-1',
           direction: 'Receiving',
-          chunksCompleted: 2,
-          totalChunks: 10,
           bytesTransferred: 2048,
           totalBytes: 10240,
         })
@@ -194,8 +192,6 @@ describe('useTransferProgress', () => {
         entryId: 'entry-progress',
         peerId: 'peer-1',
         direction: 'Receiving',
-        chunksCompleted: 2,
-        totalChunks: 10,
         bytesTransferred: 2048,
         totalBytes: 10240,
         status: 'active',

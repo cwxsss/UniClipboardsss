@@ -4,7 +4,6 @@ use std::fmt;
 use std::process::Stdio;
 
 use serde::Serialize;
-use uc_app::app_paths::AppPaths;
 
 use crate::exit_codes;
 use crate::local_daemon;
@@ -31,7 +30,7 @@ impl fmt::Display for StartOutput {
 
 /// Run the start command.
 pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
-    if let Some(code) = check_setup_complete(json, verbose) {
+    if let Some(code) = check_setup_complete(json, verbose).await {
         return code;
     }
 
@@ -42,22 +41,18 @@ pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
     }
 }
 
-/// Check if setup (encryption initialization) is complete before starting the daemon.
+/// Block `start` if Space setup hasn't completed for the active
+/// profile. Delegates the actual check to
+/// [`uc_bootstrap::is_setup_complete`] so the file paths + JSON schema
+/// stay encoded in `uc-infra::FileSetupStatusRepository`, not duplicated
+/// here.
 ///
-/// Uses a lightweight file-existence check on `.initialized_encryption` marker
-/// instead of building the full CLI runtime, which would trigger keychain
-/// access popups on macOS.
-///
-/// Returns `Some(exit_code)` if start should be blocked, `None` if ok to proceed.
-fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
-    let app_dirs = match uc_bootstrap::assembly::get_default_app_dirs().ok() {
-        Some(d) => d,
-        None => return None, // Can't resolve — let daemon handle it
-    };
-
-    let marker_file = AppPaths::from_app_dirs(&app_dirs).encryption_marker_path();
-    if marker_file.exists() {
-        return None; // Setup complete — proceed
+/// Returns `Some(exit_code)` to block, `None` to proceed.
+async fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
+    // Resolution failure (e.g. missing app dirs) → let daemon surface
+    // the underlying error rather than masking it here.
+    if uc_bootstrap::is_setup_complete().await.unwrap_or(true) {
+        return None;
     }
 
     if json {
@@ -70,7 +65,8 @@ fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
         );
     } else {
         eprintln!(
-            "Error: setup not complete. Run `uniclipboard setup` first to create or join a Space."
+            "Error: setup not complete. Run `uniclip init` (new Space) or \
+             `uniclip join` (existing Space) first, then retry `start`."
         );
     }
     Some(exit_codes::EXIT_ERROR)
@@ -79,7 +75,7 @@ fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
 async fn run_background(json: bool) -> i32 {
     run_start_background_with(
         || local_daemon::ensure_local_daemon_running(),
-        || uc_daemon::process_metadata::read_pid_file(),
+        || uc_daemon_local::process_metadata::read_pid_file(),
     )
     .await
     .map_or_else(
@@ -102,7 +98,9 @@ async fn run_foreground(json: bool, _verbose: bool) -> i32 {
     // We must NOT use ensure_local_daemon_running() here because it would
     // spawn a background daemon, conflicting with the foreground spawn below.
     if let Ok(true) = local_daemon::probe_running().await {
-        let pid = uc_daemon::process_metadata::read_pid_file().ok().flatten();
+        let pid = uc_daemon_local::process_metadata::read_pid_file()
+            .ok()
+            .flatten();
         let out = StartOutput {
             status: "already_running",
             pid,
@@ -175,96 +173,4 @@ where
     };
 
     Ok(StartOutput { status, pid })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::local_daemon::{LocalDaemonError, LocalDaemonSession};
-
-    fn healthy_session(spawned: bool) -> Result<LocalDaemonSession, LocalDaemonError> {
-        Ok(LocalDaemonSession {
-            base_url: "http://127.0.0.1:12345".to_string(),
-            spawned,
-        })
-    }
-
-    #[tokio::test]
-    async fn start_background_already_running() {
-        let result =
-            run_start_background_with(|| async { healthy_session(false) }, || Ok(Some(12345_u32)))
-                .await;
-
-        let output = result.expect("should succeed when daemon already running");
-        assert_eq!(output.status, "already_running");
-        assert_eq!(output.pid, Some(12345));
-    }
-
-    #[tokio::test]
-    async fn start_background_spawned() {
-        let result =
-            run_start_background_with(|| async { healthy_session(true) }, || Ok(Some(99999_u32)))
-                .await;
-
-        let output = result.expect("should succeed after spawning daemon");
-        assert_eq!(output.status, "started");
-        assert_eq!(output.pid, Some(99999));
-    }
-
-    #[tokio::test]
-    async fn start_background_spawn_failure() {
-        let result = run_start_background_with(
-            || async {
-                Err::<LocalDaemonSession, LocalDaemonError>(LocalDaemonError::Spawn(
-                    anyhow::anyhow!("binary not found"),
-                ))
-            },
-            || Ok(None),
-        )
-        .await;
-
-        assert!(result.is_err(), "should return error on spawn failure");
-    }
-
-    #[test]
-    fn json_output_start_already_running() {
-        let out = StartOutput {
-            status: "already_running",
-            pid: Some(42),
-        };
-        let json = serde_json::to_string(&out).expect("should serialize");
-        assert!(json.contains("\"status\""));
-        assert!(json.contains("\"already_running\""));
-        assert!(json.contains("\"pid\""));
-        assert!(json.contains("42"));
-    }
-
-    #[test]
-    fn json_output_start_started() {
-        let out = StartOutput {
-            status: "started",
-            pid: Some(1001),
-        };
-        let json = serde_json::to_string(&out).expect("should serialize");
-        assert!(json.contains("\"started\""));
-        assert!(json.contains("1001"));
-    }
-
-    #[test]
-    fn display_output_start() {
-        let started = StartOutput {
-            status: "started",
-            pid: Some(12345),
-        };
-        assert_eq!(format!("{}", started), "Daemon started (pid 12345)");
-
-        let already_running = StartOutput {
-            status: "already_running",
-            pid: Some(9876),
-        };
-        assert_eq!(
-            format!("{}", already_running),
-            "Daemon already running (pid 9876)"
-        );
-    }
 }

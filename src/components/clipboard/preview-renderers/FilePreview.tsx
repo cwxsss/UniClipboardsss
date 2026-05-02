@@ -56,9 +56,7 @@ const FilePreview: React.FC<FilePreviewProps> = ({
   const percent =
     transfer && transfer.totalBytes && transfer.totalBytes > 0
       ? Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)
-      : transfer?.totalChunks && transfer.totalChunks > 0
-        ? Math.round((transfer.chunksCompleted / transfer.totalChunks) * 100)
-        : 0
+      : 0
 
   const renderStatusBadge = () => (
     <div className="flex flex-wrap gap-2">
@@ -71,7 +69,11 @@ const FilePreview: React.FC<FilePreviewProps> = ({
       {effectiveStatus === 'transferring' && (
         <div className="flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-primary backdrop-blur-md ring-1 ring-primary/30">
           <Loader2 size={10} className="animate-spin" />
-          {t('clipboard.transfer.transferring')}
+          {transfer?.direction === 'Sending'
+            ? t('clipboard.transfer.sending')
+            : transfer?.direction === 'Receiving'
+              ? t('clipboard.transfer.receiving')
+              : t('clipboard.transfer.transferring')}
         </div>
       )}
       {effectiveStatus === 'failed' && (

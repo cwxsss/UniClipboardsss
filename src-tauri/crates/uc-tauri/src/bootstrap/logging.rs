@@ -28,7 +28,7 @@ fn is_development() -> bool {
 ///
 /// - Development: Debug level, Webview console output
 /// - Production: Info level, file + stdout output
-/// - Filters noise from libp2p_mdns and Tauri internals
+/// - Filters noise from Tauri internals
 /// - Color-coded output with timestamps
 ///
 /// ## English
@@ -46,10 +46,6 @@ pub fn get_builder() -> tauri_plugin_log::Builder {
     let mut builder = tauri_plugin_log::Builder::new()
         .timezone_strategy(TimezoneStrategy::UseLocal)
         .level(default_log_level)
-        // Suppress libp2p-mdns iface send errors (No route to host)
-        // .level_for("libp2p_mdns::behaviour::iface", LevelFilter::Off)
-        // Filter libp2p_mdns ERROR logs (harmless errors from proxy software virtual interfaces)
-        .level_for("libp2p_mdns", LevelFilter::Warn)
         // Filter out tauri-plugin-log's own logs to avoid infinite loops
         // Webview target sends logs via log://log events, which would trigger themselves
         .filter(move |metadata| {
@@ -115,22 +111,4 @@ pub fn get_builder() -> tauri_plugin_log::Builder {
     }
 
     builder
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_logger_builder() {
-        // Verify the builder can be constructed without panicking
-        let _builder = get_builder();
-    }
-
-    #[test]
-    fn test_development_detection() {
-        // In test builds, this will be false (tests run in release mode by default)
-        // But we're testing the function works, not the value
-        let _is_dev = is_development();
-    }
 }
