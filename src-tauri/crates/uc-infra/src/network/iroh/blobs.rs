@@ -52,6 +52,23 @@ const BLOB_FETCH_BACKOFFS: [Duration; 3] = [
 
 pub const BLOBS_ALPN: &[u8] = iroh_blobs::ALPN;
 
+/// 1h between GC sweeps (Phase D1 decision Q1=A).
+///
+/// The sweep itself is cheap (redb scan + free list of any blob whose
+/// tags have all been released). Trade-off ratio: timely reclaim of
+/// ex-clipboard-entry blobs vs idle IO; 1h gives prompt cleanup without
+/// burning the disk on a daemon that never stops.
+///
+/// Phase F closed the auto-tag leak that previously made this GC
+/// effectively a no-op for the publish path: `publish` / `publish_path`
+/// now route through `AddProgress::with_named_tag(reason)` instead of
+/// the default `with_tag` IntoFuture, so the only persistent tag a blob
+/// carries is the caller-supplied business reason.
+/// `BlobTransferPort::untag(reason)` therefore really drops the last
+/// reference, and the next sweep within `BLOBS_GC_INTERVAL` reclaims
+/// metadata + data atomically.
+pub const BLOBS_GC_INTERVAL: Duration = Duration::from_secs(3600);
+
 pub struct IrohBlobTransferAdapter {
     endpoint: Arc<Endpoint>,
     store: FsStore,
@@ -161,29 +178,51 @@ fn preferred_import_mode() -> ImportMode {
 #[async_trait]
 impl BlobTransferPort for IrohBlobTransferAdapter {
     #[instrument(skip_all, fields(bytes = ciphertext.len()))]
-    async fn publish(&self, ciphertext: Bytes) -> Result<BlobDigest, BlobError> {
+    async fn publish(&self, ciphertext: Bytes, reason: TagReason) -> Result<BlobDigest, BlobError> {
         // GH#487: 大 blob 的 add_bytes 包含 BLAKE3 + BAO outboard 编码 +
         // 写盘,冷启动 / 慢盘场景下整段都可能阻塞十几秒。这里独立计时,让
         // 上游 publish_blob 的 publish_ms 能与本层 add_bytes_ms 对齐核对。
+        //
+        // Phase F: 用 `with_named_tag(reason_name)` 替代 `add_bytes(...).
+        // await` 默认走的 `with_tag` 路径。后者会自动给 blob 打一个
+        // `auto-<timestamp>` 持久 tag(`AddProgress::IntoFuture` 的默认行为),
+        // 我们没有任何渠道能在 untag 时一并清掉它 —— 结果就是即使业务侧
+        // 调了 `untag(ClipboardEntry)`,blob 仍被这个孤儿 auto-tag 钉死,
+        // GC(Phase D1)永远跑不掉它,cache 文件实际只能等下次 daemon 重启
+        // 让 Phase E1 的启动 sweep 清理。改用 `with_named_tag` 后,publish
+        // 时直接打业务 tag,untag 即真正释放,GC 1h 内就能回收。
+        //
+        // 内部行为(`api/blobs.rs:654-662`):
+        //   `with_named_tag = temp_tag().await? → tags.set(name, haf) → drop(tt)`
+        // TempTag 在 set 完成前一直保活,关闭了 admit ↔ tag 之间的 GC 窗口;
+        // set 是覆盖式,同一 reason 重复 publish 等价于覆盖到同一 hash,
+        // 语义上与 publish 自身的幂等性一致。
         let bytes = ciphertext.len() as u64;
         let started = Instant::now();
-        let tag = self
+        let tag_name = Self::tag_name(&reason);
+        let haf = self
             .store
             .blobs()
             .add_bytes(ciphertext)
+            .with_named_tag(tag_name.as_bytes())
             .await
             .map_err(|e| BlobError::Internal(e.to_string()))?;
         info!(
             bytes,
             add_bytes_ms = started.elapsed().as_millis() as u64,
-            blob_hash = %hex_prefix(tag.hash.as_bytes()),
+            blob_hash = %hex_prefix(haf.hash.as_bytes()),
+            tag = %tag_name,
             "iroh blob publish: add_bytes completed"
         );
-        Ok(Self::core_digest(tag.hash))
+        Ok(Self::core_digest(haf.hash))
     }
 
     #[instrument(skip_all, fields(path = %path.display()))]
-    async fn publish_path(&self, path: &std::path::Path) -> Result<BlobDigest, BlobError> {
+    async fn publish_path(
+        &self,
+        path: &std::path::Path,
+        reason: TagReason,
+    ) -> Result<BlobDigest, BlobError> {
         // GH#487 P1 streaming publish:走 iroh-blobs 的 add_path 入口,增量算
         // BAO outboard,整段过程内存峰值受 iroh chunk size 主导,与文件大小
         // 无关。旧路径(`tokio::fs::read → Bytes → add_bytes`)在 1GB 文件上
@@ -207,9 +246,12 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
         // use)—— 覆盖了"不小心拖去回收站"这一最常见误操作。其他场景接受
         // 失败、由用户重新复制(对端报错而 sender 这一侧不感知,fallback
         // 到 Copy 重 import 的反向通知链路超出本次 step 范围)。
+        // Phase F: 与 `publish` 同理,改走 `with_named_tag`,避免 add_path
+        // 的 `IntoFuture` 默认 `with_tag` 路径产生孤儿 auto-tag。
         let started = Instant::now();
         let mode = preferred_import_mode();
-        let tag_info = self
+        let tag_name = Self::tag_name(&reason);
+        let haf = self
             .store
             .blobs()
             .add_path_with_opts(AddPathOptions {
@@ -217,15 +259,17 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
                 format: BlobFormat::Raw,
                 mode,
             })
+            .with_named_tag(tag_name.as_bytes())
             .await
             .map_err(|e| BlobError::Internal(e.to_string()))?;
         info!(
             add_path_ms = started.elapsed().as_millis() as u64,
             mode = ?mode,
-            blob_hash = %hex_prefix(tag_info.hash.as_bytes()),
+            blob_hash = %hex_prefix(haf.hash.as_bytes()),
+            tag = %tag_name,
             "iroh blob publish: add_path completed (streaming)"
         );
-        Ok(Self::core_digest(tag_info.hash))
+        Ok(Self::core_digest(haf.hash))
     }
 
     #[instrument(skip_all)]
@@ -249,6 +293,22 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
         progress: Option<&dyn BlobProgressSink>,
     ) -> Result<Bytes, BlobError> {
         let native = Self::parse_ticket(ticket)?;
+        // GC race window protection: hold a TempTag for the whole fetch
+        // method. iroh-blobs `Downloader::download(...).stream()` does not
+        // attach any protection to the freshly downloaded blob
+        // (`api/downloader.rs`, 0.100), so a concurrent GC sweep between
+        // download completion and the caller's `BlobTransferPort::tag(...)`
+        // call could reclaim the blob. Keeping `_temp_tag` alive through
+        // both `ensure_blob_in_store` and `get_bytes` closes the in-method
+        // window; the remaining microsecond window between this method
+        // returning and the use case's permanent `tag(...)` call is
+        // dominated by the GC interval (1h) and is theoretical only.
+        let _temp_tag = self
+            .store
+            .tags()
+            .temp_tag(HashAndFormat::raw(native.hash()))
+            .await
+            .map_err(|e| BlobError::Internal(format!("temp_tag for fetch: {e}")))?;
         self.ensure_blob_in_store(&native, progress).await?;
         self.store
             .blobs()
@@ -288,6 +348,17 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
         let native = Self::parse_ticket(ticket)?;
         let digest = Self::core_digest(native.hash());
         let hash_prefix = hex_prefix(native.hash().as_bytes());
+
+        // GC race window protection — see `fetch` for the full rationale.
+        // Keeping `_temp_tag` alive through both `ensure_blob_in_store` and
+        // `export_with_opts` covers the in-method window; the caller's
+        // subsequent permanent `tag(...)` call closes it definitively.
+        let _temp_tag = self
+            .store
+            .tags()
+            .temp_tag(HashAndFormat::raw(native.hash()))
+            .await
+            .map_err(|e| BlobError::Internal(format!("temp_tag for fetch_to_path: {e}")))?;
 
         self.ensure_blob_in_store(&native, progress).await?;
 
@@ -337,7 +408,7 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
     }
 
     #[instrument(skip_all)]
-    async fn untag(&self, _digest: &BlobDigest, reason: TagReason) -> Result<(), BlobError> {
+    async fn untag(&self, reason: TagReason) -> Result<(), BlobError> {
         let name = Self::tag_name(&reason);
         let removed = self
             .store
@@ -687,13 +758,27 @@ mod tests {
         BlobDigest::from_bytes([0x7f; 32])
     }
 
+    /// Phase F 之后 `publish` / `publish_path` 都强制要求 caller 传一个
+    /// `TagReason`(原子打 named tag,避免 auto-tag leak)。绝大多数测试只
+    /// 关心 publish 自身的语义,不在意打到哪个 reason 上,所以用一个针对
+    /// 测试名字的固定 EntryId 即可。同一测试内多次 publish 会共用一个
+    /// reason,语义上等价于"同一个业务实体反复刷新到同一个 hash",对测试
+    /// 断言无影响。
+    fn dummy_reason(name: &str) -> TagReason {
+        TagReason::ClipboardEntry(EntryId::from_str(name))
+    }
+
     #[tokio::test]
     async fn publish_same_bytes_returns_stable_digest() -> anyhow::Result<()> {
         let fixture = Fixture::bind().await?;
         let payload = Bytes::from_static(b"slice3-t4-stable");
+        let reason = dummy_reason("publish-stable");
 
-        let first = fixture.adapter.publish(payload.clone()).await?;
-        let second = fixture.adapter.publish(payload).await?;
+        let first = fixture
+            .adapter
+            .publish(payload.clone(), reason.clone())
+            .await?;
+        let second = fixture.adapter.publish(payload, reason).await?;
 
         assert_eq!(first, second);
         fixture.shutdown().await?;
@@ -711,7 +796,10 @@ mod tests {
         let payload = b"gh-487-fetch-to-path-local-hit".to_vec();
         let digest = fixture
             .adapter
-            .publish(Bytes::from(payload.clone()))
+            .publish(
+                Bytes::from(payload.clone()),
+                dummy_reason("fetch-local-hit"),
+            )
             .await?;
         let ticket = fixture.adapter.issue_ticket(&digest).await?;
 
@@ -743,7 +831,7 @@ mod tests {
         let payload = vec![0x5au8; 64 * 1024];
         let digest = fixture
             .adapter
-            .publish(Bytes::from(payload.clone()))
+            .publish(Bytes::from(payload.clone()), dummy_reason("fetch-try-ref"))
             .await?;
         let ticket = fixture.adapter.issue_ticket(&digest).await?;
 
@@ -775,7 +863,10 @@ mod tests {
         let payload = vec![0xa5u8; 64 * 1024];
         let digest = fixture
             .adapter
-            .publish(Bytes::from(payload.clone()))
+            .publish(
+                Bytes::from(payload.clone()),
+                dummy_reason("fetch-after-export"),
+            )
             .await?;
         let ticket = fixture.adapter.issue_ticket(&digest).await?;
 
@@ -800,7 +891,7 @@ mod tests {
         // blobs to a ClipboardEntry and clean up on entry deletion.
         let reason = TagReason::ClipboardEntry(EntryId::from_str("entry-after-export"));
         fixture.adapter.tag(&digest, reason.clone()).await?;
-        fixture.adapter.untag(&digest, reason).await?;
+        fixture.adapter.untag(reason).await?;
 
         fixture.shutdown().await?;
         Ok(())
@@ -820,9 +911,15 @@ mod tests {
 
         let bytes_digest = fixture
             .adapter
-            .publish(Bytes::from(payload.clone()))
+            .publish(
+                Bytes::from(payload.clone()),
+                dummy_reason("publish-eq-bytes"),
+            )
             .await?;
-        let path_digest = fixture.adapter.publish_path(&path).await?;
+        let path_digest = fixture
+            .adapter
+            .publish_path(&path, dummy_reason("publish-eq-path"))
+            .await?;
 
         assert_eq!(bytes_digest, path_digest);
         fixture.shutdown().await?;
@@ -933,7 +1030,10 @@ mod tests {
 
         let digest = fixture
             .adapter
-            .publish(Bytes::from_static(b"slice3-t4-has"))
+            .publish(
+                Bytes::from_static(b"slice3-t4-has"),
+                dummy_reason("has-test"),
+            )
             .await?;
 
         assert!(fixture.adapter.has(&digest).await?);
@@ -948,7 +1048,10 @@ mod tests {
         fixture.wait_for_direct_addr().await?;
         let digest = fixture
             .adapter
-            .publish(Bytes::from_static(b"slice3-t4-ticket"))
+            .publish(
+                Bytes::from_static(b"slice3-t4-ticket"),
+                dummy_reason("ticket-roundtrip"),
+            )
             .await?;
 
         let ticket = fixture.adapter.issue_ticket(&digest).await?;
@@ -997,7 +1100,10 @@ mod tests {
         let fixture = Fixture::bind().await?;
         fixture.wait_for_direct_addr().await?;
         let payload = Bytes::from_static(b"slice3-t5-self-fetch");
-        let digest = fixture.adapter.publish(payload.clone()).await?;
+        let digest = fixture
+            .adapter
+            .publish(payload.clone(), dummy_reason("self-fetch"))
+            .await?;
         let ticket = fixture.adapter.issue_ticket(&digest).await?;
 
         let fetched = fixture.adapter.fetch(&ticket, None).await?;
@@ -1014,7 +1120,10 @@ mod tests {
         provider.wait_for_direct_addr().await?;
         receiver.wait_for_direct_addr().await?;
         let payload = Bytes::from_static(b"slice3-t5-remote-fetch");
-        let digest = provider.adapter.publish(payload.clone()).await?;
+        let digest = provider
+            .adapter
+            .publish(payload.clone(), dummy_reason("remote-fetch"))
+            .await?;
         let ticket = provider.adapter.issue_ticket(&digest).await?;
 
         let fetched = receiver.adapter.fetch(&ticket, None).await?;
@@ -1028,15 +1137,21 @@ mod tests {
     #[tokio::test]
     async fn tag_then_untag_is_idempotent() -> anyhow::Result<()> {
         let fixture = Fixture::bind().await?;
+        // Phase F 之后 publish 自带 named tag,这里再调一次 tag(reason) 是
+        // "已存在同名 tag 上 set 同一个 hash",iroh-blobs 视为 overwrite,所以
+        // tag/untag 的幂等契约依然成立 —— 这正是这个测试要锁定的语义。
         let digest = fixture
             .adapter
-            .publish(Bytes::from_static(b"slice3-t6-tag"))
+            .publish(
+                Bytes::from_static(b"slice3-t6-tag"),
+                dummy_reason("tag-publish"),
+            )
             .await?;
         let reason = TagReason::ClipboardEntry(EntryId::from_str("entry-a"));
 
         fixture.adapter.tag(&digest, reason.clone()).await?;
-        fixture.adapter.untag(&digest, reason.clone()).await?;
-        fixture.adapter.untag(&digest, reason).await?;
+        fixture.adapter.untag(reason.clone()).await?;
+        fixture.adapter.untag(reason).await?;
 
         fixture.shutdown().await?;
         Ok(())
@@ -1047,14 +1162,17 @@ mod tests {
         let fixture = Fixture::bind().await?;
         let digest = fixture
             .adapter
-            .publish(Bytes::from_static(b"slice3-t6-multi-tag"))
+            .publish(
+                Bytes::from_static(b"slice3-t6-multi-tag"),
+                dummy_reason("multi-tag-publish"),
+            )
             .await?;
         let first = TagReason::ClipboardEntry(EntryId::from_str("entry-a"));
         let second = TagReason::ClipboardEntry(EntryId::from_str("entry-b"));
 
         fixture.adapter.tag(&digest, first.clone()).await?;
         fixture.adapter.tag(&digest, second.clone()).await?;
-        fixture.adapter.untag(&digest, first.clone()).await?;
+        fixture.adapter.untag(first.clone()).await?;
 
         let second_tag = IrohBlobTransferAdapter::tag_name(&second);
         assert!(fixture
@@ -1064,7 +1182,74 @@ mod tests {
             .await?
             .is_some());
 
-        fixture.adapter.untag(&digest, second).await?;
+        fixture.adapter.untag(second).await?;
+        fixture.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn untag_keeps_blob_observable_for_subsequent_local_fetch() -> anyhow::Result<()> {
+        // Phase B 方案 X 的端到端回归。原 panic
+        // (`Poisoned storage should not be used` from `bao_file.rs:410`)
+        // 触发条件是 iroh-blobs metadata 还在、物理 data 文件被外部
+        // unlink —— 旧版 `delete_entry` 走的正是这条路径(直接 remove_file
+        // cache 而 metadata 留在 redb)。后续的 ObserveRequest 一进
+        // BaoFileStorage 就把 entry 标 Poisoned,任何对该 hash 的操作
+        // 都 panic。
+        //
+        // 修复后 `delete_entry` 改走 untag,不主动 unlink cache、不主动
+        // 删 metadata,GC 在 1h 内一致地回收 metadata + data。这个测试
+        // 复现"用户删 entry 后立即点旧历史"的场景:
+        //   1. publish + tag (业务侧持有声明)
+        //   2. untag (模拟 DeleteClipboardEntryUseCase)
+        //   3. has + issue_ticket + fetch_to_path (GUI 立即点旧历史)
+        //
+        // fetch_to_path 内部读 bao outboard,是原 panic 真正触发的代码
+        // 路径 —— 跑通即证明我们没有把 store 弄成 Poisoned 状态。
+        //
+        // 64 KiB 大于 iroh-blobs 默认 16 KiB inline 阈值,确保实际写出
+        // owned data 文件而非 inline,触达 bao_file 路径(否则小 payload
+        // 会走 inline 短路,绕过 panic 触发点,失去回归意义)。
+        let fixture = Fixture::bind().await?;
+        fixture.wait_for_direct_addr().await?;
+        let payload = vec![0xefu8; 64 * 1024];
+        let reason = TagReason::ClipboardEntry(EntryId::from_str("entry-deleted"));
+        // Phase F: publish 已原子打业务 tag,无需再单独 tag()。这同时是
+        // Phase F 后语义对齐的关键 —— 1h GC interval 内 untag 后 store 立即
+        // **完全无 tag 保护**(没有 auto-tag 兜底了),仍要求 has /
+        // issue_ticket / fetch_to_path 在内存路径(尚未触发 GC)上不进入
+        // Poisoned 状态。如果未来有人在 publish/untag 路径里偷偷物理 unlink
+        // data 文件,这个测试同样会抓到。
+        let digest = fixture
+            .adapter
+            .publish(Bytes::from(payload.clone()), reason.clone())
+            .await?;
+
+        // 模拟 DeleteClipboardEntryUseCase:只释放业务声明,不动 store。
+        fixture.adapter.untag(reason).await?;
+
+        // GUI 立即重新点旧历史 —— 关键回归点。
+        assert!(
+            fixture.adapter.has(&digest).await?,
+            "untag must not remove metadata: blob should still be observable"
+        );
+        let ticket = fixture.adapter.issue_ticket(&digest).await?;
+
+        // local-hit fetch_to_path 走完整的 bao outboard 读取路径,
+        // 是原 panic 真正触发的代码点。
+        let dir = tempdir()?;
+        let target = dir.path().join("after_untag.bin");
+        let returned = fixture
+            .adapter
+            .fetch_to_path(&ticket, &target, None)
+            .await?;
+        assert_eq!(returned, digest);
+        let written = std::fs::read(&target)?;
+        assert_eq!(
+            written, payload,
+            "fetched bytes must match the original payload"
+        );
+
         fixture.shutdown().await?;
         Ok(())
     }

@@ -27,7 +27,7 @@ use iroh::endpoint::{presets, QuicTransportConfig, VarInt};
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode, TransportAddr};
 use noq_proto::congestion::BbrConfig;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use uc_core::file_transfer::OutboundProgressReporterPort;
 use uc_core::membership::MemberRepositoryPort;
@@ -583,9 +583,62 @@ impl IrohNodeBuilder {
         &mut self,
         store_dir: PathBuf,
     ) -> Result<BlobHandlers, IrohNodeError> {
-        let store = iroh_blobs::store::fs::FsStore::load(&store_dir)
+        // Phase D1: enable iroh-blobs internal GC at fixed interval.
+        // `FsStore::load_with_opts` is the only public entry that can
+        // wire `GcConfig` — `gc::run_gc` / `gc_run_once` themselves are
+        // crate-private in iroh-blobs 0.100. The store internally
+        // `tokio::spawn`s `run_gc(store, config)` once at load time;
+        // the loop lives until the store actor exits (i.e. effectively
+        // the daemon's lifetime).
+        //
+        // `load_with_opts` 的第一个参数是 redb 数据库**文件**路径,不是 root
+        // 目录。`Options::new(root)` 才接 root,内部派生出 `root/data`、
+        // `root/temp`。直接传 `store_dir` 当 db_path 会让 redb 去把已经被
+        // `Options::new` 当作 root 的目录当文件打开,actor 启动会卡死(macOS
+        // 上 redb 在目录上的文件锁不会立即返回错误)。和 `FsStore::load`
+        // 内部一样用 `root/blobs.db` 作为 db 文件路径。
+        let mut options = iroh_blobs::store::fs::options::Options::new(&store_dir);
+        options.gc = Some(iroh_blobs::store::GcConfig {
+            interval: crate::network::iroh::blobs::BLOBS_GC_INTERVAL,
+            add_protected: None,
+        });
+        let db_path = store_dir.join("blobs.db");
+        let store = iroh_blobs::store::fs::FsStore::load_with_opts(db_path, options)
             .await
             .map_err(|err| IrohNodeError::BlobStoreInit(err.to_string()))?;
+
+        // Phase E1 (transitional): sweep `auto-*` tags left behind by
+        // pre-Phase-F daemons.
+        //
+        // iroh-blobs `AddProgress::with_tag` (the `IntoFuture` default for
+        // `add_bytes` / `add_path_with_opts`) used to mint a persistent
+        // `auto-<timestamp>` tag protecting every newly-published blob
+        // from GC. Phase F (`IrohBlobTransferAdapter::publish*`) routes
+        // through `with_named_tag` instead, so freshly written blobs no
+        // longer carry an auto-tag. But upgrades from older builds inherit
+        // the leftover auto-tags, and those still pin every old blob
+        // against the Phase D1 GC even after the user deletes the owning
+        // entry — sweeping them once at startup is what lets cache reclaim
+        // recover for upgraded users.
+        //
+        // Sweeping is safe because no `add_*` request can land between
+        // `FsStore::load_with_opts` returning and us re-acquiring the
+        // router (single-threaded init). Phase F also means future
+        // publishes never re-create an auto-tag, so post-upgrade this
+        // sweep becomes a near-no-op (delete-prefix on an empty range);
+        // we keep it for one or two release cycles to cover stragglers
+        // and then can drop the call entirely.
+        match store.tags().delete_prefix(b"auto-").await {
+            Ok(removed) => {
+                if removed > 0 {
+                    info!(removed, "iroh blobs: swept stale auto-* tags");
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "iroh blobs: failed to sweep stale auto-* tags (non-fatal)");
+            }
+        }
+
         let protocol = iroh_blobs::BlobsProtocol::new(&store, None);
 
         let builder = self
@@ -604,6 +657,7 @@ impl IrohNodeBuilder {
             store_dir = %store_dir.display(),
             alpn = %String::from_utf8_lossy(BLOBS_ALPN),
             endpoint_id = %self.endpoint.id().fmt_short(),
+            gc_interval_secs = crate::network::iroh::blobs::BLOBS_GC_INTERVAL.as_secs(),
             "iroh blobs acceptor installed"
         );
 
@@ -928,7 +982,12 @@ mod tests {
             .expect("install blobs");
 
         let digest = blob_transfer
-            .publish(bytes::Bytes::from_static(b"router-four-alpns"))
+            .publish(
+                bytes::Bytes::from_static(b"router-four-alpns"),
+                uc_core::ports::blob::TagReason::ClipboardEntry(uc_core::ids::EntryId::from_str(
+                    "router-blob-test",
+                )),
+            )
             .await
             .expect("publish through blob port");
         assert!(blob_transfer.has(&digest).await.expect("has digest"));
