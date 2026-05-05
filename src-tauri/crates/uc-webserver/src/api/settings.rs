@@ -72,17 +72,30 @@ async fn update_settings_handler(
 ) -> Result<Json<UpdateSettingsResponse>, ApiError> {
     let app = state.app_facade_or_error()?;
 
-    // D-D1：patch 中 `network` 段非空（任何字段变更）时 restart_required = true。
+    // D-D1：`network` 段非空（任何字段变更）触发 restart_required = true。
     // 当前 NetworkSettings 仅含 allow_relay_fallback；后续若加字段，仍走 is_some()
     // 兜底。其它字段（general / sync 等）不影响该信号 — 它们不需要重启。
+    //
+    // `general.telemetry_enabled` 历史曾通过这里触发 restart（260505-17q），后于
+    // 260505-1np 改成运行时 gate（见 uc-observability::set_telemetry_enabled），
+    // 不再需要重启 — 下面在 facade 写盘成功后直接把新值推进 atomic 即可立即生效。
     // Pitfall 3 防御：调用方（前端 Phase 95）必须显式承担"还没真正生效"。
     let restart_required = payload.network.is_some();
+
+    // 取出可能存在的 telemetry 新值，再传 patch 给 facade 写盘 — 写盘成功后再
+    // 把 atomic 推进新值，保证持久化与运行时状态保持单调一致（如果写盘失败，
+    // 也不会污染运行时 gate）。
+    let telemetry_update = payload.general.as_ref().and_then(|g| g.telemetry_enabled);
 
     let updated = app
         .settings
         .update(settings_patch_from_dto(payload))
         .await
         .map_err(settings_error_to_api)?;
+
+    if let Some(enabled) = telemetry_update {
+        uc_observability::set_telemetry_enabled(enabled);
+    }
 
     Ok(Json(UpdateSettingsResponse {
         success: true,

@@ -74,14 +74,25 @@ async fn simulate_put(facade: &SettingsFacade, body_json: &str) -> Value {
     // 1. 反序列化 wire body → DTO
     let payload: SettingsPatchDto = serde_json::from_str(body_json).expect("parse PUT body");
 
-    // 2. handler 内联计算 restart_required（Phase 94 plan 04 task 1 改造 — D-D1）
+    // 2. handler 内联计算 restart_required（Phase 94 plan 04 task 1）
+    //    必须与 src/api/settings.rs::update_settings_handler 同源。
+    //    触发条件：任何 network 段变更（D-D1）。
+    //    260505-1np：telemetry_enabled 改成运行时 gate，不再触发重启。
     let restart_required = payload.network.is_some();
 
-    // 3. DTO → View patch → SettingsFacade::update → View
+    // 3. handler 在 facade 写盘成功后会把新 telemetry 值推进
+    //    `uc_observability::set_telemetry_enabled` atomic — 这里复刻同一行为。
+    let telemetry_update = payload.general.as_ref().and_then(|g| g.telemetry_enabled);
+
+    // 4. DTO → View patch → SettingsFacade::update → View
     let view = facade
         .update(settings_patch_from_dto(payload))
         .await
         .expect("settings update");
+
+    if let Some(enabled) = telemetry_update {
+        uc_observability::set_telemetry_enabled(enabled);
+    }
 
     // 4. View → DTO，组装 UpdateSettingsResponse
     let resp = UpdateSettingsResponse {
@@ -268,4 +279,70 @@ async fn restart_required_truth_table() {
         Value::Bool(false),
         "wire case 5: legacy general-only payload → restartRequired=false"
     );
+}
+
+/// Test 4（260505-1np — telemetry_enabled 走运行时 gate）：
+/// 后端 Sentry / OTLP 现在通过 `uc_observability::is_telemetry_enabled()`
+/// 在 event 时检查 atomic 决定丢弃与否，PUT /settings 不再返回
+/// restart_required。这条用例锁定两件事：
+///   1. 任何 telemetry 变更都不触发 restart（与 17q 行为相反）；
+///   2. handler 写盘成功后把新值推进 `set_telemetry_enabled` atomic，
+///      下次 `is_telemetry_enabled()` 反映该值。
+#[tokio::test]
+async fn telemetry_toggle_runtime_gate_no_restart() {
+    let facade = build_facade();
+
+    // 锚定起点：默认 true。
+    uc_observability::set_telemetry_enabled(true);
+    assert!(uc_observability::is_telemetry_enabled());
+
+    // Case A：telemetryEnabled=false → restartRequired=false + atomic flipped。
+    let off_resp = simulate_put(
+        &facade,
+        &json!({"general": {"telemetryEnabled": false}}).to_string(),
+    )
+    .await;
+    assert_eq!(
+        off_resp["restartRequired"],
+        Value::Bool(false),
+        "telemetry toggle must NOT signal restart (260505-1np runtime gate)"
+    );
+    assert_eq!(
+        off_resp["data"]["general"]["telemetryEnabled"],
+        Value::Bool(false),
+        "PUT response must reflect written telemetry value"
+    );
+    assert!(
+        !uc_observability::is_telemetry_enabled(),
+        "handler must push new telemetry value into the runtime gate atomic"
+    );
+
+    // Case B：telemetryEnabled=true → atomic flips back, still no restart.
+    let on_resp = simulate_put(
+        &facade,
+        &json!({"general": {"telemetryEnabled": true}}).to_string(),
+    )
+    .await;
+    assert_eq!(on_resp["restartRequired"], Value::Bool(false));
+    assert!(
+        uc_observability::is_telemetry_enabled(),
+        "re-enable path must flip atomic back to true"
+    );
+
+    // Case C：general 段不带 telemetryEnabled → atomic 不被触碰
+    // 防御 `payload.general.is_some()` 误用。
+    uc_observability::set_telemetry_enabled(false);
+    let unrelated_resp = simulate_put(
+        &facade,
+        &json!({"general": {"deviceName": "ws-1"}}).to_string(),
+    )
+    .await;
+    assert_eq!(unrelated_resp["restartRequired"], Value::Bool(false));
+    assert!(
+        !uc_observability::is_telemetry_enabled(),
+        "patches without telemetry_enabled must leave the atomic untouched"
+    );
+
+    // 收尾恢复默认值，避免污染同进程其它测试。
+    uc_observability::set_telemetry_enabled(true);
 }

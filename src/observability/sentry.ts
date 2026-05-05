@@ -12,6 +12,21 @@ import { redactSensitiveArgs } from '@/observability/redaction'
 
 const sentryEnabled = Boolean(import.meta.env.VITE_SENTRY_DSN)
 
+/**
+ * 运行时遥测开关，镜像 `general.telemetryEnabled`。
+ *
+ * 默认 `false`，避免设置加载完成前的事件在尚未确认用户持久化偏好时离开进程。
+ * SettingContext 会在 daemon 返回设置后立即把它切到持久化值，之后每次更新也会同步。
+ *
+ * 后端等价开关在 `uc_observability::telemetry_gate`，前端用下面的 beforeSend
+ * 系列 hook 做运行时过滤。
+ */
+let sentryRuntimeEnabled = false
+
+export function setFrontendSentryEnabled(enabled: boolean): void {
+  sentryRuntimeEnabled = enabled
+}
+
 const getTauriPlatform = (): string => {
   if (typeof window === 'undefined' || !('__TAURI__' in window)) {
     return 'unknown'
@@ -30,6 +45,9 @@ export function initSentry(): void {
   }
 
   const beforeSend: (event: ErrorEvent, hint: EventHint) => ErrorEvent | null = (event, _hint) => {
+    if (!sentryRuntimeEnabled) {
+      return null
+    }
     const type = event.exception?.values?.[0]?.type
     if (type === 'ResizeObserver loop limit exceeded') {
       return null
@@ -41,6 +59,9 @@ export function initSentry(): void {
   }
 
   const beforeBreadcrumb = (breadcrumb: Sentry.Breadcrumb): Sentry.Breadcrumb | null => {
+    if (!sentryRuntimeEnabled) {
+      return null
+    }
     if (breadcrumb.data) {
       breadcrumb.data = redactSensitiveArgs(breadcrumb.data) as Record<string, unknown>
     }
@@ -71,6 +92,9 @@ export function initSentry(): void {
     beforeSend,
     beforeBreadcrumb,
     beforeSendLog: log => {
+      if (!sentryRuntimeEnabled) {
+        return null
+      }
       if (log.attributes) {
         log.attributes = redactSensitiveArgs(log.attributes) as Record<string, unknown>
       }
