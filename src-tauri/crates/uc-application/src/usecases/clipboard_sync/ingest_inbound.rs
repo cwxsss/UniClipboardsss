@@ -34,6 +34,10 @@ use tracing::{debug, info, instrument, warn};
 use uc_core::ids::DeviceId;
 use uc_core::ports::security::TransferCipherPort;
 use uc_core::ports::{ClipboardReceiverPort, ClockPort};
+use uc_core::MemberRepositoryPort;
+
+use super::payload_codec::decode_v3_bytes_to_snapshot;
+use uc_core::clipboard::ClipboardContentCategorySet;
 
 /// Application-layer view of one decrypted inbound clipboard payload.
 #[derive(Debug, Clone)]
@@ -59,6 +63,7 @@ const NOTICE_CHANNEL_CAPACITY: usize = 64;
 
 pub(crate) struct IngestInboundClipboardUseCase {
     receiver: Arc<dyn ClipboardReceiverPort>,
+    member_repo: Arc<dyn MemberRepositoryPort>,
     transfer_cipher: Arc<dyn TransferCipherPort>,
     notices_tx: broadcast::Sender<InboundClipboardNotice>,
     clock: Arc<dyn ClockPort>,
@@ -86,12 +91,14 @@ impl Drop for IngestSpawnHandle {
 impl IngestInboundClipboardUseCase {
     pub(crate) fn new(
         receiver: Arc<dyn ClipboardReceiverPort>,
+        member_repo: Arc<dyn MemberRepositoryPort>,
         transfer_cipher: Arc<dyn TransferCipherPort>,
         clock: Arc<dyn ClockPort>,
     ) -> Self {
         let (notices_tx, _) = broadcast::channel(NOTICE_CHANNEL_CAPACITY);
         Self {
             receiver,
+            member_repo,
             transfer_cipher,
             notices_tx,
             clock,
@@ -133,6 +140,11 @@ impl IngestInboundClipboardUseCase {
     }
 
     async fn handle_one(&self, inbound: uc_core::ports::InboundClipboard) {
+        // Stage 1: device-level kill switch (`receive_enabled`). Cheaper
+        // than decrypt + decode, so do this first.
+        if !self.is_receive_allowed(&inbound.peer_device_id).await {
+            return;
+        }
         let plaintext = match self.transfer_cipher.decrypt(&inbound.ciphertext).await {
             Ok(bytes) => Bytes::from(bytes),
             Err(err) => {
@@ -145,6 +157,30 @@ impl IngestInboundClipboardUseCase {
                 return;
             }
         };
+        // Stage 2: content-type filter (`receive_content_types.<category>`).
+        // Categorising requires V3 decode, which is why this runs *after*
+        // decrypt — V3 envelope structure isn't visible in ciphertext.
+        // Decode failures fail open with a WARN; the downstream
+        // `ApplyInboundClipboardUseCase` will surface the same decode
+        // error path, no need to suppress here.
+        let categories = match decode_v3_bytes_to_snapshot(plaintext.as_ref()) {
+            Ok(snap) => ClipboardContentCategorySet::from_snapshot(&snap),
+            Err(err) => {
+                warn!(
+                    peer = %inbound.peer_device_id.as_str(),
+                    content_hash = %inbound.header.content_hash,
+                    error = %err,
+                    "ingest: classify decode failed; failing open"
+                );
+                ClipboardContentCategorySet::empty()
+            }
+        };
+        if !self
+            .is_receive_category_allowed(&inbound.peer_device_id, &categories)
+            .await
+        {
+            return;
+        }
         let notice = InboundClipboardNotice {
             from_device: inbound.peer_device_id.clone(),
             content_hash: inbound.header.content_hash.clone(),
@@ -157,6 +193,73 @@ impl IngestInboundClipboardUseCase {
                 peer = %inbound.peer_device_id.as_str(),
                 "ingest: no notice subscribers; frame dropped"
             );
+        }
+    }
+
+    /// Per-device receive gate (stage 1): returns `true` when the local
+    /// device should accept clipboard frames from `peer`. Reads
+    /// `SpaceMember.sync_preferences.receive_enabled`; fails open on
+    /// lookup error or missing record (mirrors `dispatch_entry`'s gate)
+    /// so a transient repo glitch can't silently kill incoming sync.
+    async fn is_receive_allowed(&self, peer: &DeviceId) -> bool {
+        match self.member_repo.get(peer).await {
+            Ok(Some(member)) => {
+                if !member.sync_preferences.receive_enabled {
+                    info!(
+                        peer = %peer.as_str(),
+                        reason = "receive_disabled_by_user",
+                        "ingest: dropping inbound per per-device sync preferences"
+                    );
+                    return false;
+                }
+                true
+            }
+            Ok(None) => {
+                warn!(
+                    peer = %peer.as_str(),
+                    "ingest: inbound from peer missing in member repo; failing open"
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    peer = %peer.as_str(),
+                    error = %err,
+                    "ingest: member repo lookup failed; failing open"
+                );
+                true
+            }
+        }
+    }
+
+    /// Per-device receive gate (stage 2): content-type filter, AND-of-allowed
+    /// across the snapshot's category set (see `uc-core` `category.rs` module
+    /// doc). An empty set passes (fail open); a non-empty set passes only
+    /// when every category in it is allowed by `receive_content_types`.
+    /// Same fail-open posture as stage 1 on lookup errors.
+    async fn is_receive_category_allowed(
+        &self,
+        peer: &DeviceId,
+        categories: &ClipboardContentCategorySet,
+    ) -> bool {
+        match self.member_repo.get(peer).await {
+            Ok(Some(member)) => {
+                if !categories.allowed_by(&member.sync_preferences.receive_content_types) {
+                    info!(
+                        peer = %peer.as_str(),
+                        categories = %categories.labels(),
+                        denied = %categories
+                            .denied_labels(&member.sync_preferences.receive_content_types),
+                        reason = "content_type_disabled_by_user",
+                        "ingest: dropping inbound per per-device content_types filter"
+                    );
+                    return false;
+                }
+                true
+            }
+            // Stage 1 already logged on these branches; stay quiet to
+            // avoid log spam, but still fail open.
+            Ok(None) | Err(_) => true,
         }
     }
 }
@@ -187,6 +290,8 @@ mod tests {
 
     use uc_core::ports::security::{TransferCipherError, TransferCipherPort};
     use uc_core::ports::{ClipboardHeader, ClockPort, InboundClipboard};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::{MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember};
 
     // ── hand-written fake: ClipboardReceiverPort ────────────────────────
     //
@@ -230,6 +335,23 @@ mod tests {
         }
     }
 
+    // ── mockall: MemberRepositoryPort ───────────────────────────────────
+
+    mockall::mock! {
+        pub MemberRepo {}
+
+        #[async_trait]
+        impl MemberRepositoryPort for MemberRepo {
+            async fn get(
+                &self,
+                device_id: &DeviceId,
+            ) -> Result<Option<SpaceMember>, MembershipError>;
+            async fn list(&self) -> Result<Vec<SpaceMember>, MembershipError>;
+            async fn save(&self, member: &SpaceMember) -> Result<(), MembershipError>;
+            async fn remove(&self, device_id: &DeviceId) -> Result<bool, MembershipError>;
+        }
+    }
+
     // ── trivial: ClockPort ──────────────────────────────────────────────
 
     struct FixedClock(i64);
@@ -237,6 +359,27 @@ mod tests {
         fn now_ms(&self) -> i64 {
             self.0
         }
+    }
+
+    fn fp() -> IdentityFingerprint {
+        IdentityFingerprint::from_raw_string("AAAABBBBCCCCDDDD").expect("valid fingerprint")
+    }
+
+    /// `MemberRepo` mock that returns a default-allowed `SpaceMember` for
+    /// every device. Existing verdicts predate per-device receive gating
+    /// and should still observe the same forwarding behaviour.
+    fn make_member_repo_all_enabled() -> MockMemberRepo {
+        let mut m = MockMemberRepo::new();
+        m.expect_get().returning(|did| {
+            Ok(Some(SpaceMember {
+                device_id: did.clone(),
+                device_name: format!("Test {}", did.as_str()),
+                identity_fingerprint: fp(),
+                joined_at: chrono::Utc::now(),
+                sync_preferences: MemberSyncPreferences::default(),
+            }))
+        });
+        m
     }
 
     fn inbound_fixture(peer: &str, content_hash: &str, ciphertext: Bytes) -> InboundClipboard {
@@ -275,6 +418,7 @@ mod tests {
 
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
+            Arc::new(make_member_repo_all_enabled()),
             Arc::new(cipher),
             Arc::new(FixedClock(42)),
         ));
@@ -314,6 +458,7 @@ mod tests {
 
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
+            Arc::new(make_member_repo_all_enabled()),
             Arc::new(cipher),
             Arc::new(FixedClock(0)),
         ));
@@ -346,6 +491,7 @@ mod tests {
 
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
+            Arc::new(make_member_repo_all_enabled()),
             Arc::new(cipher),
             Arc::new(FixedClock(100)),
         ));
@@ -394,6 +540,7 @@ mod tests {
 
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
+            Arc::new(make_member_repo_all_enabled()),
             Arc::new(cipher),
             Arc::new(FixedClock(0)),
         ));
@@ -427,6 +574,155 @@ mod tests {
         assert!(
             fast_poll.is_err(),
             "loop must be stopped after handle.abort()"
+        );
+    }
+
+    /// 5. Per-device receive gate — peer's `receive_enabled=false` causes
+    /// the inbound to be dropped before decryption. mockall enforces "no
+    /// decrypt ever" by registering zero `expect_decrypt` calls; a slipped
+    /// call would panic. Notice broadcast must stay silent.
+    #[tokio::test]
+    async fn receive_disabled_peer_is_dropped_before_decrypt() {
+        let receiver = Arc::new(FakeReceiver::new());
+
+        // member_repo says receive_enabled=false for peer-mute.
+        let mut member_repo = MockMemberRepo::new();
+        member_repo
+            .expect_get()
+            .returning(|did| match did.as_str() {
+                "peer-mute" => {
+                    let mut prefs = MemberSyncPreferences::default();
+                    prefs.receive_enabled = false;
+                    Ok(Some(SpaceMember {
+                        device_id: did.clone(),
+                        device_name: "Peer Mute".to_string(),
+                        identity_fingerprint: fp(),
+                        joined_at: chrono::Utc::now(),
+                        sync_preferences: prefs,
+                    }))
+                }
+                _ => Ok(Some(SpaceMember {
+                    device_id: did.clone(),
+                    device_name: format!("Test {}", did.as_str()),
+                    identity_fingerprint: fp(),
+                    joined_at: chrono::Utc::now(),
+                    sync_preferences: MemberSyncPreferences::default(),
+                })),
+            });
+
+        // Zero decrypt expectations — gate must short-circuit before the
+        // cipher port is reached.
+        let cipher = MockCipher::new();
+
+        let uc = Arc::new(IngestInboundClipboardUseCase::new(
+            receiver.clone(),
+            Arc::new(member_repo),
+            Arc::new(cipher),
+            Arc::new(FixedClock(0)),
+        ));
+        let mut notice_rx = uc.subscribe_notices();
+        let _handle = Arc::clone(&uc).spawn_run();
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        receiver.publish(inbound_fixture(
+            "peer-mute",
+            "0".repeat(64).as_str(),
+            Bytes::from_static(b"will-not-be-decrypted"),
+        ));
+
+        let fast_poll = tokio::time::timeout(Duration::from_millis(200), notice_rx.recv()).await;
+        assert!(
+            fast_poll.is_err(),
+            "receive-disabled peer must not produce any notice"
+        );
+    }
+
+    /// 6. Per-device content-type receive gate — peer's
+    /// `receive_content_types.text=false` causes a Text-classified frame
+    /// to be dropped *after* decrypt (the snapshot only becomes
+    /// classifiable post-decrypt). mockall asserts decrypt fires exactly
+    /// once; the notice broadcast stays silent.
+    #[tokio::test]
+    async fn receive_content_types_text_disabled_drops_inbound_after_decrypt() {
+        use uc_core::clipboard::{
+            MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
+        };
+        use uc_core::ids::{FormatId, RepresentationId};
+        use uc_core::settings::model::ContentTypes;
+
+        // Build a V3 envelope (text/plain) so classify_snapshot returns Text.
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("text"),
+                Some(MimeType("text/plain".to_string())),
+                b"hello text".to_vec(),
+            )],
+        };
+        let (envelope_bytes, _hash) =
+            super::super::payload_codec::encode_snapshot_to_v3_bytes(&snapshot)
+                .expect("encode V3 envelope");
+        let envelope_bytes = envelope_bytes.to_vec();
+
+        let receiver = Arc::new(FakeReceiver::new());
+
+        let mut member_repo = MockMemberRepo::new();
+        // Two get() calls per inbound: stage 1 (receive_enabled), stage 2
+        // (receive_content_types). Both return the same record.
+        member_repo.expect_get().returning(|did| {
+            let mut prefs = MemberSyncPreferences::default();
+            let mut ct = ContentTypes::default();
+            ct.text = false;
+            prefs.receive_content_types = ct;
+            Ok(Some(SpaceMember {
+                device_id: did.clone(),
+                device_name: "Peer NoText".to_string(),
+                identity_fingerprint: fp(),
+                joined_at: chrono::Utc::now(),
+                sync_preferences: prefs,
+            }))
+        });
+
+        // Decrypt is reached (stage 1 passes because receive_enabled stays
+        // true). Round-trip the V3 envelope so the post-decrypt classify
+        // resolves to Text.
+        let mut cipher = MockCipher::new();
+        let plaintext_for_cipher = envelope_bytes.clone();
+        cipher
+            .expect_decrypt()
+            .times(1)
+            .returning(move |_| Ok(plaintext_for_cipher.clone()));
+
+        let uc = Arc::new(IngestInboundClipboardUseCase::new(
+            receiver.clone(),
+            Arc::new(member_repo),
+            Arc::new(cipher),
+            Arc::new(FixedClock(0)),
+        ));
+        let mut notice_rx = uc.subscribe_notices();
+        let _handle = Arc::clone(&uc).spawn_run();
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        receiver.publish(InboundClipboard {
+            peer_device_id: DeviceId::new("peer-no-text"),
+            header: ClipboardHeader {
+                version: ClipboardHeader::CURRENT_VERSION,
+                content_hash: "0".repeat(64),
+                captured_at_ms: 1_700_000_000_000,
+                origin_device_id: "peer-no-text".to_string(),
+                origin_device_name: "Peer NoText".to_string(),
+                payload_version: 3,
+            },
+            ciphertext: Bytes::from(envelope_bytes),
+        });
+
+        let fast_poll = tokio::time::timeout(Duration::from_millis(200), notice_rx.recv()).await;
+        assert!(
+            fast_poll.is_err(),
+            "text-muted receive_content_types must drop the frame post-decrypt"
         );
     }
 }
