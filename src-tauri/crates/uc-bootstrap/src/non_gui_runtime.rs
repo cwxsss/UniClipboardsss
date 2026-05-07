@@ -11,18 +11,30 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::deps::AppDeps;
 use uc_application::facade::space_setup::SpaceSetupFacade;
 use uc_application::facade::{
     AppFacade, AppFacadeParts, AppPaths, BlobTransferFacade, ClipboardHistoryFacade,
     ClipboardHistoryFacadeDeps, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps,
     ClipboardSyncFacade, DeviceFacade, EmitError, EncryptionFacade, EncryptionFacadeDeps,
-    HostEvent, HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps,
-    LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps,
-    SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade,
-    StorageFacade, StorageFacadeDeps, UpgradeFacade, UpgradeFacadeDeps,
+    HostEvent, HostEventEmitterPort, InMemoryLifecycleStatus, IncomingMobileBuffer,
+    LifecycleFacade, LifecycleFacadeDeps, LifecycleStatusGateway, MemberRosterFacade,
+    MobileSyncFacade, MobileSyncFacadeDeps, MobileSyncSnapshotPorts, ResourceFacade,
+    ResourceFacadeDeps, SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps,
+    SettingsFacade, StorageFacade, StorageFacadeDeps, UpgradeFacade, UpgradeFacadeDeps,
+};
+use uc_application::{
+    ApplyInboundClipboardUseCase, InboundCapture as ApplyInboundCapture,
+    InboundWrite as ApplyInboundWrite,
 };
 use uc_core::clipboard::ClipboardIntegrationMode;
+use uc_core::SystemClipboardSnapshot;
+use uc_infra::mobile_sync::{
+    Argon2idPasswordHasher, FilesystemMobileFileStaging, NetworkInterfaceLanProbe,
+    OsRngCredentialsMinter,
+};
 
 use crate::assembly::get_storage_paths;
 use crate::space_setup::{build_space_setup_assembly, SpaceSetupAssembly};
@@ -103,6 +115,58 @@ pub struct ClipboardRestoreAssembly {
     pub integration_mode: ClipboardIntegrationMode,
 }
 
+// ── mobile_sync PUT 路径的 fallback adapters ────────────────────────────
+
+/// 当 [`AppFacadeAssemblyOptions::mobile_sync_apply_inbound`] 为 `None` 时
+/// (CLI / tauri 等不接 LAN listener 的入口),用此构造一份 lite
+/// `ApplyInboundClipboardUseCase`:
+///
+/// - **capture**:真 `CaptureClipboardUseCase`。写 entry_repo + event_repo +
+///   spool_queue,与 daemon 装配的 capture 完全等价。让 P5a.9 引入的
+///   `uniclip mobile-sync debug put-*` 子命令真能把数据落库,后续
+///   `debug get-doc` / `debug get-file` 直接读得到 ——"完整链路" 验证不再
+///   是空壳。
+/// - **write**:`NoopInboundWrite`。CLI 进程主动设置
+///   `UC_DISABLE_SYSTEM_CLIPBOARD=1`,本就不接系统剪贴板适配器;OS write
+///   永远是 daemon 的责任。NoOp 在这里返回 `Ok(())`,让 ApplyInbound 的
+///   写回环防御链不报错。
+/// - 不挂 `with_blob_materializer`/`with_host_event_emitter`:debug 路径
+///   不走 P2P / 不发 host event,跳过两组可选装配减少耦合。
+///
+/// daemon 入口仍走自己的 enhanced 装配(`runtime_assembly.rs`),不受影响。
+fn build_fallback_apply_inbound(deps: &AppDeps) -> Arc<ApplyInboundClipboardUseCase> {
+    let capture_uc = Arc::new(CaptureClipboardUseCase::new(
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.clipboard_event_repo.clone(),
+        deps.clipboard.representation_policy.clone(),
+        deps.clipboard.representation_normalizer.clone(),
+        deps.device.device_identity.clone(),
+        deps.clipboard.representation_cache.clone(),
+        deps.clipboard.spool_queue.clone(),
+    ));
+    let capture: Arc<dyn ApplyInboundCapture> = capture_uc;
+    let write: Arc<dyn ApplyInboundWrite> = Arc::new(NoopInboundWrite);
+    Arc::new(ApplyInboundClipboardUseCase::new(
+        deps.clipboard.clipboard_entry_repo.clone(),
+        capture,
+        write,
+    ))
+}
+
+/// `InboundWrite` 的 NoOp 实装。
+///
+/// CLI 与 tauri 入口都不持有系统剪贴板适配器(CLI 显式 disable,tauri 不接
+/// 这条 PUT 路径),OS write 不能也不应该在这里发生 —— 直接返回 `Ok(())`,
+/// 让 ApplyInbound 链路在 daemon 之外仍可正常推进 capture + dedup。
+struct NoopInboundWrite;
+
+#[async_trait]
+impl ApplyInboundWrite for NoopInboundWrite {
+    async fn write(&self, _snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 /// 通用 `AppFacade` 装配选项。
 ///
 /// 不同桌面入口只在这些可选能力上有差异。共同 facade 由
@@ -125,6 +189,18 @@ pub struct AppFacadeAssemblyOptions {
     pub blob_transfer_port: Option<Arc<dyn uc_core::ports::blob::BlobTransferPort>>,
     pub clipboard_restore: Option<ClipboardRestoreAssembly>,
     pub search_coordinator: Option<Arc<SearchCoordinator>>,
+    /// 移动端同步 PUT 路径用的 `ApplyInboundClipboardUseCase` 实例。
+    ///
+    /// daemon 入口在自身装配过程中已经构造一份 enhanced 版本(带
+    /// `with_blob_materializer` + `with_host_event_emitter`),并把同一份
+    /// 实例同时喂给 `MobileSyncFacade`(本字段)与 `InboundClipboardFacade`
+    /// (worker 装配)。GUI 进程内 daemon 也走同一路径。
+    ///
+    /// CLI / tauri 等不接 LAN listener 的入口可以留 `None`,bootstrap 会
+    /// 内置一份 fallback —— 只让 `MobileSyncFacade` 编得过, PUT 路径若
+    /// 真的被调用会以 `Internal("mobile_sync PUT path not configured")`
+    /// 失败,符合"CLI 不开 LAN 监听因此 PUT 永远不会触发"的实际语义。
+    pub mobile_sync_apply_inbound: Option<Arc<ApplyInboundClipboardUseCase>>,
 }
 
 /// 从已注入的 application deps 构造统一业务入口。
@@ -138,6 +214,56 @@ pub fn build_app_facade_from_deps(
     lifecycle_status: Arc<dyn LifecycleStatusGateway>,
     options: AppFacadeAssemblyOptions,
 ) -> Arc<AppFacade> {
+    // Mobile-sync facade 自动装配 —— 与 lifecycle / encryption / settings 同
+    // 待遇，所有桌面入口（daemon / CLI）都自动带上，不需要 caller 传。
+    //
+    // Phase 2 适配器形态：4 个 in-memory + 1 个 OS 真实探测
+    // (`NetworkInterfaceLanProbe`)。`endpoint_info` 这个 adapter 暂时无人写
+    // 入，意味着 `current_lan_endpoint()` 永远返回 `None` —— register flow
+    // 会以 `LanListenerDisabled` 失败。Phase 3 接入 daemon LAN listener
+    // 时把 listener 启停信号反向喂回 `InMemoryMobileSyncEndpointInfoAdapter`
+    // 的 `set` / `clear`，这一处 wiring 即可让 register flow 端到端跑通。
+    // P5a.6:`apply_inbound` 由 daemon 入口装配 enhanced 版本注入(同一份
+    // 实例也共享给 `InboundClipboardFacade`);CLI / tauri 不接 LAN listener
+    // 的入口走下面的 fallback —— 一份 capture+write 都是 NoOp 的 minimal
+    // 实例,PUT 路径若真被调到会立刻 Err。
+    let apply_inbound = options
+        .mobile_sync_apply_inbound
+        .clone()
+        .unwrap_or_else(|| build_fallback_apply_inbound(deps));
+
+    let mobile_sync_facade = Arc::new(MobileSyncFacade::new(MobileSyncFacadeDeps {
+        clock: deps.system.clock.clone(),
+        // v3 SyncClipboard 兼容: 单一 minter 一次性出 (username, password,
+        // password_hash, device_id), Argon2id 作为口令 hash;无状态 ZST,
+        // 装配处直接 new 即可。
+        credentials_minter: Arc::new(OsRngCredentialsMinter),
+        password_hasher: Arc::new(Argon2idPasswordHasher),
+        // Phase 3 子步骤 1:device_repo 走 `DieselMobileDeviceRepository`,
+        // 由 wire_dependencies 在 InfraLayer 装配时构造,跨重启 / 跨进程稳定。
+        device_repo: deps.mobile_sync.device_repo.clone(),
+        // Phase 3 子步骤 3:endpoint_info 也由 wire_dependencies 装配为单例,
+        // daemon LAN listener 启停时通过 WiredDependencies 旁路写它,这里只
+        // 取读端共享 Arc。
+        endpoint_info: deps.mobile_sync.endpoint_info.clone(),
+        lan_interface_probe: Arc::new(NetworkInterfaceLanProbe::new()),
+        settings: deps.settings.clone(),
+        apply_inbound,
+        incoming_buffer: Arc::new(IncomingMobileBuffer::new()),
+        // P5a.3.5:File 类型入站 staging adapter。复用 file_cache_dir 与
+        // P2P 入站 blob materializer 同根,两者写到不同子目录互不干扰
+        // (`mobile_inbound/` vs `iroh-blobs/`)。adapter 启动时异步清空
+        // 上次进程残留,daemon / CLI / tauri 三个入口都共享这套语义。
+        file_staging: FilesystemMobileFileStaging::new(storage_paths.file_cache_dir.clone()),
+        snapshot_ports: MobileSyncSnapshotPorts {
+            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            selection_repo: deps.clipboard.selection_repo.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            payload_resolver: deps.clipboard.payload_resolver.clone(),
+            blob_reader: deps.storage.blob_store.clone(),
+        },
+    }));
+
     let clipboard_restore = options.clipboard_restore.map(|restore| {
         Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
             entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
@@ -206,6 +332,7 @@ pub fn build_app_facade_from_deps(
             app_version_state: deps.app_version_state.clone(),
             setup_status: deps.setup_status.clone(),
         })),
+        mobile_sync: Some(mobile_sync_facade),
     }))
 }
 

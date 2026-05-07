@@ -225,6 +225,75 @@ fn default_allow_overlay_network_addrs() -> bool {
     false
 }
 
+// ======================================================================
+// MobileSyncSettings —— 移动端同步（v1：iOS Shortcut）的总开关。
+//
+// 字段刻意从一个 `enabled` 起步：v1 SPEC 要求 listen_port / bind_address
+// 由 daemon 端常量 + profile offset 自动推导，不暴露给用户配置；
+// install_method 是 register flow 的一次性选择而非持久化偏好。这里只
+// 持久化"用户是否打开移动端同步监听"这一项，其余调用所需信息（当前
+// LAN URL、可用 install_method）由 application 层 use case 在 view 中
+// 实时拼装。
+//
+// 修改 enabled 后需要重启 daemon 才会生效（v1 不做热重载，详见
+// `.context/mobile-sync/SPEC.md` §5）。
+// ======================================================================
+
+/// 移动端同步功能的设置族。
+///
+/// v3 SyncClipboard 兼容版(SPEC §14.10)按"功能开关 + 广告 URL 细节"两层
+/// 拆分。daemon socket bind 行为是常量推导:`enabled && lan_listen_enabled`
+/// 时 bind `0.0.0.0:lan_port`,否则不起 listener。
+///
+/// * `enabled` —— 总开关。关闭时 daemon 完全不起 LAN listener,即使
+///   `lan_listen_enabled=true` 也无效。
+/// * `lan_listen_enabled` —— LAN listener 子开关。仅在 `enabled=true` 时
+///   生效。让用户能在不撤销已登记设备的情况下临时停用 listener
+///   (例如出差换不可信网络时)。
+/// * `lan_advertise_ip` —— 用户选定的、要写进 SyncClipboard install URL /
+///   二维码的 IPv4 字符串(`192.168.1.5` 这类)。仅决定 iPhone 客户端看到
+///   的 base_url,**不**决定 daemon socket 绑哪里(daemon 永远绑 `0.0.0.0`)。
+///   从 list-interfaces 候选里挑一个 RFC1918 私有地址。`None` 对应 UI 的
+///   "自动"选项,展示 / register_device base_url 都退回 `0.0.0.0`(iPhone
+///   连不上,需用户挑一个具体 IP 后再添加设备)。
+/// * `lan_port` —— 自定义端口。`None` 时取默认 `42720`(SPEC §3.2)。
+///
+/// 任意字段变更后都需要重启 daemon 才能生效(v1 不做配置热重载,详见
+/// `.context/mobile-sync/SPEC.md` §1.2.5)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MobileSyncSettings {
+    /// 是否启用移动端同步 LAN 监听总开关。
+    /// 默认 `false`:移动端同步对未配对的局域网邻居有暴露面,必须由
+    /// 用户在设置页显式开启。
+    #[serde(default = "default_mobile_sync_enabled")]
+    pub enabled: bool,
+
+    /// LAN listener 子开关。`enabled=true` 时由本字段决定 daemon 启动
+    /// 后是否真的把 listener spawn 起来(绑 0.0.0.0:lan_port);否则不起
+    /// listener。默认 `false`。
+    #[serde(default = "default_mobile_sync_lan_listen_enabled")]
+    pub lan_listen_enabled: bool,
+
+    /// 写进 install URL / 二维码的 LAN IPv4 字符串(用户从 list-interfaces
+    /// 挑一个)。仅决定 iPhone 端 base_url, 不决定 daemon socket bind
+    /// (daemon 永远绑 `0.0.0.0`)。`None` 对应 UI 的"自动"选项,退回
+    /// `0.0.0.0`(iPhone 连不上,需挑具体 IP)。
+    #[serde(default)]
+    pub lan_advertise_ip: Option<String>,
+
+    /// 用户自定义的 LAN 监听端口。`None` 时取默认 `42720`(SPEC §3.2)。
+    #[serde(default)]
+    pub lan_port: Option<u16>,
+}
+
+fn default_mobile_sync_enabled() -> bool {
+    false
+}
+
+fn default_mobile_sync_lan_listen_enabled() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "current_schema_version")]
@@ -253,6 +322,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub network: NetworkSettings,
+
+    #[serde(default)]
+    pub mobile_sync: MobileSyncSettings,
 }
 
 /// The current schema version used for settings persistence.

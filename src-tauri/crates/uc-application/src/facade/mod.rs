@@ -19,6 +19,7 @@ pub mod device;
 pub mod encryption;
 pub mod host_event;
 pub mod lifecycle;
+pub mod mobile_sync;
 pub mod resource;
 pub mod roster;
 pub mod search;
@@ -80,6 +81,20 @@ pub use host_event::{
 pub use lifecycle::{
     InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError,
     LifecycleStateView, LifecycleStatusGateway,
+};
+pub use mobile_sync::{
+    ApplyIncomingMobileClipError, ApplyIncomingMobileClipInput, ApplyIncomingMobileClipOutcome,
+    AuthenticateBasicAuthError, AuthenticateBasicAuthInput, AuthenticatedDevice,
+    GetLatestMobileSyncDocError, GetMobileSyncFileError, GetMobileSyncFileOutput,
+    GetMobileSyncSettingsError, IncomingMobileBuffer, IncomingMobileClipEvent,
+    LanInterfaceOption as MobileSyncLanInterfaceOption,
+    ListLanInterfacesError as MobileSyncListLanInterfacesError, ListMobileDevicesError,
+    MobileDeviceSummary, MobileSyncFacade, MobileSyncFacadeDeps, MobileSyncSettingsView,
+    MobileSyncSnapshotPorts, RegisterMobileShortcutDeviceError, RegisterMobileShortcutDeviceInput,
+    RegisterMobileShortcutDeviceOutput, RevokeMobileDeviceError, RevokeMobileDeviceInput,
+    ShortcutInstallMethod, ShortcutInstallMethodOption, SyncClipboardItemType, SyncClipboardMeta,
+    UpdateMobileSyncSettingsError, UpdateMobileSyncSettingsInput, UpdateMobileSyncSettingsOutput,
+    SYNC_CLIPBOARD_EX_INSTALL_URL,
 };
 pub use resource::{BinaryResourceView, ResourceFacade, ResourceFacadeDeps, ResourceFacadeError};
 pub use roster::{

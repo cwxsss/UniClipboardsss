@@ -2090,6 +2090,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialoguer"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "658bce805d770f407bc62102fca7c2c64ceef2fbcb2b8bd19d2765ce093980de"
+dependencies = [
+ "console",
+ "shell-words",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "diatomic-waker"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5261,6 +5272,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "network-interface"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddcb8865ad3d9950f22f42ffa0ef0aecbfbf191867b3122413602b0a360b2a6"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 2.0.17",
+ "winapi",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6715,6 +6738,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8150,6 +8182,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
@@ -9608,14 +9646,17 @@ version = "0.7.0-alpha.4"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "blake3",
  "bytes",
  "chrono",
  "futures",
+ "hex",
  "hmac",
  "image",
  "libc",
  "mockall 0.13.1",
+ "qrcode",
  "semver",
  "serde",
  "sha2 0.10.9",
@@ -9672,6 +9713,7 @@ dependencies = [
  "clap",
  "clipboard-rs",
  "console",
+ "dialoguer",
  "hostname",
  "indicatif",
  "libc",
@@ -9798,6 +9840,7 @@ dependencies = [
  "uc-daemon-client",
  "uc-daemon-contract",
  "uc-daemon-local",
+ "uc-infra",
  "uc-observability",
  "uc-platform",
  "uc-webserver",
@@ -9813,6 +9856,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "base32",
+ "base64 0.22.1",
  "blake3",
  "bytes",
  "chacha20poly1305",
@@ -9830,6 +9874,7 @@ dependencies = [
  "iroh-tickets",
  "libsqlite3-sys",
  "mockall 0.13.1",
+ "network-interface",
  "noq-proto",
  "postcard",
  "rand 0.9.4",
@@ -9912,6 +9957,7 @@ name = "uc-tauri"
 version = "0.7.0-alpha.4"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "core-foundation 0.10.1",
  "core-graphics",
@@ -9922,6 +9968,7 @@ dependencies = [
  "objc2-foundation",
  "sentry",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-plugin-autostart",
  "tauri-plugin-global-shortcut",

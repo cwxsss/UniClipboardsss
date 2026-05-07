@@ -23,6 +23,7 @@ use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
 use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::ports::*;
+use uc_core::ports::{MobileDeviceRepositoryPort, MobileSyncEndpointInfoPort};
 use uc_core::MemberRepositoryPort;
 
 /// Clipboard-domain ports bundle.
@@ -109,6 +110,23 @@ pub struct SystemPorts {
     pub cache_fs: Arc<dyn uc_core::ports::cache_fs::CacheFsPort>,
 }
 
+/// Mobile-sync 领域端口组。
+///
+/// 装配 daemon listener / facade 需要共享的"有外部资源 / 跨主体共享"的
+/// 端口。无外部资源的进程内 adapter(`token_minter` / `download_tokens` /
+/// `lan_interface_probe` 等)在 `MobileSyncFacade` 装配处就地构造,无需穿过
+/// `AppDeps`。
+///
+/// `endpoint_info` 是只读视图:daemon LAN listener 启停时通过自己持有的具体
+/// adapter 类型(`SharedEndpointInfo` 旁路)调 `set` / `clear` 来更新这份
+/// 状态;facade 通过本字段读它,看到 daemon 当前真实绑定的 LAN URL。两端
+/// 共享同一 `Arc<InMemoryMobileSyncEndpointInfoAdapter>`,通过 unsizing
+/// coercion 转成 trait object。
+pub struct MobileSyncPorts {
+    pub device_repo: Arc<dyn MobileDeviceRepositoryPort>,
+    pub endpoint_info: Arc<dyn MobileSyncEndpointInfoPort>,
+}
+
 /// Application dependency grouping (non-Builder, just parameter grouping)
 /// 应用依赖分组（非 Builder，仅参数打包）
 ///
@@ -137,4 +155,6 @@ pub struct AppDeps {
     pub system: SystemPorts,
     /// Search-domain ports (index, key derivation, pipeline) / 搜索领域端口
     pub search: SearchPorts,
+    /// Mobile-sync 领域端口 / Mobile sync domain ports.
+    pub mobile_sync: MobileSyncPorts,
 }
