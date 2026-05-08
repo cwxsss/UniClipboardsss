@@ -390,12 +390,13 @@ jobs:
   snap:
     # 主 release 完成后自动触发 snap 构建并推到对应 channel。
     # 渠道映射：alpha→edge, beta→beta, rc→candidate, stable→stable。
-    # continue-on-error 让 snap 失败不会把整条 release 标红——GH release
-    # 此时已创建，snap 仅作 Linux 老 distro 覆盖的补充分发。
+    # 注意：reusable workflow call job 不支持 continue-on-error
+    # (GH Actions 限制),snap 失败会把整条 release 标红。GH release
+    # 此时已创建,snap 仅作 Linux 老 distro 覆盖的补充分发,失败可
+    # 在 snap.yml 直接 dispatch 重跑。
     name: Build & publish snap
     needs: [validate, create-release]
     if: ${{ success() }}
-    continue-on-error: true
     uses: ./.github/workflows/snap.yml
     with:
       channel: ${{ needs.validate.outputs.channel == 'alpha' && 'edge' || needs.validate.outputs.channel == 'rc' && 'candidate' || needs.validate.outputs.channel }}
