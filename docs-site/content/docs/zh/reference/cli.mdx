@@ -135,6 +135,57 @@ uniclip blob fetch <TICKET> --entry-id <ENTRY_ID> --out ./restored.bin
 
 适合排查文件同步失败、或验证对端能否访问 blob 存储。
 
+## 移动端同步
+
+`uniclip mobile-sync ...` 是移动端同步功能的命令行入口，覆盖
+**设备 → 移动端同步** 面板的所有动作。协议层文档见
+[移动端 LAN API](./mobile-api)。
+
+```bash
+# 一键向导：开启功能、配置 LAN 监听器、注册一台 iPhone，打印
+# 安装 QR 码与一次性密码。
+uniclip mobile-sync setup
+
+# 只读命令（daemon 在跑时也可以调）
+uniclip mobile-sync status            # 综合视图：功能 + LAN + 已配对设备
+uniclip mobile-sync settings show     # advanced：导出全部设置
+
+# 监听器配置（写命令 —— 必须先停 daemon）
+uniclip mobile-sync lan list-interfaces
+uniclip mobile-sync lan enable --advertise <LAN_IPV4> [--port 42720] --accept-network-risk
+uniclip mobile-sync lan disable
+
+# 已配对设备管理
+uniclip mobile-sync devices list
+uniclip mobile-sync devices add --label "My iPhone" \
+    [--username my_user] [--password-stdin]
+uniclip mobile-sync devices revoke <device-id>
+
+# 把整个功能彻底关掉（总开关 + 监听器都关；已配对设备记录保留，
+# 想清掉用 `devices revoke`）
+uniclip mobile-sync disable
+```
+
+行为约定：
+
+- **写命令在同 profile daemon 跑着时会被拒绝。** 跑 `setup`、`lan enable`、
+  `devices add` 等之前先 `uniclip stop` / 退掉 GUI。读命令
+  （`status`、`devices list`、`settings show`）在 daemon 跑着时也可以。
+- **`--json` 隐含 non-interactive。** 不会出任何交互提示。`setup` 在
+  non-interactive / JSON 模式下必须显式给 `--label`、`--advertise`、
+  `--accept-network-risk`；`--username` / `--password-stdin` 仍可选，
+  缺省走自动生成。
+- **`--password-stdin`** 从 stdin 读取一行作为密码。用它从密码管理器
+  或 CI 里管道喂密码，避免泄漏到 shell history。
+- **默认端口 `42720`**（SPEC §3.2）。daemon socket 永远 bind 在
+  `0.0.0.0:<port>`，`--advertise` 只决定打印到安装 URL 的 IPv4。
+- 还有一组 **debug** 子命令（`uniclip mobile-sync debug`），从 `--help`
+  里隐藏 —— 仅供开发与 E2E 脚本使用（绕过 HTTP，直接打 facade），可能
+  在不发版本说明的情况下变化。
+
+完整的端到端配置教程（监听器风险提示、iOS 快捷指令安装、密码轮换）见
+[移动端同步指南](../guides/mobile-sync)。
+
 ## 升级检测游标
 
 ```bash

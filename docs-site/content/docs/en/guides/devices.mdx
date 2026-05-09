@@ -11,14 +11,18 @@ the page.
 
 ## Page layout
 
-| Block                 | Content                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| "This device" card    | Local name, current sync status (active / paused), paired count, online subset count. |
-| "Space members" panel | List of all paired remote devices; each row expands into a detailed sheet.            |
+| Block                 | Content                                                                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| "This device" card    | Local name, current sync status (active / paused), paired count, online subset count.                                              |
+| "Space members" panel | List of all paired desktop peers in the current space; each row expands into a detailed sheet.                                     |
+| "Mobile sync" panel   | Listener status, **Configure** sheet, **Add device** action, and the list of paired mobile clients. See [below](#mobile-sync-devices). |
 
 "This device" is read-only. To rename this machine or toggle local
 sync, go to [Settings → General](./settings#general) and
 [Settings → Sync](./settings#sync).
+
+For setting up mobile sync end to end (LAN listener, iOS Shortcut,
+credentials), see the dedicated [Mobile sync](./mobile-sync) guide.
 
 ## What a member row tells you
 
@@ -32,6 +36,12 @@ Left to right:
 - **Chevron** — opens the device settings sheet on the right.
 
 ### Transport channel badge
+
+<Feature since="0.7.0">
+  Per-peer `LAN` / `Direct` / `Relay` reachability badges. Backed by a
+  single `ConnectionChannelPort` source of truth wired through the DTO
+  so the GUI, the tray icon, and `uniclip status --json` all agree.
+</Feature>
 
 The little tag next to `Online` reports how the connection is reaching
 the peer:
@@ -78,10 +88,17 @@ Clicking the chevron slides out a sheet with the controls below.
 
 ### Send master switch
 
-`Allow sending to this device`: when off, clips produced on this
-machine never leave for this peer. **Receive is independent** — the
-peer can still send to you. The switch is per-peer-direction, not
-space-wide.
+<Feature since="0.7.0">
+  Per-peer **outbound gate** + **content-type allowlist** are now
+  enforced at the dispatcher (previously persisted but unused). Bytes
+  for any disabled type never leave this machine.
+</Feature>
+
+`Send to this device`: when off, clips produced on this machine never
+leave for this peer. **Receive remains on** regardless — the peer can
+still push clips to you. A dedicated _receive_ toggle is **not wired
+up yet** and is planned for a later release. The switch is
+per-peer-outbound, not space-wide.
 
 ### Content-type allowlist
 
@@ -91,8 +108,8 @@ When the send switch is on, per-type toggles appear:
 - Image
 - Link
 - File
-- Code
-- HTML
+- Code (snippet)
+- Rich text (HTML / RTF)
 
 Any type that's off, the bytes for that type **never leave this
 machine** — the gate is enforced at the scheduler. So:
@@ -129,15 +146,35 @@ To remove a **lost or stolen** device from the space cleanly:
 
 ## Mobile sync devices
 
-Paired mobile clients appear in a **separate "Mobile sync" panel**
-on the same page, distinct from the space-members list — they aren't
-desktop peers and don't share the iroh trust mesh. Each row shows:
+Paired mobile clients live in a **separate "Mobile sync" panel** on
+the same page, distinct from the space-members list — they aren't
+desktop peers and don't share the iroh trust mesh.
+
+### Status strip
+
+The panel header shows the current listener state at a glance:
+
+| State              | What it means                                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `Disabled`         | Master switch is off. Click `Configure` to turn it on.                                                         |
+| `Listening @ …`    | LAN listener is running and reachable. The displayed URL is what mobile clients should target.                 |
+| `Bind failed: …`   | The daemon tried to bind but failed — surfaced from `lan_listener_error` (e.g. port in use, permission denied). |
+| `Restart required` | A configuration change (advertise IP, port, master switch) needs a daemon restart to take effect.              |
+
+`Configure` opens the **Mobile sync settings** sheet (see
+[Settings → Mobile sync](./settings#mobile-sync)). `Add device` opens
+the registration flow described in
+[Mobile sync — Pair a device](./mobile-sync#pair-a-device).
+
+### Paired devices list
+
+Each row shows:
 
 - The label you gave the device at registration.
 - The Basic Auth **username** (the stable identifier; copy it for
   diagnostics).
-- Last-seen timestamp and last-seen IP, plus the user-agent string
-  the client reported (e.g. `iOS Shortcut`).
+- Last-seen timestamp and last-seen IP, plus what the client reported
+  about itself (e.g. `iOS` / `iOS Shortcut`).
 - A **Rotate password** button — mints a fresh one-time password and
   invalidates the previous Argon2id hash atomically. The old
   credentials stop working immediately; the new password is shown
@@ -145,18 +182,16 @@ desktop peers and don't share the iroh trust mesh. Each row shows:
 - A **Revoke** button — removes the device record. Subsequent
   requests with those credentials get `401 Unauthorized`.
 
-There's also a **Mobile sync settings** sheet for the LAN listener:
-on/off toggle, advertised IP (auto / manual interface picker), and
-port. Adding the first mobile device requires the listener to be
-running.
-
-For the pairing flow and the credentials modal, see
-[Pairing & sync — Mobile companion](./pairing#mobile-companion-lan-only).
-
 <Callout type="info">
   Mobile rows don't show the `LAN / Direct / Relay` transport badge above — mobile sync is
   **always** plain HTTP on the LAN, so there's nothing to compare against.
 </Callout>
+
+For the full setup walkthrough (LAN listener, advertised IP, iOS
+Shortcut install, security caveats), jump to
+[Mobile sync](./mobile-sync). The pairing flow itself is also
+described under
+[Pairing & sync — Mobile companion](./pairing#mobile-companion-lan-only).
 
 ## How fast does online status update
 
@@ -181,3 +216,7 @@ to [Troubleshooting — Peer not appearing](./troubleshooting#peer-not-appearing
 | Copy Peer ID                    | `uniclip status --json` → `network.endpoint`                                   |
 | Unpair                          | **GUI only today**; a CLI subcommand is on the roadmap                         |
 | Per-peer content-type allowlist | **GUI only today**; CLI configuration subcommand is on the roadmap             |
+| Mobile sync — status            | `uniclip mobile-sync status`                                                   |
+| Mobile sync — list paired       | `uniclip mobile-sync devices list`                                             |
+| Mobile sync — register a device | `uniclip mobile-sync setup` (wizard) or `mobile-sync devices add --label …`   |
+| Mobile sync — revoke a device   | `uniclip mobile-sync devices revoke <device-id>`                               |

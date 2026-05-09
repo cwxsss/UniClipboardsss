@@ -150,6 +150,61 @@ uniclip blob fetch <TICKET> --entry-id <ENTRY_ID> --out ./restored.bin
 Useful when debugging file-sync failures or verifying a peer can
 reach blob storage.
 
+## Mobile sync
+
+`uniclip mobile-sync ...` is the CLI surface for the mobile companion
+feature. It mirrors the **Devices → Mobile sync** panel in the GUI and
+the protocol is documented in the [Mobile LAN API](./mobile-api).
+
+```bash
+# One-shot wizard: turn the feature on, configure the LAN listener,
+# register one iPhone, print the install QR + a one-time password.
+uniclip mobile-sync setup
+
+# Read-only views (allowed while the daemon is running)
+uniclip mobile-sync status            # combined: feature + LAN + paired devices
+uniclip mobile-sync settings show     # advanced: settings dump
+
+# Listener configuration (write commands — daemon must be stopped)
+uniclip mobile-sync lan list-interfaces
+uniclip mobile-sync lan enable --advertise <LAN_IPV4> [--port 42720] --accept-network-risk
+uniclip mobile-sync lan disable
+
+# Paired device management
+uniclip mobile-sync devices list
+uniclip mobile-sync devices add --label "My iPhone" \
+    [--username my_user] [--password-stdin]
+uniclip mobile-sync devices revoke <device-id>
+
+# Disable the feature entirely (master switch + listener off; paired
+# device records stay until you `devices revoke` them).
+uniclip mobile-sync disable
+```
+
+Behavioural notes:
+
+- **Write commands refuse to run while a same-profile daemon is up.**
+  Stop the daemon (`uniclip stop` / quit the GUI) before running
+  `setup`, `lan enable`, `devices add`, etc. Read commands (`status`,
+  `devices list`, `settings show`) are tolerant of a running daemon.
+- **`--json` implies non-interactive.** No prompts will be shown.
+  `setup` in non-interactive / JSON mode requires `--label`,
+  `--advertise`, and `--accept-network-risk`. `--username` /
+  `--password-stdin` remain optional and default to auto-mint.
+- **`--password-stdin`** reads exactly one line from stdin. Use it to
+  pipe a password from a manager / CI without leaving it in shell
+  history.
+- **Default port is `42720`** (SPEC §3.2). The daemon socket always
+  binds to `0.0.0.0:<port>`; `--advertise` only chooses the IPv4 that
+  is printed to the install URL.
+- A **debug** subcommand group exists (`uniclip mobile-sync debug`)
+  but is hidden from `--help` — it is reserved for development and
+  E2E scripts (it bypasses HTTP and pokes the facade directly), and
+  may change without notice.
+
+For a step-by-step setup walkthrough — listener risks, iOS Shortcut
+install, password rotation — see the [Mobile sync guide](../guides/mobile-sync).
+
 ## Upgrade-detection cursor
 
 ```bash

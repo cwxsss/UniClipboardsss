@@ -60,10 +60,16 @@ Keychain / Windows Credential Manager / Linux Secret Service). See
 
 ### Can I disable relay entirely?
 
-There's no hard disable today. Relay only kicks in when direct fails —
-to force direct, place both devices on a network where they can reach
-each other (same Wi-Fi, end-to-end IPv6, or shared VPN). A
-"never-relay" toggle is on the roadmap but not landed.
+Yes. **Settings → Network → LAN-only mode** disables the encrypted
+relay fallback (`allow_relay_fallback = false` under the hood). With
+it on, only direct (LAN / IPv6 / hole-punched) paths are tried —
+peers that can only be reached through the relay become unreachable.
+The change requires a daemon restart to apply, and the tray icon
+reflects the LAN-only state.
+
+If you only want to make the **current** session direct, put both
+devices on a network where they can reach each other (same Wi-Fi,
+end-to-end IPv6, or shared VPN) without flipping the global toggle.
 
 ## Deployment & accounts
 
@@ -186,8 +192,10 @@ What "companion" means in practice:
   trust mesh and don't sync between each other; they exchange
   clipboard with whichever desktop they're paired to.
 
-See [Mobile LAN API](./reference/mobile-api) for the protocol surface
-and [Pairing & sync — Mobile companion](./guides/pairing#mobile-companion-lan-only)
+See the [Mobile sync guide](./guides/mobile-sync) for the end-to-end
+setup flow, [Mobile LAN API](./reference/mobile-api) for the protocol
+surface, and
+[Pairing & sync — Mobile companion](./guides/pairing#mobile-companion-lan-only)
 for the pairing UI.
 
 ### Is alpha worth using?

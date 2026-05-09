@@ -2,5 +2,14 @@
   "title": "指南",
   "icon": "BookOpen",
   "defaultOpen": true,
-  "pages": ["pairing", "sync", "quick-panel", "search", "devices", "settings", "troubleshooting"]
+  "pages": [
+    "pairing",
+    "sync",
+    "quick-panel",
+    "search",
+    "devices",
+    "mobile-sync",
+    "settings",
+    "troubleshooting"
+  ]
 }
