@@ -75,6 +75,7 @@
         "@types/react": "^18.3.27",
         "@types/react-dom": "^18.3.7",
         "@vitejs/plugin-react": "^4.7.0",
+        "autocorrect-node": "^2.14.0",
         "autoprefixer": "^10.4.23",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -836,6 +837,18 @@
     "async-function": ["async-function@1.0.0", "", {}, "sha512-hsU18Ae8CDTR6Kgu9DYf0EbCr/a5iGL0rytQDobUcdpYOKokk8LEjVphnXkDkgpi0wYVsqrXuP0bZxJaTqdgoA=="],
 
     "atomic-sleep": ["atomic-sleep@1.0.0", "", {}, "sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ=="],
+
+    "autocorrect-node": ["autocorrect-node@2.14.0", "", { "optionalDependencies": { "autocorrect-node-darwin-arm64": "2.14.0", "autocorrect-node-darwin-x64": "2.14.0", "autocorrect-node-linux-x64-gnu": "2.14.0", "autocorrect-node-linux-x64-musl": "2.14.0", "autocorrect-node-win32-x64-msvc": "2.14.0" }, "bin": { "autocorrect": "cli.js" } }, "sha512-Pkdw3Hr1Wbtpm8f7KYOaPnHFa7TNVo9dyuOffVaNGN3iWWRBs011XBuCJUEmHV097kJkab94cs4P6KJ4pvI41g=="],
+
+    "autocorrect-node-darwin-arm64": ["autocorrect-node-darwin-arm64@2.14.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-l5IRTQz6zYAlkfEc5emIDXBkayD0MIwPPAVXCFMceFwyTNhAJ5veoKqRrsPuBVthIbfYKtAUs9oy9oFoHQn7bw=="],
+
+    "autocorrect-node-darwin-x64": ["autocorrect-node-darwin-x64@2.14.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-vRO0lwfXff2Fs41NzdDqN5t4VQ03M0Xsn6Tk4OjMrbjoWJqaEq05KZOTSaSF/wEs/7E1VoaI9Kz+c0fqylVX4Q=="],
+
+    "autocorrect-node-linux-x64-gnu": ["autocorrect-node-linux-x64-gnu@2.14.0", "", { "os": "linux", "cpu": "x64" }, "sha512-v1y1wh340cbhrHSZZP0oPkvWUprDtUIwnBP69Bls27VhQ2ZyVV4eijDNOP//yGUyUunMB0rtWoZaBsq8ugt1Kg=="],
+
+    "autocorrect-node-linux-x64-musl": ["autocorrect-node-linux-x64-musl@2.14.0", "", { "os": "linux", "cpu": "x64" }, "sha512-3LifiLG61VIXBrOITpD/REcg/ZEUuLz/P2XUWMCfGqhzoUb8oFgM3o0A6extvIH2NefiHMndB9kNbfQjXCl3zA=="],
+
+    "autocorrect-node-win32-x64-msvc": ["autocorrect-node-win32-x64-msvc@2.14.0", "", { "os": "win32", "cpu": "x64" }, "sha512-OM6TeGUW0+4R9KtUYTYNEwlInd+b2kumw/B1HCbCzb1F7HpfaNxnZiMk1li0bdPPBDzD5YuzwM30VJZMCWIi5A=="],
 
     "autoprefixer": ["autoprefixer@10.4.23", "", { "dependencies": { "browserslist": "^4.28.1", "caniuse-lite": "^1.0.30001760", "fraction.js": "^5.3.4", "picocolors": "^1.1.1", "postcss-value-parser": "^4.2.0" }, "peerDependencies": { "postcss": "^8.1.0" }, "bin": { "autoprefixer": "bin/autoprefixer" } }, "sha512-YYTXSFulfwytnjAPlw8QHncHJmlvFKtczb8InXaAx9Q0LbfDnfEYDE55omerIJKihhmU61Ft+cAOSzQVaBUmeA=="],
 
