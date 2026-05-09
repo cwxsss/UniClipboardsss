@@ -53,7 +53,7 @@ uniclip start --foreground -v
 
 ### 邀请码报"invalid or expired"
 
-邀请码**短期、一次性**。一旦过期或已被消费，就需要在 sponsor 上重新生成：
+邀请码 **短期、一次性**。一旦过期或已被消费，就需要在 sponsor 上重新生成：
 
 ```bash
 uniclip invite        # 在 sponsor 上重出一张
@@ -74,7 +74,7 @@ uniclip invite        # 在 sponsor 上重出一张
 口令错误会让密钥重新封装失败。这是设计行为，不是 bug —— sponsor 永远看不到错误的口令明文。校对口令再来一次就好。
 
 <Callout type="warn">
-  口令一旦丢失就**无法找回**。这是 Argon2id + PAKE 的代价：服务器侧没有任何能解密的副本。
+  口令一旦丢失就 **无法找回**。这是 Argon2id + PAKE 的代价：服务器侧没有任何能解密的副本。
   这种情况下唯一的恢复路径是在还能登录的设备上吊销丢失设备、或彻底重建空间。
 </Callout>
 
@@ -124,9 +124,9 @@ uniclip invite        # 在 sponsor 上重出一张
 - **IPv6 被禁。** 路径上某一跳关掉了 IPv6 时直连会回退到 IPv4 NAT 打洞。
 - **企业网络。** 出站 UDP 全封的环境只能走中继，且某些网络会进一步把中继也封掉，那种情况下 UniClipboard 在该网络就是不可用。
 
-> 中继看到的永远是密文。中继可用性影响的是**性能**与**可达性**，不影响机密性。详见 [配对与同步 — 传输](./pairing#传输字节实际怎么走)。
+> 中继看到的永远是密文。中继可用性影响的是 **性能** 与 **可达性**，不影响机密性。详见 [配对与同步 — 传输](./pairing#传输字节实际怎么走)。
 
-文件类负载走的是分块 blob 协议（见 [同步内容 — 大负载](./sync#大负载文件与大图)），中途断网 / 唤醒后会续传。如果一个大文件**几小时**还在零星传，多半是某一块卡住没重试 —— 在发送端 `uniclip stop && uniclip start` 通常能踢一脚。
+文件类负载走的是分块 blob 协议（见 [同步内容 — 大负载](./sync#大负载文件与大图)），中途断网 / 唤醒后会续传。如果一个大文件 **几小时** 还在零星传，多半是某一块卡住没重试 —— 在发送端 `uniclip stop && uniclip start` 通常能踢一脚。
 
 ## 剪贴板权限
 
@@ -141,7 +141,7 @@ uniclip invite        # 在 sponsor 上重出一张
 - **辅助功能（Accessibility）** —— 读系统剪贴板。
 - **输入监控（Input Monitoring）** —— 全局快捷面板快捷键。
 
-授权后**完全退出再重启**应用。macOS 不会对运行中的进程动态生效。
+授权后 **完全退出再重启** 应用。macOS 不会对运行中的进程动态生效。
 
 如果选项里没有 UniClipboard，先在 **系统设置 → 隐私与安全 → 辅助功能** 里点 `+` 手动加入 `/Applications/UniClipboard.app`。
 
@@ -208,11 +208,11 @@ uniclip start --foreground -v
 - `uniclip --version`、操作系统与版本。
 - `uniclip status --json`（两端各一份）。
 - 复现步骤与时间戳，对应时间窗口的日志切片即可，不必整份上传。
-- **不要**把数据库文件、邀请码、空间口令贴到 issue 里。
+- **不要** 把数据库文件、邀请码、空间口令贴到 issue 里。
 
 ## 紧急重置（最后手段）
 
-下面这些操作**会丢失本地剪贴历史**，且无法回滚。仅在前面所有步骤都没解决问题时使用。
+下面这些操作 **会丢失本地剪贴历史**，且无法回滚。仅在前面所有步骤都没解决问题时使用。
 
 <Tabs items={['只重置当前 profile', '完全卸载并清干净']}>
 
@@ -234,7 +234,7 @@ rm -rf ~/.local/share/app.uniclipboard.desktop
 1. 退出 GUI，`uniclip stop`。
 2. 卸载安装包（Homebrew / MSI / Snap / AppImage 按对应方式卸）。
 3. 删除数据目录（同上）。
-4. **手动**清理系统密钥环条目：
+4. **手动** 清理系统密钥环条目：
    - macOS Keychain：搜 `uniclipboard`，删条目。
    - Windows Credential Manager：**控制面板 → 用户账户 → 凭据管理器 → Windows 凭据**，删 `uniclipboard:*`。
    - Linux Secret Service：用 `seahorse` 或 `secret-tool` 清掉 `uniclipboard` namespace。
@@ -244,12 +244,13 @@ rm -rf ~/.local/share/app.uniclipboard.desktop
 </Tabs>
 
 <Callout type="warn">
-  其它设备上的历史不受本机重置影响。如果是想让一台设备从空间里**消失**，请在另一台还在线的设备上吊销它，
-  而不是只在本机删数据 —— 仅删本机不会撤销 node ID 的可信状态。
+  其它设备上的历史不受本机重置影响。如果是想让一台设备从空间里
+  **消失**，请在另一台还在线的设备上吊销它，而不是只在本机删数据 —— 仅删本机不会撤销 node ID
+  的可信状态。
 </Callout>
 
 ## 还是没解决？
 
 - 翻一遍 [常见问题（FAQ）](../faq) —— 很多"故障"其实是行为差异，不是 bug。
 - 仍然不对劲就提 issue：[github.com/UniClipboard/UniClipboard/issues](https://github.com/UniClipboard/UniClipboard/issues)。请遵循上面的"收集日志"清单。
-- 安全相关问题请走 [SECURITY.md](https://github.com/UniClipboard/UniClipboard/blob/main/SECURITY.md) 里给出的私有披露渠道，**不要**直接开 public issue。
+- 安全相关问题请走 [SECURITY.md](https://github.com/UniClipboard/UniClipboard/blob/main/SECURITY.md) 里给出的私有披露渠道，**不要** 直接开 public issue。

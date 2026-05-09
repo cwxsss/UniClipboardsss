@@ -100,8 +100,8 @@ echo "from a heredoc" | uniclip send
 uniclip watch
 ```
 
-`uniclip watch` 是**诊断观察器**：它会打印首个文本表示（图片型 payload 则按 representation 摘要展示），
-但**不会**写入系统剪贴板 —— 写系统剪贴板是守护进程的职责。
+`uniclip watch` 是 **诊断观察器**：它会打印首个文本表示（图片型 payload 则按 representation 摘要展示），
+但 **不会** 写入系统剪贴板 —— 写系统剪贴板是守护进程的职责。
 
 ## 搜索
 
@@ -149,7 +149,7 @@ uniclip upgrade advance
 下列命令存在，但刻意从 `uniclip --help` 中隐藏：
 
 - `uniclip probe ...` —— 剪贴诊断子命令组（替代旧的 `clipboard-probe` 独立二进制）。
-  CLI 中**唯一**写系统剪贴板的入口（仅限 `probe restore`），仅供开发与 E2E 调试。
+  CLI 中 **唯一** 写系统剪贴板的入口（仅限 `probe restore`），仅供开发与 E2E 调试。
 - `uniclip seed-clipboard --text <TEXT>` —— switch-space 数据完整性测试用的种子写入。
 - `uniclip dump-clipboard --limit <N>` —— 调试用，打印解密后的历史。
 - `uniclip daemon` —— `uniclip start` 拉起后台进程的内部入口，不作为用户命令使用。

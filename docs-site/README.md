@@ -57,12 +57,12 @@ bun run check:docs
 
 ### Versioning（路线建议，未实施）
 
-当前 `content/docs/{en,zh}/` 是**单一当前版本**。未来需要并存多版本（如 `0.7` 与 `0.8`）时，推荐路径相对克制：
+当前 `content/docs/{en,zh}/` 是 **单一当前版本**。未来需要并存多版本（如 `0.7` 与 `0.8`）时，推荐路径相对克制：
 
 - **A. 路径分版本**：`content/docs/{en,zh}/v0.8/...`，最新版另用 `current` 软链或 alias，rewrites 把 `/docs/...` 指向 current。fumadocs 原生支持。
 - **B. 分支分版本**：每个 release 分支构建独立站点，主域 + 子路径（如 `/docs/0.8/`）暴露。运维更重，但隔离最干净。
 
-在 alpha 阶段（破坏性变更频繁）建议**先不引入版本化**，等 1.0 后再上 A 方案。引入版本化时需要同步更新：sitemap 列举（按当前版本）、check-docs.mjs（按版本树枚举）、`gitConfig.branch`（按版本 branch）。
+在 alpha 阶段（破坏性变更频繁）建议 **先不引入版本化**，等 1.0 后再上 A 方案。引入版本化时需要同步更新：sitemap 列举（按当前版本）、check-docs.mjs（按版本树枚举）、`gitConfig.branch`（按版本 branch）。
 
 ## Learn More
 
