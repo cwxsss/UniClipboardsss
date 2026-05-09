@@ -219,9 +219,10 @@ uniclip search rebuild     # 同步重建（会阻塞直至完成）
 
 ### iPhone 上传的图片看起来损坏或显示为空白
 
-`alpha.6` 修了上传图片的 MIME 类型嗅探（iOS 快捷指令往往会把所有上传
-都标为 `application/octet-stream`，不论扩展名）。如果你的版本低于
-`alpha.6`，看到 JPEG / PNG 粘贴成空白或非法图片，**升级到 alpha.6+ 即可**。
+桌面端会嗅探上传字节的 magic 头来还原正确的 `image/*` MIME（iOS
+快捷指令经常把所有上传都标成 `application/octet-stream`，不看扩展名）。
+这套嗅探在 `0.7.0-alpha.6` 落地；如果 JPEG / PNG 粘贴成空白或非法图片，
+先用 `uniclip --version` 确认版本，然后 **升级到 `0.7.0-alpha.6` 或更新**。
 
 ### 公共 Wi-Fi
 

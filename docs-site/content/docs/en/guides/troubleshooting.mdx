@@ -295,10 +295,12 @@ The username or password is wrong. Reasons:
 
 ### Image from iPhone arrives broken / not visible
 
-`alpha.6` shipped a fix for MIME sniffing on uploaded images
-(iOS Shortcuts often sends `application/octet-stream` regardless of
-file extension). If you're below `alpha.6` and seeing JPEG / PNG
-uploads render as blank or invalid pasteboard images, **upgrade**.
+The desktop sniffs the magic bytes of incoming uploads to recover the
+correct `image/*` MIME (iOS Shortcuts often sends
+`application/octet-stream` regardless of file extension). The sniffer
+landed in `0.7.0-alpha.6`; if JPEG / PNG uploads render as blank or
+invalid pasteboard images, confirm with `uniclip --version` and
+**upgrade** to `0.7.0-alpha.6` or newer.
 
 ### Public Wi-Fi
 
