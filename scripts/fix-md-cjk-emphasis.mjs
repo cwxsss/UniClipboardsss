@@ -29,16 +29,25 @@ function transform(content) {
   masked = masked.replace(/~~~[\s\S]*?~~~/g, stash);
   masked = masked.replace(/`[^`\n]+`/g, stash);
 
-  masked = masked.replace(
-    /\*\*([^*\n]+?)\*\*/g,
-    (match, inner, offset, full) => {
-      const before = offset > 0 ? full[offset - 1] : '';
-      const after = full[offset + match.length] ?? '';
-      const prefix = HAN_RE.test(before) ? ' ' : '';
-      const suffix = HAN_RE.test(after) ? ' ' : '';
-      return `${prefix}**${inner}**${suffix}`;
-    },
-  );
+  masked = masked
+    .split('\n')
+    .map((line) => {
+      // Skip lines with an odd number of ** — pairing is ambiguous and a
+      // naive left-to-right pair-up would mis-handle a stray literal **.
+      const stars = (line.match(/\*\*/g) || []).length;
+      if (stars === 0 || stars % 2 !== 0) return line;
+      return line.replace(
+        /\*\*([^*\n]+?)\*\*/g,
+        (match, inner, offset, full) => {
+          const before = offset > 0 ? full[offset - 1] : '';
+          const after = full[offset + match.length] ?? '';
+          const prefix = HAN_RE.test(before) ? ' ' : '';
+          const suffix = HAN_RE.test(after) ? ' ' : '';
+          return `${prefix}**${inner}**${suffix}`;
+        },
+      );
+    })
+    .join('\n');
 
   masked = masked.replace(
     new RegExp(`${NUL}(\\d+)${NUL}`, 'g'),
