@@ -8,7 +8,7 @@
 >
 > 无需云账号，无需第三方服务器。你的剪贴板从未以任何人能读懂的形式离开过你的设备。
 
-UniClipboard 是一款以**隐私优先**为核心理念的跨设备剪贴板同步工具。它支持在多台设备之间无缝、安全地同步文本、图片和文件，无论设备处于同一 Wi-Fi 还是不同网络环境。数据在传输与本地存储阶段均保持加密，仅在用户设备本地解密，服务器与网络层永远无法访问明文。
+UniClipboard 是一款以 **隐私优先** 为核心理念的跨设备剪贴板同步工具。它支持在多台设备之间无缝、安全地同步文本、图片和文件，无论设备处于同一 Wi-Fi 还是不同网络环境。数据在传输与本地存储阶段均保持加密，仅在用户设备本地解密，服务器与网络层永远无法访问明文。
 
 ![Image](https://github.com/user-attachments/assets/8d339467-5bbe-4afa-9235-1d26cbff82c9)
 
@@ -77,6 +77,36 @@ UniClipboard 是一款以**隐私优先**为核心理念的跨设备剪贴板同
 ### 从 Releases 下载
 
 访问 [GitHub Releases](https://github.com/UniClipboard/UniClipboard/releases) 页面，下载适合您操作系统的安装包。
+
+### Linux
+
+每次发布都会同时构建 `.deb`、`.rpm` 与 `.AppImage` 三种格式，覆盖 `x86_64` 与 `aarch64`（如平台支持）。
+
+**Fedora / RHEL / openSUSE — 推荐 COPR 仓库（自动跟随版本更新）**
+
+```bash
+sudo dnf copr enable mkdir700/uniclipboard-alpha   # alpha 渠道；正式版请用 mkdir700/uniclipboard
+sudo dnf install uniclipboard
+```
+
+启用后 `sudo dnf upgrade` 会自动拉取新版本。
+
+**或者从 Releases 页面单独下载 .rpm / .deb / AppImage：**
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i uniclipboard_<version>_amd64.deb
+sudo apt-get install -f                                 # 如有缺失依赖，由 apt 补齐
+
+# Fedora / RHEL / openSUSE（一次性手动安装）
+sudo dnf install ./UniClipboard-<version>-1.x86_64.rpm
+
+# AppImage（任意发行版）
+chmod +x UniClipboard_<version>_amd64.AppImage
+./UniClipboard_<version>_amd64.AppImage
+```
+
+> 经包管理器（COPR / dnf / apt）安装的版本不会通过 App 内的更新器自动升级，请用 `dnf upgrade` / `apt upgrade` 走系统包管理器。Linux 上 App 内更新器只对 AppImage 生效。
 
 ### Homebrew（macOS）
 
@@ -258,4 +288,4 @@ uniclip status / start / stop   # 守护进程生命周期
 
 ---
 
-💡 **有问题或建议?** [创建 Issue](https://github.com/UniClipboard/UniClipboard/issues/new) 或联系我们讨论!
+💡 **有问题或建议？** [创建 Issue](https://github.com/UniClipboard/UniClipboard/issues/new) 或联系我们讨论！
