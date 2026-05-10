@@ -1,0 +1,6 @@
+{
+  "title": "Reference",
+  "icon": "Wrench",
+  "defaultOpen": true,
+  "pages": ["cli", "mobile-api", "search-internals"]
+}

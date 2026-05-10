@@ -190,50 +190,67 @@
         "loadError": "加载设置失败:"
       },
       "network": {
-        "title": "网络设置",
-        "syncMethod": {
-          "label": "同步方式",
-          "description": "选择同步方式",
-          "lanFirst": "优先使用局域网同步 (推荐)",
-          "cloudOnly": "仅使用云端同步",
-          "lanOnly": "仅使用局域网同步"
-        },
-        "webserverPort": {
-          "label": "本机开放端口",
-          "description": "设置本机开放端口 (1024-65535)",
-          "errors": {
-            "invalid": "请输入有效的端口号",
-            "range": "端口号必须在 1024-65535 之间"
-          }
-        },
-        "customPeerDevice": {
-          "label": "自定义同步节点",
-          "description": "手动指定要同步的设备地址和端口",
-          "peerIp": {
-            "label": "节点 IP 地址",
-            "description": "输入要同步的设备 IPv4 地址",
-            "errors": {
-              "empty": "IP 地址不能为空",
-              "invalid": "请输入有效的 IPv4 地址"
-            }
-          },
-          "peerPort": {
-            "label": "节点端口",
-            "description": "输入要同步的设备端口 (1024-65535)",
-            "errors": {
-              "empty": "端口号不能为空",
-              "invalid": "请输入有效的端口号",
-              "range": "端口号必须在 1024-65535 之间"
+        "loadError": "加载设置失败:",
+        "lanOnly": {
+          "label": "LAN-only 模式",
+          "description": "关闭公网中继回落，仅通过同局域网完成设备同步。重启后生效。",
+          "infoIconAriaLabel": "查看 LAN-only 模式开启后仍走外网的请求清单",
+          "saveError": "保存失败：{{message}}。已恢复到上一次的设置。",
+          "disclosure": {
+            "title": "LAN-only 开启后仍会走外网的请求",
+            "intro": "以下 4 类请求由独立模块控制，不受 LAN-only 影响：",
+            "rendezvous": {
+              "title": "首次配对 rendezvous",
+              "description": "配对新设备时仍需联网经 rendezvous.uniclipboard.app 完成 NodeId 交换；已配对设备的日常同步不再使用 rendezvous。"
+            },
+            "otlp": {
+              "title": "OTLP 遥测",
+              "description": "遥测由「通用 → 遥测」开关独立控制，与 LAN-only 无关；如需关闭，请到「通用」分类。"
+            },
+            "pkarr": {
+              "title": "pkarr DHT NodeId 解析",
+              "description": "跨网段连接通过 pkarr 公网 DHT 解析对端 NodeId，性质类似 DNS。关闭会导致跨网段连接率从约 90% 跌至接近 0。"
+            },
+            "autoUpdate": {
+              "title": "自动更新 GitHub 检查",
+              "description": "由「通用 → 自动更新」开关独立控制，访问 GitHub Release API 检查新版本。"
             }
           }
         },
-        "cloudServer": {
-          "label": "云服务器配置",
-          "badge": "即将推出",
-          "advanced": "高级选项",
-          "default": "使用默认云服务器"
+        "allowOverlayAddrs": {
+          "label": "允许虚拟网络地址",
+          "description": "默认关闭。当两端都接入同一个 VPN（如 Tailscale）时打开，让连接借用该虚拟网络。重启后生效。",
+          "infoIconAriaLabel": "了解什么是虚拟网络地址，以及何时应该开启",
+          "saveError": "保存失败：{{message}}。已恢复到上一次的设置。",
+          "disclosure": {
+            "title": "关于虚拟网络地址",
+            "intro": "建立直连时，本机会同时拥有多个 IP（真实局域网、VPN 隧道等）。「虚拟网络地址」指 VPN 软件建立的虚拟网卡 IP：",
+            "covered": {
+              "title": "本开关影响的范围",
+              "description": "具体是 CGNAT 段 100.64.0.0/10（Tailscale 默认 IPv4）和 Tailscale IPv6 ULA fd7a:115c:a1e0::/48。Clash fake-ip（198.18.0.0/15）和链路本地（169.254.0.0/16）始终被过滤，不受此开关影响。"
+            },
+            "whyOff": {
+              "title": "为什么默认关闭",
+              "description": "如果两端不在同一个 VPN 中，把虚拟网卡地址作为连接候选会让对端浪费 path-validation 预算去试一条死路，反而拖慢真正的直连建立速度。"
+            },
+            "whenOn": {
+              "title": "什么时候开启",
+              "description": "如果两端确实都在同一个 Tailscale tailnet（或其他相同的 overlay 网络）中，且真实局域网 / 公网直连不通、但 overlay 通，开启后 iroh 会把 overlay 路径作为可选直连候选。"
+            },
+            "tradeoff": {
+              "title": "权衡说明",
+              "description": "如果只有一端装了 VPN——或两端在不同的 tailnet 中——开启后只是连接更慢，并不会彻底连不上（中继回落仍然有效）。不确定就保持关闭。"
+            }
+          }
         },
-        "loadError": "加载设置失败:"
+        "restartBanner": {
+          "message": "需要重启应用以使 LAN-only 模式更改生效。",
+          "restartButton": "立即重启",
+          "restartingButton": "正在重启…",
+          "dismissAriaLabel": "收起重启提示",
+          "errorMessage": "自动重启失败，请手动退出并重新打开应用以使更改生效。",
+          "retryButton": "重试"
+        }
       },
       "storage": {
         "title": "存储管理",
@@ -476,7 +493,9 @@
       "syncFailed": "同步到剪贴板失败",
       "openLocationFailed": "打开文件位置失败",
       "loadDetailFailed": "加载详情失败",
-      "unknown": "发生未知错误"
+      "unknown": "发生未知错误",
+      "unavailableBadge": "内容已不可用",
+      "unavailableTooltip": "该内容已不可用（数据已丢失），无法粘贴。建议从历史中删除。"
     },
     "item": {
       "characters": "字符",
@@ -591,7 +610,9 @@
       "onlineCount": "{{count}} 台在线"
     },
     "pairedDevices": {
-      "title": "已配对设备"
+      "title": "已配对设备",
+      "subtitle": "{{total}} 台已配对 · {{online}} 台在线",
+      "subtitleEmpty": "尚未配对任何设备"
     },
     "addDevice": {
       "title": "邀请新设备",
@@ -643,12 +664,25 @@
     },
     "list": {
       "empty": {
-        "title": "暂无已配对设备",
-        "description": "连接你的其他设备，即可开始即时同步剪贴板内容。"
+        "title": "暂无已配对设备"
       },
       "status": {
         "online": "在线",
         "offline": "离线"
+      },
+      "channel": {
+        "lan": "直连",
+        "relay": "中转",
+        "offline": "未连接",
+        "unknown": "—",
+        "outOfLan": "不在本地网络",
+        "tooltip": {
+          "lan": "数据通过本地网络直接传输，不出网。",
+          "relay": "数据通过加密中转服务器传输。内容已加密，但连接信息对中转方可见。",
+          "offline": "当前没有连接。",
+          "unknown": "正在确认连接方式。",
+          "outOfLan": "已开启仅本地网络同步，但该设备目前不在同一网络。回到同一网络后会自动恢复。"
+        }
       },
       "labels": {
         "unknownDevice": "未知设备"
@@ -665,13 +699,184 @@
       "message": "剪贴板同步已暂停，所有设备当前均不会同步内容。",
       "goToSettings": "前往设置"
     },
+    "mobileSync": {
+      "title": "移动设备同步",
+      "description": "通过 SyncClipboard 协议在局域网内与移动设备（iOS / Android）同步剪贴板",
+      "configure": "配置",
+      "statusBar": {
+        "bindFailed": "无法启动监听:{{reason}}"
+      },
+      "settingsSheet": {
+        "title": "移动设备同步配置",
+        "description": "调整移动设备通过局域网访问本机所需的开关与网络参数",
+        "close": "完成"
+      },
+      "enabled": {
+        "label": "启用移动端同步",
+        "description": "关闭后将立即拒绝来自所有移动设备的同步请求"
+      },
+      "lanListener": {
+        "label": "LAN 监听",
+        "description": "在所选网络接口上监听明文 HTTP，开启后才能接收移动设备的请求",
+        "currentUrl": {
+          "label": "当前监听地址",
+          "unavailable": "—"
+        },
+        "bindIp": {
+          "label": "监听 IP",
+          "placeholder": "选择网络接口",
+          "empty": "未检测到可用的局域网 IPv4 地址",
+          "auto": "自动（0.0.0.0）"
+        },
+        "port": {
+          "label": "端口",
+          "placeholder": "42720"
+        },
+        "warning": {
+          "title": "网络风险提示",
+          "body": "局域网内任何人只要拿到此机的 LAN URL 与配对凭据即可读写剪贴板。请确保 Wi-Fi 受信任。",
+          "confirm": "我已知晓",
+          "cancel": "取消"
+        },
+        "restartRequired": {
+          "message": "更改将在下次重启 daemon 后生效",
+          "restartButton": "立即重启",
+          "dismissAriaLabel": "收起重启提示"
+        },
+        "disabledHint": "请先启用 LAN 监听后再添加设备"
+      },
+      "list": {
+        "title": "已配对设备",
+        "empty": {
+          "title": "暂无已配对设备"
+        },
+        "addButton": "添加设备"
+      },
+      "add": {
+        "title": "添加设备",
+        "subtitle": "为该设备生成一对长期有效的凭据。同一组凭据可用于 iOS 快捷指令以及任何兼容 SyncClipboard 协议的 Android 客户端。",
+        "labelField": {
+          "label": "设备名称",
+          "placeholder": "我的 iPhone"
+        },
+        "advanced": {
+          "title": "高级选项",
+          "description": "留空则自动生成一对随机凭据"
+        },
+        "username": {
+          "label": "自定义用户名",
+          "placeholder": "留空自动生成",
+          "help": "6–32 字符，字母开头，仅 A-Z a-z 0-9 _"
+        },
+        "password": {
+          "label": "自定义密码",
+          "placeholder": "留空自动生成",
+          "help": "至少 8 字符；不强制复杂度"
+        },
+        "submit": "添加",
+        "submitting": "添加中…",
+        "cancel": "取消"
+      },
+      "credential": {
+        "title": "设备已添加",
+        "subtitle": "在下方选择平台，并按指引在客户端中填入凭据。",
+        "platforms": {
+          "ios": "iOS",
+          "android": "安卓"
+        },
+        "warning": {
+          "title": "重要：此密码仅显示一次",
+          "body": "关闭此窗口后将无法再次查看密码。如不慎遗失，需要撤销此设备并重新添加。"
+        },
+        "qr": {
+          "label": "扫码安装 SyncClipboard 快捷指令",
+          "alt": "SyncClipboard 快捷指令安装二维码"
+        },
+        "installUrl": {
+          "label": "或复制安装链接"
+        },
+        "android": {
+          "instructions": "暂未提供官方 Android 客户端。请使用任何兼容 SyncClipboard 协议的第三方应用（HTTP Basic Auth + GET/PUT /SyncClipboard.json），并按下方信息配置服务地址与账号密码。"
+        },
+        "baseUrl": {
+          "label": "服务地址"
+        },
+        "username": {
+          "label": "用户名"
+        },
+        "password": {
+          "label": "密码"
+        },
+        "copy": "复制",
+        "copied": "已复制",
+        "confirmSaved": "我已保存上述凭据",
+        "close": "关闭",
+        "closeBlocked": "请先勾选「我已保存上述凭据」"
+      },
+      "revoke": {
+        "confirmTitle": "撤销 {{label}}",
+        "confirmDescription": "撤销后该设备将立即无法同步。要再次连接需重新添加（密码无法找回）。",
+        "confirm": "撤销",
+        "cancel": "取消"
+      },
+      "rotate": {
+        "button": "修改密码",
+        "dialog": {
+          "title": "为 {{label}} 修改密码",
+          "subtitle": "服务端只保存密码哈希，无法显示当前密码。生成新密码后请同步更新移动端客户端中的 password 字段。",
+          "passwordLabel": "新密码（可选）",
+          "passwordPlaceholder": "留空将自动生成",
+          "passwordHelp": "留空 → 自动生成强密码；自定义需 8–256 字符。",
+          "warning": "提交后旧密码立即失效。移动端客户端在更新 password 字段前将无法同步。",
+          "submit": "生成新密码",
+          "submitting": "处理中...",
+          "cancel": "取消"
+        },
+        "result": {
+          "title": "新密码已生成",
+          "subtitle": "下面是新密码，仅显示这一次。请立即复制并更新到移动端客户端的 password 字段。",
+          "usernameLabel": "用户名",
+          "passwordLabel": "新密码",
+          "copy": "复制密码",
+          "copied": "已复制",
+          "warning": "旧密码已失效。移动端客户端必须用此新密码才能继续同步。",
+          "confirmSaved": "我已保存新密码",
+          "close": "关闭",
+          "closeBlocked": "请先勾选「我已保存新密码」"
+        }
+      },
+      "errors": {
+        "facadeUnavailable": "移动端同步功能未启用",
+        "labelEmpty": "设备名称不能为空",
+        "labelTooLong": "设备名称过长（最多 {{max}} 字符）",
+        "lanListenerDisabled": "请先启用 LAN 监听",
+        "usernameTaken": "用户名 \"{{username}}\" 已被占用",
+        "usernameInvalidShape": "用户名格式不合法：{{reason}}",
+        "passwordTooShort": "密码长度不足（至少 {{min}} 字符）",
+        "passwordTooLong": "密码过长（最多 {{max}} 字符）",
+        "passwordHashFailed": "密码处理失败：{{message}}",
+        "deviceNotFound": "设备已不存在，请刷新列表",
+        "invalidLanParameter": "LAN 参数不合法：{{reason}}",
+        "settingsLoadFailed": "加载设置失败：{{message}}",
+        "settingsSaveFailed": "保存设置失败：{{message}}",
+        "endpointInfoProbeFailed": "无法探测当前 LAN 地址：{{message}}",
+        "lanProbeFailed": "无法列出网络接口：{{message}}",
+        "noLanInterfaceAvailable": "未检测到可用的局域网 IPv4 地址。请连入局域网，或在「配置 → 监听 IP」中手动指定一个具体地址后再试。",
+        "persistenceFailed": "保存失败：{{message}}",
+        "qrRenderFailed": "二维码渲染失败：{{message}}",
+        "unknown": "发生错误：{{message}}",
+        "loadFailed": "加载失败：{{message}}"
+      }
+    },
     "settings": {
       "readOnly": "不可更改",
       "badges": {
         "mvp": "MVP",
         "comingSoon": "即将推出",
         "notEditable": "不可变更",
-        "globalFileSyncOff": "文件同步已关闭"
+        "globalFileSyncOff": "文件同步已关闭",
+        "experimental": "实验性",
+        "experimentalTooltip": "该功能处于实验阶段，行为可能在后续版本中调整或不稳定。"
       },
       "sync": {
         "title": "同步设置",

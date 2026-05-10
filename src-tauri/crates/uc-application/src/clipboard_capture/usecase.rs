@@ -24,7 +24,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use futures::future::try_join_all;
-use tracing::{debug, info, info_span, warn, Instrument};
+use tracing::{debug, info, info_span, Instrument};
 use uc_observability::stages;
 
 use uc_core::ids::{EntryId, EventId};
@@ -217,12 +217,60 @@ impl CaptureClipboardUseCase {
                 (entry_id, new_selection)
             };
 
-            // 5. entry_repo.insert_entry
+            // 5. Spool large representations to disk BEFORE creating the entry.
             //
-            // Persist the entry BEFORE spool writes so the entry appears in the
-            // dashboard immediately. Spool writes (below) can take many seconds for
-            // large images (e.g., macOS TIFF representations of 30-100 MB), and must
-            // not block the user-visible entry creation path.
+            // Durability invariant: when `entry_repo.save_entry_and_selection`
+            // succeeds, the spool file for every Staged rep is already on disk
+            // (`DurableSpoolQueue::enqueue` fsyncs before returning). The
+            // in-memory cache is just an accelerator; spool is the source of
+            // truth for representations that haven't been promoted to a blob yet.
+            //
+            // Previous behaviour: spool writes ran in a detached `tokio::spawn`
+            // after `entry.save`, so a process exit / cache eviction between
+            // the entry write and the spool write produced a permanently
+            // orphaned representation (`Staged` in DB, no bytes anywhere). That
+            // generated UNICLIPBOARD-RUST-5/6 — 25 + 30 events on a single
+            // unrecoverable entry. The synchronous order eliminates that race
+            // at the cost of capture latency on large payloads.
+            //
+            // On spool failure (disk full, permission denied, etc.) capture
+            // returns `Err` and the entry is **not** persisted. Better to lose
+            // the clipboard than to show a phantom entry that can never be
+            // restored.
+            let spool_reps: Vec<SpoolRequest> = normalized_reps
+                .iter()
+                .filter(|rep| rep.payload_state() == PayloadAvailability::Staged)
+                .filter_map(|rep| {
+                    snapshot
+                        .representations
+                        .iter()
+                        .find(|o| o.id == rep.id)
+                        .map(|observed| SpoolRequest {
+                            rep_id: rep.id.clone(),
+                            bytes: observed.bytes.clone(),
+                        })
+                })
+                .collect();
+
+            if !spool_reps.is_empty() {
+                async {
+                    for req in spool_reps {
+                        let rep_id = req.rep_id.clone();
+                        self.spool_queue.enqueue(req).await.map_err(|err| {
+                            anyhow::anyhow!(
+                                "Failed to durably spool representation {} during capture: {}",
+                                rep_id,
+                                err
+                            )
+                        })?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .instrument(info_span!(stages::SPOOL_BLOBS))
+                .await?;
+            }
+
+            // 6. entry_repo.insert_entry — bytes are durable by this point.
             async {
                 let created_at_ms = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
@@ -245,44 +293,6 @@ impl CaptureClipboardUseCase {
             .await?;
 
             info!(event_id = %event_id, entry_id = %entry_id, "Clipboard capture completed");
-
-            // Queue large representations for durable spool-to-disk in a background task.
-            // The entry is already persisted and bytes are in the in-memory cache, so the
-            // background blob worker will get a cache hit immediately. Spool writes only
-            // provide durability (survive process exit) — they must not block the callback.
-            let spool_queue = Arc::clone(&self.spool_queue);
-            let spool_reps: Vec<_> = normalized_reps
-                .iter()
-                .filter(|rep| rep.payload_state() == PayloadAvailability::Staged)
-                .filter_map(|rep| {
-                    snapshot
-                        .representations
-                        .iter()
-                        .find(|o| o.id == rep.id)
-                        .map(|observed| SpoolRequest {
-                            rep_id: rep.id.clone(),
-                            bytes: observed.bytes.clone(),
-                        })
-                })
-                .collect();
-
-            if !spool_reps.is_empty() {
-                tokio::spawn(
-                    async move {
-                        for req in spool_reps {
-                            let rep_id = req.rep_id.clone();
-                            if let Err(err) = spool_queue.enqueue(req).await {
-                                warn!(
-                                    representation_id = %rep_id,
-                                    error = %err,
-                                    "Failed to enqueue spool request; blob will be lost if process exits before worker runs"
-                                );
-                            }
-                        }
-                    }
-                    .instrument(info_span!(stages::SPOOL_BLOBS)),
-                );
-            }
 
             Ok(Some(entry_id))
         }
@@ -376,5 +386,170 @@ impl CaptureClipboardUseCase {
             || rep.format_id.eq_ignore_ascii_case("public.utf8-plain-text")
             || rep.format_id.eq_ignore_ascii_case("public.text")
             || rep.format_id.eq_ignore_ascii_case("NSStringPboardType")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_core::clipboard::MimeType;
+    use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::ObservedClipboardRepresentation;
+
+    fn rep(format: &str, mime: Option<&str>, bytes: &[u8]) -> ObservedClipboardRepresentation {
+        ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from(format),
+            mime.map(|m| MimeType(m.to_string())),
+            bytes.to_vec(),
+        )
+    }
+
+    fn snapshot_with(reps: Vec<ObservedClipboardRepresentation>) -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_700_000_000_000,
+            representations: reps,
+        }
+    }
+
+    #[test]
+    fn has_supported_representation_true_for_text_plain() {
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            b"hi",
+        )]);
+        assert!(CaptureClipboardUseCase::has_supported_representation(&snap));
+    }
+
+    #[test]
+    fn has_supported_representation_true_for_image_mime() {
+        let snap = snapshot_with(vec![rep("image", Some("image/png"), b"\x89PNG")]);
+        assert!(CaptureClipboardUseCase::has_supported_representation(&snap));
+    }
+
+    #[test]
+    fn has_supported_representation_true_for_files_format_without_mime() {
+        let snap = snapshot_with(vec![rep("files", None, b"file:///tmp/x")]);
+        assert!(CaptureClipboardUseCase::has_supported_representation(&snap));
+    }
+
+    #[test]
+    fn has_supported_representation_true_for_uri_list_mime() {
+        let snap = snapshot_with(vec![rep(
+            "public.file-url",
+            Some("text/uri-list"),
+            b"file:///tmp/a",
+        )]);
+        assert!(CaptureClipboardUseCase::has_supported_representation(&snap));
+    }
+
+    #[test]
+    fn has_supported_representation_false_for_unknown_format_and_mime() {
+        let snap = snapshot_with(vec![rep(
+            "vendor.private",
+            Some("application/x-vendor"),
+            b"x",
+        )]);
+        assert!(!CaptureClipboardUseCase::has_supported_representation(
+            &snap
+        ));
+    }
+
+    #[test]
+    fn has_supported_representation_false_for_empty_snapshot() {
+        let snap = snapshot_with(vec![]);
+        assert!(!CaptureClipboardUseCase::has_supported_representation(
+            &snap
+        ));
+    }
+
+    #[test]
+    fn is_supported_representation_matches_legacy_format_aliases() {
+        // Windows / older macOS format ids
+        let cases: &[(&str, Option<&str>)] = &[
+            ("text", None),
+            ("rtf", None),
+            ("html", None),
+            ("image", None),
+            ("public.text", None),
+            ("NSStringPboardType", None),
+        ];
+        for (format, mime) in cases {
+            let r = rep(format, *mime, b"x");
+            assert!(
+                CaptureClipboardUseCase::is_supported_representation(&r),
+                "expected `{}` to be supported",
+                format
+            );
+        }
+    }
+
+    #[test]
+    fn generate_title_extracts_first_text_line() {
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            b"hello world",
+        )]);
+        assert_eq!(
+            CaptureClipboardUseCase::generate_title(&snap),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn generate_title_truncates_at_max_length_with_ellipsis() {
+        let long = "a".repeat(250);
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            long.as_bytes(),
+        )]);
+        let title = CaptureClipboardUseCase::generate_title(&snap).expect("title");
+        assert!(title.ends_with("..."));
+        // 200 chars + "..."
+        assert_eq!(title.chars().count(), 203);
+    }
+
+    #[test]
+    fn generate_title_handles_multibyte_truncation_safely() {
+        // 250 个 CJK 字符 (每个 3 bytes UTF-8); 截断必须落在字符边界
+        let long: String = std::iter::repeat('中').take(250).collect();
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            long.as_bytes(),
+        )]);
+        let title = CaptureClipboardUseCase::generate_title(&snap).expect("title");
+        assert!(title.ends_with("..."));
+        // 不 panic 即说明 char_indices 边界查找正确
+        assert_eq!(title.chars().count(), 203);
+    }
+
+    #[test]
+    fn generate_title_returns_none_when_no_text_representation() {
+        let snap = snapshot_with(vec![rep("image", Some("image/png"), b"\x89PNG")]);
+        assert_eq!(CaptureClipboardUseCase::generate_title(&snap), None);
+    }
+
+    #[test]
+    fn generate_title_skips_whitespace_only_text() {
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            b"   \t\n  ",
+        )]);
+        assert_eq!(CaptureClipboardUseCase::generate_title(&snap), None);
+    }
+
+    #[test]
+    fn generate_title_handles_invalid_utf8_by_skipping() {
+        let snap = snapshot_with(vec![rep(
+            "public.utf8-plain-text",
+            Some("text/plain"),
+            &[0xff, 0xfe, 0xfd],
+        )]);
+        assert_eq!(CaptureClipboardUseCase::generate_title(&snap), None);
     }
 }

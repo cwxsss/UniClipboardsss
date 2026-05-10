@@ -28,6 +28,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
 
+use crate::facade::mobile_sync::MobileSyncFacade;
 use crate::facade::roster::{MemberSummary, PeerSnapshotView, RosterError};
 use crate::facade::settings::{GeneralSettingsPatch, SettingsPatch};
 use crate::facade::space_setup::{EnsureReachableAllError, EnsureReachableAllReport};
@@ -46,7 +47,8 @@ use crate::facade::{
     SearchFacadeError, SearchPageView, SearchQueryInput, SearchRebuildAcceptedView,
     SearchStatusView, SettingsFacade, SettingsFacadeError, SpaceSetupFacade, StorageFacade,
 };
-use uc_core::ports::{PresenceEvent, ReachabilityState};
+use uc_core::ids::DeviceId;
+use uc_core::ports::{PresenceError, PresenceEvent, ReachabilityState};
 use uc_core::ClipboardChangeOrigin;
 use uc_core::SystemClipboardSnapshot;
 
@@ -74,6 +76,10 @@ pub struct AppFacade {
     /// 一份；启动期 host 调一次 `upgrade.detect_on_startup()` 决定是否触发
     /// 重新配对引导等动作。
     pub upgrade: Arc<UpgradeFacade>,
+    /// 移动端同步 facade（v1：iOS Shortcut）。`None` 表示该装配场景没有
+    /// 接入移动端 adapter（典型：纯单元测试 / 暂未接入桌面 daemon）；
+    /// 调用方拿到 `None` 应直接给用户报"功能未启用"。
+    pub mobile_sync: Option<Arc<MobileSyncFacade>>,
 }
 
 impl AppFacade {
@@ -97,6 +103,7 @@ impl AppFacade {
             device: parts.device,
             storage: parts.storage,
             upgrade: parts.upgrade,
+            mobile_sync: parts.mobile_sync,
         }
     }
 
@@ -135,6 +142,35 @@ impl AppFacade {
                 "space setup facade unavailable".to_string(),
             ))?
             .refresh_presence()
+            .await
+    }
+
+    /// 列出已配对 peer 的 `DeviceId`(本机已过滤)。供 desktop keepalive
+    /// 调度器用来发现新 peer / 收回已删除 peer。Thin wrapper over
+    /// [`SpaceSetupFacade::list_paired_peer_device_ids`].
+    pub async fn list_paired_peer_device_ids(
+        &self,
+    ) -> Result<Vec<DeviceId>, EnsureReachableAllError> {
+        self.space_setup
+            .as_ref()
+            .ok_or(EnsureReachableAllError::Repository(
+                "space setup facade unavailable".to_string(),
+            ))?
+            .list_paired_peer_device_ids()
+            .await
+    }
+
+    /// 对单个 peer 触发一次 `ensure_reachable`。供 desktop keepalive 调度
+    /// 器在退避到期时按需拨号。Thin wrapper over
+    /// [`SpaceSetupFacade::ensure_reachable_one`].
+    pub async fn ensure_reachable_one(
+        &self,
+        device: &DeviceId,
+    ) -> Result<ReachabilityState, PresenceError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| PresenceError::Internal("space setup facade unavailable".to_string()))?
+            .ensure_reachable_one(device)
             .await
     }
 
@@ -325,6 +361,7 @@ impl AppFacade {
                 pairing: None,
                 keyboard_shortcuts: None,
                 file_sync: None,
+                network: None,
             })
             .await?;
         Ok(())
@@ -419,4 +456,5 @@ pub struct AppFacadeParts {
     pub device: Arc<DeviceFacade>,
     pub storage: Arc<StorageFacade>,
     pub upgrade: Arc<UpgradeFacade>,
+    pub mobile_sync: Option<Arc<MobileSyncFacade>>,
 }

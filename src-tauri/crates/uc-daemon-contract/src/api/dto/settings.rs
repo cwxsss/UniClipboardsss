@@ -20,6 +20,10 @@ pub struct UpdateSettingsResponse {
     pub success: bool,
     pub data: SettingsDto,
     pub ts: i64,
+    /// 表示本次 patch 涉及需要重启 daemon 才能生效的字段（目前仅 `network.*`）。
+    /// 该字段由 webserver handler 内联计算（plan 04），不依赖 application facade
+    /// 公共签名变更（D-D1 / Pitfall 3 防御 — 调用方显式承担"还没真正生效"）。
+    pub restart_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -194,6 +198,23 @@ pub struct FileSyncSettingsDto {
     pub file_auto_cleanup: bool,
 }
 
+/// LAN-only Mode（v0.7.0）DTO 镜像。
+///
+/// 反向命名规则（Pitfall 1）：业务正向语义 `allow_relay_fallback`，
+/// 不在此层重命名为 `lan_only` 或类似镜像。wire 字段 = `allowRelayFallback`
+/// （camelCase 自动转换）。取反唯一发生在 `uc-bootstrap/src/network_policy.rs`。
+///
+/// `allow_overlay_network_addrs` 控制是否把 VPN/overlay 类虚拟网卡 IP（CGNAT
+/// 100.64.0.0/10、Tailscale ULA fd7a:115c:a1e0::/48）作为 iroh 直连候选发布
+/// 给对端。默认 `false`（过滤）。专业用户在两端都接入同一 VPN 时可开启。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSettingsDto {
+    pub allow_relay_fallback: bool,
+    #[serde(default)]
+    pub allow_overlay_network_addrs: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsDto {
@@ -205,6 +226,7 @@ pub struct SettingsDto {
     pub pairing: PairingSettingsDto,
     pub keyboard_shortcuts: HashMap<String, ShortcutKeyDto>,
     pub file_sync: FileSyncSettingsDto,
+    pub network: NetworkSettingsDto,
 }
 
 // =========================
@@ -296,12 +318,20 @@ pub struct FileSyncSettingsPatchDto {
     pub file_auto_cleanup: Option<bool>,
 }
 
+/// LAN-only Mode 字段 patch DTO 镜像 — `null` = 不修改。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSettingsPatchDto {
+    pub allow_relay_fallback: Option<bool>,
+    pub allow_overlay_network_addrs: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardShortcutsPatchDto {
     pub shortcuts: HashMap<String, Option<ShortcutKeyDto>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatchDto {
     pub general: Option<GeneralSettingsPatchDto>,
@@ -311,6 +341,7 @@ pub struct SettingsPatchDto {
     pub pairing: Option<PairingSettingsPatchDto>,
     pub keyboard_shortcuts: Option<KeyboardShortcutsPatchDto>,
     pub file_sync: Option<FileSyncSettingsPatchDto>,
+    pub network: Option<NetworkSettingsPatchDto>,
 }
 
 // =========================
@@ -468,6 +499,15 @@ impl From<core::FileSyncSettings> for FileSyncSettingsDto {
     }
 }
 
+impl From<core::NetworkSettings> for NetworkSettingsDto {
+    fn from(value: core::NetworkSettings) -> Self {
+        Self {
+            allow_relay_fallback: value.allow_relay_fallback,
+            allow_overlay_network_addrs: value.allow_overlay_network_addrs,
+        }
+    }
+}
+
 // =========================
 // From<Dto> for core model (for merge_settings_patch)
 // =========================
@@ -548,6 +588,124 @@ impl From<core::Settings> for SettingsDto {
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
             file_sync: value.file_sync.into(),
+            network: value.network.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod network_dto_tests {
+    use super::*;
+
+    #[test]
+    fn dto_serializes_camel_case_wire() {
+        let dto = NetworkSettingsDto {
+            allow_relay_fallback: true,
+            allow_overlay_network_addrs: false,
+        };
+        let json = serde_json::to_string(&dto).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"allowRelayFallback":true,"allowOverlayNetworkAddrs":false}"#
+        );
+    }
+
+    #[test]
+    fn dto_deserializes_camel_case_wire() {
+        let json = r#"{"allowRelayFallback":false,"allowOverlayNetworkAddrs":true}"#;
+        let dto: NetworkSettingsDto = serde_json::from_str(json).expect("deserialize");
+        assert!(!dto.allow_relay_fallback);
+        assert!(dto.allow_overlay_network_addrs);
+    }
+
+    /// 旧 wire（无 allowOverlayNetworkAddrs 字段）仍可反序列化，回填 false。
+    #[test]
+    fn dto_deserializes_legacy_wire_without_overlay_field() {
+        let json = r#"{"allowRelayFallback":true}"#;
+        let dto: NetworkSettingsDto = serde_json::from_str(json).expect("deserialize legacy");
+        assert!(dto.allow_relay_fallback);
+        assert!(!dto.allow_overlay_network_addrs);
+    }
+
+    #[test]
+    fn from_core_passes_through_business_semantics() {
+        let core_value = core::NetworkSettings {
+            allow_relay_fallback: false,
+            allow_overlay_network_addrs: true,
+        };
+        let dto: NetworkSettingsDto = core_value.into();
+        assert!(
+            !dto.allow_relay_fallback,
+            "DTO MUST NOT invert semantics (Pitfall 1)"
+        );
+        assert!(dto.allow_overlay_network_addrs);
+    }
+
+    #[test]
+    fn settings_dto_default_includes_network() {
+        let core_settings = core::Settings::default();
+        let dto: SettingsDto = core_settings.into();
+        assert!(
+            dto.network.allow_relay_fallback,
+            "Settings::default network MUST be true"
+        );
+    }
+
+    #[test]
+    fn update_settings_response_serializes_restart_required_camel_case() {
+        let resp = UpdateSettingsResponse {
+            success: true,
+            data: SettingsDto::from(core::Settings::default()),
+            ts: 0,
+            restart_required: true,
+        };
+        let json = serde_json::to_string(&resp).expect("serialize");
+        assert!(
+            json.contains(r#""restartRequired":true"#),
+            "wire field MUST be camelCase: got {json}"
+        );
+    }
+
+    #[test]
+    fn patch_dto_with_null_field_means_none() {
+        let json = r#"{"allowRelayFallback":null}"#;
+        let dto: NetworkSettingsPatchDto = serde_json::from_str(json).expect("deserialize");
+        assert!(dto.allow_relay_fallback.is_none());
+    }
+
+    #[test]
+    fn patch_dto_with_explicit_false() {
+        let json = r#"{"allowRelayFallback":false}"#;
+        let dto: NetworkSettingsPatchDto = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(dto.allow_relay_fallback, Some(false));
+    }
+
+    /// checker BLOCKER 5：`SettingsPatchDto::default()` 全字段 None，
+    /// 让下游 plan 04 测试用 `..Default::default()` 简化 baseline 构造。
+    #[test]
+    fn settings_patch_dto_default_is_all_none() {
+        let dto = SettingsPatchDto::default();
+        assert!(dto.general.is_none());
+        assert!(dto.sync.is_none());
+        assert!(dto.retention_policy.is_none());
+        assert!(dto.security.is_none());
+        assert!(dto.pairing.is_none());
+        assert!(dto.keyboard_shortcuts.is_none());
+        assert!(dto.file_sync.is_none());
+        assert!(dto.network.is_none());
+
+        let net_patch = NetworkSettingsPatchDto::default();
+        assert!(net_patch.allow_relay_fallback.is_none());
+    }
+
+    /// checker WARNING 3：向后兼容硬断言 —— PUT body `{}` 反序列化所有
+    /// 顶层字段全 None；与 Phase 94 之前一致，没有引入新强制字段。
+    #[test]
+    fn settings_patch_dto_deserializes_empty_object_to_all_none() {
+        let json = r#"{}"#;
+        let dto: SettingsPatchDto = serde_json::from_str(json).expect("deserialize empty body");
+        assert!(dto.general.is_none());
+        assert!(dto.network.is_none());
+        assert!(dto.file_sync.is_none());
     }
 }

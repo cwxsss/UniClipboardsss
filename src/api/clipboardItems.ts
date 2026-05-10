@@ -1,8 +1,5 @@
 import { daemonClient } from '@/api/daemon/client'
 import {
-  type ClipboardEntryDto,
-  getClipboardEntries as daemonGetEntries,
-  getClipboardEntry as daemonGetEntry,
   deleteClipboardEntry as daemonDeleteEntry,
   restoreClipboardEntry as daemonRestoreEntry,
   toggleFavorite as daemonToggleFavorite,
@@ -11,12 +8,6 @@ import {
   getClipboardEntryResource as daemonGetResource,
   getEntryDetail as daemonGetDetail,
 } from '@/api/daemon/clipboard'
-import {
-  extractDomainFromUrl,
-  isFileContentType,
-  isImageContentType,
-  parseFileNamesFromUriList,
-} from '@/lib/clipboard-utils'
 import { createLogger } from '@/lib/logger'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
@@ -124,69 +115,17 @@ export interface ClipboardItemResponse {
   /** Failure reason when file_transfer_status is "failed" */
   file_transfer_reason?: string | null
   file_transfer_ids?: string[]
+  /**
+   * `paste_rep` 的 payload_state, 仅在 `"Lost"` 时由后端输出。其他状态为
+   * undefined。前端在列表上把对应 entry 灰显并标记"内容已不可用",
+   * 用户在点击粘贴前就能识别——否则点击会得到 daemon 410 + toast。
+   */
+  payload_state?: string | null
 }
 
 export interface ClipboardStats {
   total_items: number
   total_size: number
-}
-
-/**
- * Transform a daemon ClipboardEntryDto (camelCase, from daemon HTTP)
- * to frontend ClipboardItemResponse.
- */
-function transformDtoToResponse(entry: ClipboardEntryDto): ClipboardItemResponse {
-  const isFile = isFileContentType(entry.contentType)
-  const isImage = !isFile && isImageContentType(entry.contentType)
-
-  const hasLinkData = !isImage && entry.linkUrls && entry.linkUrls.length > 0
-  let linkItem: ClipboardLinkItem | null = null
-  if (hasLinkData) {
-    linkItem = {
-      urls: entry.linkUrls!,
-      domains: entry.linkDomains ?? entry.linkUrls!.map(extractDomainFromUrl),
-    }
-  }
-
-  const item: ClipboardItem = {
-    image: isImage
-      ? {
-          thumbnail: entry.thumbnailUrl ?? null,
-          size: entry.sizeBytes,
-          width: entry.imageWidth ?? 0,
-          height: entry.imageHeight ?? 0,
-        }
-      : null,
-    text:
-      !isImage && !isFile && !hasLinkData
-        ? {
-            display_text: entry.preview,
-            has_detail: entry.hasDetail,
-            size: entry.sizeBytes,
-          }
-        : null,
-    file: isFile
-      ? {
-          file_names: parseFileNamesFromUriList(entry.preview),
-          file_sizes: entry.fileSizes ?? [],
-        }
-      : (null as unknown as ClipboardFileItem),
-    link: linkItem as unknown as ClipboardLinkItem,
-    code: null as unknown as ClipboardCodeItem,
-    unknown: null,
-  }
-
-  return {
-    id: entry.id,
-    is_downloaded: true,
-    is_favorited: entry.isFavorited,
-    created_at: entry.capturedAt,
-    updated_at: entry.updatedAt,
-    active_time: entry.activeTime,
-    item,
-    file_transfer_status: entry.fileTransferStatus ?? null,
-    file_transfer_reason: entry.fileTransferReason ?? null,
-  }
 }
 
 /**
@@ -199,44 +138,6 @@ export async function getClipboardStats(): Promise<ClipboardStats> {
   } catch (error) {
     log.error({ err: error }, '获取剪贴板统计信息失败')
     throw error
-  }
-}
-
-/**
- * 获取剪贴板历史记录
- */
-export async function getClipboardItems(
-  _orderBy?: OrderBy,
-  limit?: number,
-  offset?: number,
-  _filter?: Filter
-): Promise<ClipboardItemsResult> {
-  try {
-    const response = await daemonGetEntries(limit ?? 50, offset ?? 0)
-
-    if (response.status === 'not_ready') {
-      return { status: 'not_ready' }
-    }
-
-    const items = (response.entries ?? []).map(transformDtoToResponse)
-    return { status: 'ready', items }
-  } catch (error) {
-    log.error({ err: error }, '获取剪贴板历史记录失败')
-    throw error
-  }
-}
-
-/**
- * Fetch a single clipboard entry by ID.
- */
-export async function getClipboardEntry(entryId: string): Promise<ClipboardItemResponse | null> {
-  try {
-    const entry = await daemonGetEntry(entryId)
-    if (!entry) return null
-    return transformDtoToResponse(entry)
-  } catch (error) {
-    log.error({ err: error }, 'Failed to get clipboard entry')
-    return null
   }
 }
 

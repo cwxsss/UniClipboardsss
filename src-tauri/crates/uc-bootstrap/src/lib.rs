@@ -11,6 +11,7 @@ pub mod builders;
 pub mod config;
 pub mod file_transfer_lifecycle;
 pub mod init;
+mod network_policy;
 pub mod non_gui_runtime;
 pub mod space_setup;
 pub mod task_registry;
@@ -25,8 +26,8 @@ pub use assembly::{
 };
 pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{
-    build_cli_context, build_cli_context_with_profile, build_daemon_app, build_gui_app,
-    build_slice1_cli_context, CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
+    build_cli_context, build_cli_context_with_profile, build_daemon_app, build_slice1_cli_context,
+    CliBootstrapContext, DaemonBootstrapContext,
 };
 pub use config::load_config;
 pub use init::{

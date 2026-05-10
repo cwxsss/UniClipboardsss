@@ -36,17 +36,20 @@ use uc_core::file_transfer::{FileTransferDirection, OutboundProgressStatus};
 use uc_core::ports::blob::{BlobReferenceRepositoryPort, BlobTransferPort};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::{
-    ClipboardDispatchPort, ClipboardReceiverPort, LocalIdentityPort, PresencePort,
+    ClipboardDispatchPort, ClipboardReceiverPort, ConnectionChannelPort, LocalIdentityPort,
+    PresencePort,
 };
 use uc_infra::network::iroh::transfer_progress_adapter::InboundProgressEvent;
 use uc_infra::network::iroh::{
     BlobHandlers, ClipboardHandlers, IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError,
-    TransferProgressHandlers,
+    TransferProgressHandlers, IDENTITY_STORE_KEY,
 };
 // Re-exported so external callers can parametrise the assembly without
 // having to `use uc_infra` themselves.
 pub use uc_infra::network::iroh::IrohNodeConfig;
 use uc_infra::security::Sha256IdentityFingerprintFactory;
+use uc_platform::file_secure_storage::FileSecureStorage;
+use uc_platform::migrating_secure_storage::MigratingSecureStorage;
 
 use crate::assembly::WiredDependencies;
 
@@ -216,8 +219,48 @@ pub async fn build_space_setup_assembly(
     // fresh one here rather than down-casting through `dyn` because
     // `IrohIdentityStore::new` takes the concrete factory trait object and
     // we'd have to re-wrap anyway.
+    //
+    // **Storage backend separation**: iroh 长期 Ed25519 设备密钥走独立的
+    // `FileSecureStorage`(落地 `<app_data>/iroh-identity[_<profile>]/`),不
+    // 复用 `deps.security.secure_storage`(即 KEK 用的系统 keychain)。
+    //
+    // Why: `IrohNodeBuilder::bind` 在应用启动期被调用,会 `ensure_secret_key`
+    // → `secure_storage.get/set("iroh-identity:v1")`。如果用 keychain 后端,
+    // 这条路径会在用户**没有任何操作**(没点 unlock、没启用 auto-unlock、
+    // 没设置加密口令)的情况下触发 macOS keychain 弹窗,违反"keychain 只
+    // 在用户解锁/初始化加密时访问"的边界规则。
+    //
+    // 设备身份密钥不是用户秘密,本身只能用于 P2P 网络握手身份伪冒(且
+    // 攻击者还需要 KEK 才能解密剪贴板内容),用 0600 文件 + FileVault
+    // 全盘加密保护已足够,与 SSH/IPFS/Tailscale 等同类工具实践一致。
+    //
+    // Migration (0.6.x → 0.7+): 0.6.x 把 `iroh-identity:v1` 写在系统 keychain
+    // (与 KEK 同 service "UniClipboard")。直接换 file backend 会让升级用户
+    // 的 iroh 设备身份重置 → 对端 `trusted_peer.peer_fingerprint` 不再匹配
+    // → 必须重新走完整 pairing 流程。这里用 `MigratingSecureStorage` 做
+    // 一次性迁移装饰:`get` 优先 file,miss 时 fallback 查 keychain,命中
+    // 后写 file 并 best-effort 删 keychain。后续 `set` / `delete` 只走 file。
+    //
+    // 迁移仅作用于 `IDENTITY_STORE_KEY` 白名单——其他 key 的访问永远不会
+    // 触碰 keychain,因此 fresh 安装零额外 keychain 调用(平台 NoEntry 不
+    // 弹窗);只有"keychain 里恰好有 iroh-identity:v1 条目"的升级路径会
+    // 读一次 keychain。在生产签名稳定的 build 上,同应用同 service 的读取
+    // 命中已有 ACL 白名单 → 不弹 prompt;最坏情况(codesign drift)弹一次
+    // 也比让用户重新配对友好得多。
+    //
+    // 迁移代码保留至 1.0:确保跳版本升级 (e.g. 0.6.x → 0.7.5 跳过中间版本)
+    // 仍能拾起残留的 keychain 条目;清理时机与 0.6.x EOL 对齐。
+    let file_backend: Arc<dyn uc_core::ports::SecureStoragePort> = Arc::new(
+        FileSecureStorage::with_base_dir(wired.iroh_identity_dir.clone()),
+    );
+    let iroh_identity_storage: Arc<dyn uc_core::ports::SecureStoragePort> =
+        Arc::new(MigratingSecureStorage::new(
+            file_backend,
+            Arc::clone(&deps.security.secure_storage),
+            vec![IDENTITY_STORE_KEY.to_string()],
+        ));
     let identity_store = Arc::new(IrohIdentityStore::new(
-        Arc::clone(&deps.security.secure_storage),
+        iroh_identity_storage,
         Arc::new(Sha256IdentityFingerprintFactory),
     ));
 
@@ -236,8 +279,14 @@ pub async fn build_space_setup_assembly(
     // `EnsureReachableAllUseCase` 给 F1 hook 用。
     let presence: Arc<dyn PresencePort> = builder.install_presence(
         Arc::clone(&wired.peer_addr_repo),
+        Arc::clone(&deps.device.member_repo),
+        Arc::clone(&deps.security.fingerprint),
         Arc::clone(&deps.system.clock),
     );
+    // Phase 96 INDIC-01:连接通道单一真相源。复用同一 endpoint +
+    // peer_addr_repo,纯读 adapter 不装 ALPN handler。
+    let connection_channel: Arc<dyn ConnectionChannelPort> =
+        builder.install_connection_channel(Arc::clone(&wired.peer_addr_repo));
     // Slice 2 Phase 2 · T10:同一节点装第三个 ALPN(剪切板同步)。dispatch
     // 复用 endpoint + peer_addr_repo,与 presence 共享 NAT/relay 映射;
     // receiver handler 通过 `member_repo` 把 `Connection::remote_id()` 反查
@@ -326,6 +375,7 @@ pub async fn build_space_setup_assembly(
         trusted_peer_repo: Arc::clone(&wired.trusted_peer_repo),
         local_identity: Arc::clone(&local_identity),
         presence: Arc::clone(&presence),
+        connection_channel: Some(Arc::clone(&connection_channel)),
     }));
 
     // Slice 2 Phase 2 · T10:剪切板同步门面。`dispatch_entry` 共享同一份
@@ -336,6 +386,7 @@ pub async fn build_space_setup_assembly(
     // `SpaceSetupAssembly::shutdown` 显式 `abort()` 加速过程)。
     let clipboard_sync = Arc::new(ClipboardSyncFacade::new(ClipboardSyncDeps {
         peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
+        member_repo: Arc::clone(&deps.device.member_repo),
         presence: Arc::clone(&presence),
         transfer_cipher: Arc::clone(&deps.security.transfer_cipher),
         clipboard_dispatch,

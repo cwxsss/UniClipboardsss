@@ -1,16 +1,21 @@
 //! Tracing configuration for UniClipboard
 //!
-//! Thin wrapper that composes uc-observability layer builders with the
-//! application-specific Sentry layer, then registers a single global
-//! tracing subscriber.
+//! Composes the uc-observability dual-output layer builders (pretty console +
+//! flat JSON file) with Sentry's `tracing` integration, then registers a
+//! single global subscriber.
 //!
 //! ## Architecture
 //!
 //! - **uc-observability** provides `build_console_layer` + `build_json_layer`
-//!   (profile-driven, dual-output: pretty console + flat JSON file) and
-//!   `otlp::init_otlp_pipeline` (optional OTLP telemetry export, Phase 87)
-//! - **This module** adds the Sentry layer on top, optionally wires OTLP, and
-//!   registers the composed subscriber via `try_init()`
+//!   (profile-driven, local-only outputs) and the redaction blocklist used by
+//!   the Sentry `before_send_log` hook below.
+//! - **This module** initializes Sentry (Issues + Logs + Performance), adds
+//!   `sentry::integrations::tracing::layer()` on top of the local layers, and
+//!   registers the composed subscriber via `try_init()`.
+//!
+//! All remote telemetry — errors, structured logs, performance spans — flows
+//! through Sentry. There is no separate OTLP / Seq pipeline anymore; the local
+//! JSON file remains as offline diagnostics.
 //!
 //! ## Idempotency
 //!
@@ -22,26 +27,19 @@
 //! Call `init_tracing_subscriber()` in `main.rs` **before** Tauri Builder setup.
 
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
+use sentry::integrations::tracing::EventFilter;
 use tracing_subscriber::prelude::*;
 use uc_application::facade::AppPaths;
 use uc_infra::settings::repository::load_settings_snapshot;
-use uc_observability::{otlp::OtlpGuard, LogProfile, WorkerGuard};
+use uc_observability::redact::{is_sensitive_key, REDACTED_PLACEHOLDER};
+use uc_observability::{LogProfile, WorkerGuard};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ports::AppDirsPort;
 
 static SENTRY_GUARD: OnceLock<sentry::ClientInitGuard> = OnceLock::new();
 static JSON_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
-/// Keeps the OTLP TracerProvider alive for the lifetime of the process.
-///
-/// Stored behind a `ManuallyDrop` inside the `OnceLock` so that the guard is
-/// NEVER dropped, even if `set` were to fail (which would otherwise trigger
-/// `provider.shutdown()` and poison the shared inner state of every clone held
-/// by the registered `tracing_subscriber` layer — producing the infamous
-/// "Spans are being emitted even after Shutdown" warning). Static globals are
-/// not dropped at program exit, so wrapping in `ManuallyDrop` loses nothing.
-static OTLP_GUARD: OnceLock<std::mem::ManuallyDrop<OtlpGuard>> = OnceLock::new();
 
 /// Guard that ensures tracing is initialized exactly once across all entry points.
 static TRACING_INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -63,7 +61,7 @@ fn resolve_telemetry_enabled(settings_path: &Path) -> bool {
         .telemetry_enabled
 }
 
-/// Initialize the tracing subscriber with dual-output and optional Sentry.
+/// Initialize the tracing subscriber with dual-output and Sentry integration.
 ///
 /// ## Idempotency
 ///
@@ -74,7 +72,13 @@ fn resolve_telemetry_enabled(settings_path: &Path) -> bool {
 ///
 /// 1. Resolves log directory from platform app-dirs
 /// 2. Selects [`LogProfile`] from `UC_LOG_PROFILE` env var (or build-type default)
-/// 3. Initializes Sentry if `SENTRY_DSN` is set
+/// 3. Initializes Sentry if a DSN is available — runtime `SENTRY_DSN` env takes
+///    priority, falling back to the compile-time `SENTRY_DSN` baked in by CI
+///    (mirrors the front-end `VITE_SENTRY_DSN` pattern). Sentry collects three
+///    signals through one layer:
+///    - **Issues** (panics + tracing ERROR with `error` field)
+///    - **Logs** (tracing ERROR + WARN, redacted)
+///    - **Performance Spans** (tracing spans, sampled at `traces_sample_rate`)
 /// 4. Builds console + JSON layers via `uc_observability`
 /// 5. Composes all layers on a `Registry` and registers globally
 ///
@@ -106,13 +110,114 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
     // Step 2: Select log profile
     let profile = LogProfile::from_env();
 
-    // Step 3: Initialize Sentry (if SENTRY_DSN is set)
-    let sentry_layer = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+    // Step 2b: Resolve `telemetry_enabled` from persisted settings and push it
+    // into the process-wide runtime gate exposed by `uc-observability`.
+    //
+    // Sentry consults that gate at event time via the `before_send`,
+    // `before_breadcrumb`, and `before_send_log` hooks installed below. The
+    // user-facing `General › Telemetry` switch therefore takes effect
+    // immediately — `uc-webserver`'s PUT /settings handler calls
+    // `set_telemetry_enabled` when the field changes, and the next emitted
+    // event already honors it.
+    //
+    // Reading the persisted value here is what makes the *initial* state
+    // correct: until the daemon side serves any settings update, the gate
+    // would otherwise carry its `true` default and ignore a user who had
+    // turned telemetry off in a previous session.
+    let telemetry_enabled = resolve_telemetry_enabled(&paths.settings_path);
+    uc_observability::set_telemetry_enabled(telemetry_enabled);
+
+    // Step 3: Initialize Sentry whenever a DSN is available.
+    //
+    // ## DSN 来源优先级
+    //
+    // 1. **运行时** `SENTRY_DSN` env —— 给 dev / 自部署用户运行时覆盖。
+    // 2. **编译期** `SENTRY_DSN` env —— CI 在 release build 时注入,等价前端
+    //    `VITE_SENTRY_DSN` 的处理方式。这是必需路径,否则用户机器上没人会
+    //    设这个 env,sentry 在终端用户那边永远不会启用。
+    //
+    // ## 与 telemetry_enabled 的关系
+    //
+    // Sentry 在有 DSN 时无条件初始化,但每条出站事件 / breadcrumb / log 都会
+    // 被对应的 `before_*` 钩子拦截,在用户关闭 telemetry 时一律返回 None。
+    // 净效果是用户开关即时生效,不需要重启进程。
+    //
+    // ## 防双重 panic 上报
+    //
+    // sentry crate 的默认 `default-integrations` 启用 `sentry-panic`,会自动
+    // 把 panic 捕获并上报为 Exception。同时 `install_panic_logging_hook` 把
+    // panic 写成 `tracing::error!(target: "panic", ...)` 进 jsonl
+    // (jsonl 是离线排障的关键,不能省)。这条 tracing event 默认会再被
+    // sentry-tracing layer 转成 sentry Event,导致同一个 panic 在 sentry 上
+    // 出现两条 issue。这里用 `event_filter` 让 sentry-tracing 主动忽略
+    // `target = "panic"` 的 event,把 panic→sentry 的职责完全交给
+    // sentry-panic integration,jsonl 一侧不受影响。
+    let runtime_dsn = std::env::var("SENTRY_DSN").ok().filter(|s| !s.is_empty());
+    let compile_time_dsn = option_env!("SENTRY_DSN").filter(|s| !s.is_empty());
+    let dsn = runtime_dsn.or_else(|| compile_time_dsn.map(String::from));
+
+    let sentry_dsn_present = dsn.is_some();
+
+    let sentry_layer = if let Some(dsn) = dsn {
         let guard = sentry::init((
             dsn,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
-                traces_sample_rate: 1.0,
+                // CI 注入的环境标签,默认空 → sentry 显示 "production"。
+                environment: option_env!("APP_ENV")
+                    .filter(|s| !s.is_empty())
+                    .map(Into::into),
+                // ERROR / Exception 全采样;performance trace 降到 10% 控制 quota。
+                sample_rate: 1.0,
+                traces_sample_rate: 0.1,
+                // Enable Sentry Logs (replaces the legacy OTLP→Seq pipeline).
+                // Tracing ERROR + WARN events are routed to Logs by the
+                // `event_filter` below; INFO stays as a breadcrumb only.
+                enable_logs: true,
+                // Runtime telemetry gate. Drops every outgoing event (incl.
+                // panics from the sentry-panic integration) when the user has
+                // telemetry off, without un-installing any global hook.
+                before_send: Some(Arc::new(|event| {
+                    if uc_observability::is_telemetry_enabled() {
+                        Some(event)
+                    } else {
+                        None
+                    }
+                })),
+                // Same gate for the breadcrumb trail — when telemetry is off
+                // we drop them at capture time so re-enabling telemetry mid-
+                // session doesn't leak the previous quiet period's context.
+                before_breadcrumb: Some(Arc::new(|breadcrumb| {
+                    if uc_observability::is_telemetry_enabled() {
+                        Some(breadcrumb)
+                    } else {
+                        None
+                    }
+                })),
+                // Per-log sanitizer + telemetry gate. Runs for every Sentry
+                // Log payload before transmission, so we can:
+                // 1. Drop the log when telemetry is disabled (gate parity with
+                //    `before_send` / `before_breadcrumb`).
+                // 2. Scrub sensitive attribute values (clipboard text, tokens,
+                //    file paths, …) using the shared blocklist defined in
+                //    `uc_observability::redact`. The previous OTLP pipeline
+                //    relied on a `RedactingExporter` wrapping the OTLP span
+                //    exporter; this hook is the Sentry-side equivalent.
+                before_send_log: Some(Arc::new(|mut log| {
+                    if !uc_observability::is_telemetry_enabled() {
+                        return None;
+                    }
+                    for (key, attr) in log.attributes.iter_mut() {
+                        if is_sensitive_key(key) {
+                            // sentry::protocol::Value is a re-export of
+                            // serde_json::Value; using the re-export keeps
+                            // uc-bootstrap free of a direct serde_json dep.
+                            attr.0 =
+                                sentry::protocol::Value::String(REDACTED_PLACEHOLDER.to_string());
+                        }
+                    }
+                    Some(log)
+                })),
                 ..Default::default()
             },
         ));
@@ -121,15 +226,63 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
             eprintln!("Sentry guard already initialized");
         }
 
-        Some(sentry_tracing::layer())
+        // Apply the profile-level EnvFilter to match the JSON file layer.
+        //
+        // Without this wrapper, NOISE_FILTERS directives like
+        // `swarm_discovery::socket=error` would silence the per-tick mDNS
+        // EHOSTUNREACH warnings in console / jsonl but leak them straight
+        // into Sentry Logs — burning the 5GB/mo quota on infrastructure
+        // noise. Symmetry with the jsonl "source of truth" keeps offline
+        // diagnostics and remote diagnostics aligned.
+        Some(
+            sentry::integrations::tracing::layer()
+                .event_filter(|md| {
+                    if md.target() == "panic" {
+                        // panic 由 sentry-panic integration 上报,这里跳过避免重复。
+                        EventFilter::Ignore
+                    } else if md.target().starts_with("opentelemetry") {
+                        // 即便已经从依赖图删掉 opentelemetry-*,任何间接引入的
+                        // opentelemetry crate 仍可能 emit 内部错误 —— 这条兜底
+                        // 防止它们进 Sentry 噪音。
+                        EventFilter::Ignore
+                    } else if md.target().starts_with("noq_proto::connection")
+                        || md.target().starts_with("noq_udp")
+                    {
+                        // QUIC 传输层状态机噪音(`PTO expired while unset`,
+                        // `failed closing path`,`sendmsg error: No route to host`
+                        // 等)。NOISE_FILTERS 里已经按 EnvFilter directive 屏蔽了
+                        // 这些 target,但 sentry-tracing 的 layer 在某些版本上
+                        // 不完全响应 per-layer EnvFilter,事件仍能漏到 Sentry
+                        // (历史报例:UNICLIPBOARD-RUST-3 / `PTO expired while
+                        // unset` 在 alpha.3 上 8 次)。这里直接在 event_filter
+                        // 里拦住作为双保险 —— iroh 上层仍会把真正的连接失败
+                        // 转成自己的结构化事件,没有可观测信号损失。
+                        EventFilter::Ignore
+                    } else {
+                        match *md.level() {
+                            // ERROR 同时上报为 Issue(报警)和 Log(可搜索)。
+                            // EventFilter 在 sentry 0.48+ 是 bitflags,`|` 即组合。
+                            ::tracing::Level::ERROR => EventFilter::Event | EventFilter::Log,
+                            // WARN 只进 Logs,不报警;比 OTLP 时代的 INFO+ 更克制,
+                            // 留出 5GB/月 配额预算。
+                            ::tracing::Level::WARN => EventFilter::Log,
+                            // INFO 沿用旧行为做 breadcrumb(下一条 Issue 的上下文),
+                            // 不直接产生 Log 防止配额爆炸。
+                            ::tracing::Level::INFO => EventFilter::Breadcrumb,
+                            _ => EventFilter::Ignore,
+                        }
+                    }
+                })
+                .with_filter(profile.json_filter()),
+        )
     } else {
-        // No eprintln here -- it pollutes CLI output. The absence of Sentry
-        // is a normal condition and will be visible in the JSON log file via
-        // the tracing::info! at the end of initialization.
+        // No eprintln here -- it pollutes CLI output. Absence of a DSN is a
+        // normal condition; the closing tracing::info! reports it via the
+        // `sentry_dsn_present` field.
         None
     };
 
-    // Step 4: Build layers from uc-observability
+    // Step 4: Build local layers from uc-observability
     let console_layer = uc_observability::build_console_layer(&profile);
     let (json_layer, guard) = uc_observability::build_json_layer(&paths.logs_dir, &profile)?;
 
@@ -138,79 +291,16 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
         ::tracing::debug!("JSON log guard already initialized — skipping");
     }
 
-    // Step 4b: Optionally initialize OTLP provider (phase 1 of 2).
-    //
-    // `init_otlp_provider` is fully synchronous — the underlying HTTP client
-    // is `reqwest::blocking::Client`, which manages its own internal tokio
-    // runtime. No outer tokio runtime is required here, and spans are
-    // exported from opentelemetry_sdk's own background std::thread
-    // (not a tokio task), so the provider is fully self-contained.
-    //
-    // Provider initialization is separated from layer creation so that the
-    // layer can be built with the correct generic subscriber type `S`
-    // (determined by the full `.with()` composition in Step 5, not at
-    // provider-init time). `SdkTracerProvider::clone()` uses Arc semantics.
-    // Step 4c: Read telemetry_enabled from persisted settings.
-    // This is a lightweight file read — the full settings are loaded later by
-    // the app runtime. We only need the boolean gate here.
-    let telemetry_enabled = resolve_telemetry_enabled(&paths.settings_path);
-
-    // Note: OTLP enablement and any compile-time config backfill are handled
-    // inside init_otlp_provider. The exporter itself still resolves the final
-    // endpoint using OpenTelemetry's standard env-var rules.
-    let otlp_providers = {
-        match uc_observability::otlp::init_otlp_provider(
-            &profile,
-            device_id.as_deref(),
-            telemetry_enabled,
-        ) {
-            Ok(Some((providers, guard))) => {
-                // Wrap the guard in ManuallyDrop before handing it to the
-                // OnceLock. If `set` ever fails (it shouldn't — idempotency
-                // guard above ensures single-init), ManuallyDrop prevents a
-                // stray drop from calling `provider.shutdown()` and poisoning
-                // the layer's cloned provider handle.
-                if OTLP_GUARD.set(std::mem::ManuallyDrop::new(guard)).is_err() {
-                    eprintln!("[uc-bootstrap] OTLP guard already initialized; leaking new guard");
-                }
-                Some(providers)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                // Log to stderr — the global subscriber isn't set yet.
-                eprintln!("[uc-bootstrap] failed to initialize OTLP provider ({e}); continuing without it");
-                None
-            }
-        }
-    };
-
-    let otlp_enabled = otlp_providers.is_some();
-
     // Step 5: Compose all layers and register.
     //
-    // Phase 2 of OTLP init: build the typed layers now that the subscriber type `S`
-    // is fixed by the `.with()` chain below.
-    //
-    // Two OTLP layers are composed:
-    // - Trace layer: converts tracing spans → OTLP traces (for distributed tracing)
-    // - Logs layer: converts tracing events → OTLP logs (for standalone events
-    //   that are not attached to an exported span)
-    let otlp_trace_layer: Option<uc_observability::otlp::layer::OtlpConcreteLayer<_>> =
-        otlp_providers
-            .as_ref()
-            .map(|p| uc_observability::otlp::layer::build_otlp_layer(&p.tracer_provider, &profile));
-
-    let otlp_logs_layer: Option<uc_observability::otlp::logs_layer::OtlpLogsConcreteLayer<_>> =
-        otlp_providers.as_ref().map(|p| {
-            uc_observability::otlp::logs_layer::build_otlp_logs_layer(&p.logger_provider, &profile)
-        });
-
+    // Sentry's tracing integration is a single layer that handles three
+    // telemetry concerns at once (Issues / Logs / Performance Spans), routed
+    // by the `event_filter` and the bundled span tracking. No separate OTLP
+    // trace or logs layer is needed.
     match tracing_subscriber::registry()
         .with(sentry_layer)
         .with(console_layer)
         .with(json_layer)
-        .with(otlp_trace_layer)
-        .with(otlp_logs_layer)
         .try_init()
     {
         Ok(()) => {}
@@ -231,23 +321,19 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
 
     let _ = TRACING_INITIALIZED.set(());
 
+    // `sentry_dsn_present` describes whether the export pipeline was *constructed*;
+    // `telemetry_enabled` is the runtime gate that decides whether events
+    // actually flow through it. The pipeline can be initialized but currently
+    // silent (telemetry off) and become live the instant the user toggles it
+    // on, with no restart.
     ::tracing::info!(
         profile = %profile,
         logs_dir = %paths.logs_dir.display(),
-        otlp_enabled = otlp_enabled,
+        sentry_dsn_present = sentry_dsn_present,
         telemetry_enabled = telemetry_enabled,
         "Tracing initialized with dual output (console + JSON{})",
-        if otlp_enabled { " + OTLP" } else { "" }
+        if sentry_dsn_present { " + Sentry" } else { "" }
     );
-
-    // Legacy env var migration warning (D-14, REQ-87-10).
-    // Emitted through the now-initialized subscriber for structured capture.
-    if std::env::var("UC_SEQ_URL").is_ok() {
-        ::tracing::warn!(
-            "UC_SEQ_URL is set but legacy Seq ingestion was removed in Phase 87. \
-             Migrate to OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5341/ingest/otlp"
-        );
-    }
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "uniclipboard"
-version = "0.6.0"
+version = "0.7.0"
 license.workspace = true
 description = "一个剪切板同步工具"
 authors = ["mkdir700@gmail.com"]
@@ -19,43 +19,42 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# ===== Workspace crates =====
-uc-core = { path = "crates/uc-core" }
-uc-application = { path = "crates/uc-application" }
+# Tauri shell entry — bin crate hands control to uc-tauri, which owns all
+# Tauri-specific plumbing (commands, plugins, builder/setup, run loop) and
+# pulls uc-bootstrap transitively for context construction.
 uc-tauri = { path = "crates/uc-tauri" }
-uc-bootstrap = { path = "crates/uc-bootstrap" }
-uc-daemon-client = { path = "crates/uc-daemon-client" }
-uc-daemon-local = { path = "crates/uc-daemon-local", features = ["sidecar-lifecycle"] }
 
-# ===== Tauri 相关依赖 =====
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+# Required for the tauri::generate_context!() macro the bin still calls.
+tauri = { workspace = true }
+
+# Tauri plugin crates listed here so `tauri-build` can validate capability
+# permission identifiers against them at compile time. The plugins are
+# initialized inside `uc_tauri::run`, not directly in this bin.
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-stronghold = "2"
-tauri-plugin-shell = "2"
 
-# ===== 序列化 (tauri::generate_context! 宏需要) =====
+# tauri::generate_context!() expands to code that references serde_json by path.
 serde_json = "1"
-
-# ===== 日志 =====
-tracing = "0.1"
 
 [features]
 cargo-clippy = []
+# 启用后默认使用 "dev" profile（数据目录后缀 `-dev`、keychain service 后缀 `-dev`）。
+# 仅供 `bun tauri:build:dev` 使用，避免本地 dev 构建产物覆盖 prod 安装的数据。
+dev-profile = ["uc-tauri/dev-profile"]
 
 [profile.release]
-panic = "abort"   # Strip expensive panic clean-up logic
-codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
-opt-level = "z"   # Optimize for binary size
-strip = true      # Remove debug symbols
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSGraphics", "NSPanel", "NSResponder", "NSWindow"] }
-objc2-foundation = { version = "0.3", features = ["objc2-core-foundation", "NSGeometry"] }
+panic = "abort"                # Strip expensive panic clean-up logic
+codegen-units = 1              # Compile crates one after another so the compiler can optimize better
+lto = true                     # Enables link to optimizations
+opt-level = "z"                # Optimize for binary size
+# 关键:Sentry symbolication 需要 debug info。`line-tables-only` 只保留地址→
+# 文件/行号映射,不带变量名等更重的信息,体积成本最小;配合 split-debuginfo
+# 和 strip = "symbols",最终 binary 仍然干净,debug info 单独打包成
+# .dSYM/.dwp/.pdb,由 CI 上传给 Sentry 用作 stack trace 解析。
+debug = "line-tables-only"
+split-debuginfo = "packed"     # macOS → .dSYM bundle, Linux → .dwp;Windows MSVC 自带 .pdb
+strip = "symbols"              # binary 内嵌符号 strip 干净,独立 debug 文件保留
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
@@ -72,7 +71,6 @@ members = [
   "crates/uc-application",
   "crates/uc-platform",
   "crates/uc-infra",
-  "crates/uc-clipboard-probe",
   "crates/uc-tauri",
   "crates/uc-observability",
   "crates/uc-bootstrap",
@@ -80,7 +78,6 @@ members = [
   "crates/uc-daemon-local",
   "crates/uc-webserver",
   "crates/uc-desktop",
-  "crates/uc-daemon",
   "crates/uc-cli",
   "crates/uc-cli-macros",
   "crates/uc-daemon-client",
@@ -88,11 +85,10 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 license = "AGPL-3.0-only"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
-tauri-plugin-shell = "2"

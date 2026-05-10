@@ -16,6 +16,10 @@ uc-core = { path = "../uc-core" }
 uc-desktop = { path = "../uc-desktop" }
 uc-daemon-contract = { path = "../uc-daemon-contract" }
 uc-daemon-local = { path = "../uc-daemon-local" }
+# Hidden `probe` subcommand group reads/writes the OS clipboard directly
+# (replaces the standalone `clipboard-probe` binary). Diagnostic only.
+uc-platform = { path = "../uc-platform" }
+clipboard-rs = { version = "0.3", features = ["default"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -28,6 +32,11 @@ tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 console = "0.15"
 indicatif = "0.17"
+# Themed Confirm / Input prompts. `default-features = false` drops the
+# `editor` and `password` extras — we keep `ui::password` (hand-rolled
+# masked-feedback renderer) so the LAN-risk and label/username prompts
+# are the only consumers.
+dialoguer = { version = "0.11", default-features = false }
 libc = "0.2"
 hostname = "0.4"
 uc-application = { path = "../uc-application" }

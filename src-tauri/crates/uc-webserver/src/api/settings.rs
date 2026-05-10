@@ -8,15 +8,16 @@
 use axum::extract::State;
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use tracing::{info, instrument};
 use uc_application::facade::settings as app_settings;
 use utoipa;
 
 use crate::api::dto::error::ApiError;
 use crate::api::dto::settings::{
     ContentTypesDto, ContentTypesPatchDto, FileSyncSettingsDto, GeneralSettingsDto,
-    GetSettingsResponse, KeyboardShortcutsPatchDto, PairingSettingsDto, RetentionPolicyDto,
-    RetentionRuleDto, SecuritySettingsDto, SettingsDto, SettingsPatchDto, SyncSettingsDto,
-    UpdateSettingsResponse,
+    GetSettingsResponse, KeyboardShortcutsPatchDto, NetworkSettingsDto, PairingSettingsDto,
+    RetentionPolicyDto, RetentionRuleDto, SecuritySettingsDto, SettingsDto, SettingsPatchDto,
+    SyncSettingsDto, UpdateSettingsResponse,
 };
 use crate::api::server::DaemonApiState;
 
@@ -37,12 +38,15 @@ pub fn router() -> Router<DaemonApiState> {
         (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse)
     )
 )]
+#[instrument(name = "api.settings.get", level = "info", skip(state))]
 async fn get_settings_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetSettingsResponse>, ApiError> {
+    info!("get settings request received");
     let app = state.app_facade_or_error()?;
     let settings = app.settings.get().await.map_err(settings_error_to_api)?;
 
+    info!("get settings succeeded");
     Ok(Json(GetSettingsResponse {
         data: settings_view_to_dto(settings),
         ts: chrono::Utc::now().timestamp_millis(),
@@ -66,21 +70,59 @@ async fn get_settings_handler(
         (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse)
     )
 )]
+#[instrument(
+    name = "api.settings.update",
+    level = "info",
+    skip(state, payload),
+    fields(
+        has_general = payload.general.is_some(),
+        has_sync = payload.sync.is_some(),
+        has_security = payload.security.is_some(),
+        has_pairing = payload.pairing.is_some(),
+        has_file_sync = payload.file_sync.is_some(),
+        has_network = payload.network.is_some(),
+        has_retention_policy = payload.retention_policy.is_some(),
+        has_keyboard_shortcuts = payload.keyboard_shortcuts.is_some(),
+    )
+)]
 async fn update_settings_handler(
     State(state): State<DaemonApiState>,
     Json(payload): Json<SettingsPatchDto>,
 ) -> Result<Json<UpdateSettingsResponse>, ApiError> {
+    info!("update settings request received");
     let app = state.app_facade_or_error()?;
+
+    // D-D1：`network` 段非空（任何字段变更）触发 restart_required = true。
+    // 当前 NetworkSettings 仅含 allow_relay_fallback；后续若加字段，仍走 is_some()
+    // 兜底。其它字段（general / sync 等）不影响该信号 — 它们不需要重启。
+    //
+    // `general.telemetry_enabled` 历史曾通过这里触发 restart（260505-17q），后于
+    // 260505-1np 改成运行时 gate（见 uc-observability::set_telemetry_enabled），
+    // 不再需要重启 — 下面在 facade 写盘成功后直接把新值推进 atomic 即可立即生效。
+    // Pitfall 3 防御：调用方（前端 Phase 95）必须显式承担"还没真正生效"。
+    let restart_required = payload.network.is_some();
+
+    // 取出可能存在的 telemetry 新值，再传 patch 给 facade 写盘 — 写盘成功后再
+    // 把 atomic 推进新值，保证持久化与运行时状态保持单调一致（如果写盘失败，
+    // 也不会污染运行时 gate）。
+    let telemetry_update = payload.general.as_ref().and_then(|g| g.telemetry_enabled);
+
     let updated = app
         .settings
         .update(settings_patch_from_dto(payload))
         .await
         .map_err(settings_error_to_api)?;
 
+    if let Some(enabled) = telemetry_update {
+        uc_observability::set_telemetry_enabled(enabled);
+    }
+
+    info!(restart_required, "update settings succeeded");
     Ok(Json(UpdateSettingsResponse {
         success: true,
         data: settings_view_to_dto(updated),
         ts: chrono::Utc::now().timestamp_millis(),
+        restart_required,
     }))
 }
 
@@ -89,7 +131,8 @@ fn settings_error_to_api(err: app_settings::SettingsFacadeError) -> ApiError {
     ApiError::internal(err.to_string())
 }
 
-fn settings_patch_from_dto(patch: SettingsPatchDto) -> app_settings::SettingsPatch {
+#[doc(hidden)]
+pub fn settings_patch_from_dto(patch: SettingsPatchDto) -> app_settings::SettingsPatch {
     app_settings::SettingsPatch {
         general: patch
             .general
@@ -156,10 +199,17 @@ fn settings_patch_from_dto(patch: SettingsPatchDto) -> app_settings::SettingsPat
                 file_retention_hours: file_sync.file_retention_hours,
                 file_auto_cleanup: file_sync.file_auto_cleanup,
             }),
+        network: patch
+            .network
+            .map(|network| app_settings::NetworkSettingsPatch {
+                allow_relay_fallback: network.allow_relay_fallback,
+                allow_overlay_network_addrs: network.allow_overlay_network_addrs,
+            }),
     }
 }
 
-fn settings_view_to_dto(value: app_settings::SettingsView) -> SettingsDto {
+#[doc(hidden)]
+pub fn settings_view_to_dto(value: app_settings::SettingsView) -> SettingsDto {
     SettingsDto {
         schema_version: value.schema_version,
         general: GeneralSettingsDto {
@@ -213,6 +263,10 @@ fn settings_view_to_dto(value: app_settings::SettingsView) -> SettingsDto {
             file_cache_quota_per_device: value.file_sync.file_cache_quota_per_device,
             file_retention_hours: value.file_sync.file_retention_hours,
             file_auto_cleanup: value.file_sync.file_auto_cleanup,
+        },
+        network: NetworkSettingsDto {
+            allow_relay_fallback: value.network.allow_relay_fallback,
+            allow_overlay_network_addrs: value.network.allow_overlay_network_addrs,
         },
     }
 }

@@ -92,6 +92,10 @@ const baseSetting: Settings = {
     fileRetentionHours: 24,
     fileAutoCleanup: true,
   },
+  network: {
+    allowRelayFallback: true,
+    allowOverlayNetworkAddrs: false,
+  },
 }
 
 describe('SettingProvider cross-window sync', () => {
@@ -103,7 +107,7 @@ describe('SettingProvider cross-window sync', () => {
     vi.clearAllMocks()
     mockConnectDaemonWs.mockResolvedValue(undefined)
     mockGetSettings.mockResolvedValue(baseSetting)
-    mockUpdateSettings.mockResolvedValue(undefined)
+    mockUpdateSettings.mockResolvedValue({ success: true, restartRequired: false })
     mockInvokeWithTrace.mockResolvedValue(undefined)
 
     Object.defineProperty(window, 'matchMedia', {

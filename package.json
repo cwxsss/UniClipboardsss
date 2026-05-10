@@ -1,7 +1,7 @@
 {
   "name": "uniclipboard",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "version:bump": "node scripts/bump-version.js",
     "tauri": "tauri",
     "tauri:dev": "cross-env UNICLIPBOARD_ENV=development UC_PROFILE=dev tauri dev",
+    "tauri:build:dev": "tauri build --config src-tauri/tauri.dev.conf.json --features dev-profile",
     "tauri:dev:peerA": "cross-env UNICLIPBOARD_ENV=development UC_DISABLE_SINGLE_INSTANCE=1 UC_PROFILE=a UC_CLIPBOARD_MODE=full tauri dev",
     "tauri:dev:peerB": "cross-env UNICLIPBOARD_ENV=development UC_DISABLE_SINGLE_INSTANCE=1 UC_PROFILE=b UC_CLIPBOARD_MODE=passive tauri dev --config '{\"build\":{\"beforeDevCommand\":\"\"}}' --no-dev-server-wait",
     "tauri:dev:dual": "concurrently -k -n peerA,peerB \"bun run tauri:dev:peerA\" \"bun run tauri:dev:peerB\"",
@@ -28,7 +29,12 @@
       "eslint --fix",
       "prettier --write"
     ],
-    "*.{json,css,md,html}": [
+    "*.md": [
+      "node scripts/fix-md-cjk-emphasis.mjs",
+      "autocorrect --fix",
+      "prettier --write"
+    ],
+    "*.{json,css,html}": [
       "prettier --write"
     ],
     "src-tauri/**/*.rs": [
@@ -70,7 +76,6 @@
     "@tauri-apps/plugin-log": "2.7.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.5.2",
-    "@tauri-apps/plugin-stronghold": "~2.3.1",
     "@tauri-apps/plugin-updater": "^2.9.0",
     "framer-motion": "^12.23.26",
     "i18next": "^25.7.3",
@@ -107,6 +112,7 @@
     "@types/react": "^18.3.27",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",
+    "autocorrect-node": "^2.14.0",
     "autoprefixer": "^10.4.23",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

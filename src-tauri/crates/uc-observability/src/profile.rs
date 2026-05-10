@@ -40,12 +40,27 @@ const NOISE_FILTERS: &[&str] = &[
     "Connection::poll=warn",
     "Pool::poll=warn",
     "Swarm::poll=warn",
-    "opentelemetry_sdk=warn",
     // iroh 0.97 forked quinn into noq; the old quinn=info directives no
     // longer match. noq_proto::connection in particular emits ~40k DEBUG
     // events per peer-hour without this cap.
     "noq=info",
     "noq_proto=info",
+    // noq-udp is a separate crate from `noq` so the directive above does
+    // not cover it. On dual-stack hosts where the VPN / Clash TUN / stale
+    // virtual NIC has no route to a remote IPv6 destination, the udp send
+    // path emits a WARN per transmit (`sendmsg error: No route to host`).
+    // Same EHOSTUNREACH pattern as `swarm_discovery::socket` above —
+    // harmless because reachability still works over other interfaces,
+    // but high-frequency, so cap at ERROR to keep Sentry Logs quiet.
+    "noq_udp=error",
+    // QUIC connection state machine internals. These show up at WARN /
+    // ERROR but are documented protocol noise:
+    //   - "PTO expired while unset" — probe timer on an unactivated path
+    //   - "failed closing path" — multipath graceful-close race
+    // iroh's higher layers re-emit real connection failures as their own
+    // structured events, so silencing this module loses no actionable
+    // signal — we just stop burning quota on QUIC steady-state churn.
+    "noq_proto::connection=off",
     // magicsock multipath state machine. The remote_state submodule is
     // also where iroh#4124 spams `Opening path failed` on every event
     // once the per-connection PathId budget is exhausted; cap that one
@@ -63,8 +78,36 @@ const NOISE_FILTERS: &[&str] = &[
     "swarm_discovery::socket=error",
     // hickory-dns resolver used by pkarr + relay URL resolution.
     "hickory=warn",
-    // Catch-all for libraries that emit through the `log` crate (forwarded
-    // into tracing). Without this they default to TRACE.
+    // === log-bridge noise ===
+    //
+    // Crates that emit through the `log` crate (forwarded via tracing-log).
+    // The catch-all `log=warn` is *not reliable* on its own: tracing-log 0.2
+    // dispatches each record in two steps —
+    //   1. `dispatch.enabled(filter_meta)` where `filter_meta.target()` is the
+    //      record's real target (e.g. `rustls::client::hs`)
+    //   2. `dispatch.event(Event::new(static_meta, ...))` where
+    //      `static_meta.target()` is the literal `"log"`
+    // EnvFilter caches Interest by static callsite. When the filter set has
+    // both a base level (`debug`) and a target rule (`log=warn`), the cached
+    // Interest collapses to `sometimes`, and the runtime check falls back on
+    // the dynamic `filter_meta` whose target is the real module path. At that
+    // point `log=warn` no longer matches and the base `debug` lets it through
+    // — which is why we measured ~23k DEBUG events leaking under target="log"
+    // (rustls handshake spam dominated).
+    //
+    // Fix: cap the actual log-bridged crates by their real prefix. These
+    // catch the high-volume offenders observed in production:
+    //   rustls::client::hs / tls13 / common_state  — TLS handshake DEBUG x10
+    //                                                 per iroh connect attempt
+    //   reqwest::connect                           — DEBUG per HTTP connect
+    //   igd_next::aio::tokio                       — UPnP/IGD discovery loop
+    "rustls=warn",
+    "reqwest=warn",
+    "igd_next=warn",
+    // Keep the literal-"log" catch-all as a backstop for any other log-only
+    // crate that slips in. It works for the subset of cases where EnvFilter's
+    // callsite Interest resolves statically (no `sometimes` fallback), and is
+    // harmless when it doesn't.
     "log=warn",
 ];
 
@@ -101,29 +144,6 @@ impl LogProfile {
             return EnvFilter::new("off");
         }
         self.build_filter()
-    }
-
-    /// Build the `EnvFilter` for the OTLP export layer.
-    ///
-    /// Always INFO-and-above regardless of profile. Debug/trace spans must
-    /// never leave the machine via OTLP telemetry.
-    ///
-    /// `UC_OTLP_EXTRA` (comma-separated directives) appends to the default
-    /// filter at runtime — used for time-bounded remote diagnostics (e.g.
-    /// raising `iroh_quinn=debug` during a blob-fetch incident) without
-    /// rebuilding the daemon. Directives are appended last, so they take
-    /// precedence over both the base level and `NOISE_FILTERS`.
-    pub fn otlp_filter(&self) -> EnvFilter {
-        let mut directives = vec!["info".to_string()];
-        for &filter in NOISE_FILTERS {
-            directives.push(filter.to_string());
-        }
-        if let Ok(extra) = std::env::var("UC_OTLP_EXTRA") {
-            for d in extra.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                directives.push(d.to_string());
-            }
-        }
-        EnvFilter::new(directives.join(","))
     }
 
     /// Build the `EnvFilter` for the JSON file layer.

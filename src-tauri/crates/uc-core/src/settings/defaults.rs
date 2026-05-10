@@ -224,6 +224,39 @@ impl Default for FileSyncSettings {
     }
 }
 
+impl Default for NetworkSettings {
+    /// Returns default `NetworkSettings` allowing iroh to fall back to public
+    /// relays when direct connectivity fails (existing v0.6.x behavior).
+    ///
+    /// Defaults:
+    /// - `allow_relay_fallback`: true
+    /// - `allow_overlay_network_addrs`: false
+    ///
+    // 默认 true = 允许 fallback。
+    // 改成 false 会让所有跨网段老用户突然离线，属于 breaking change。
+    // 修改默认值前请先 grep `LAN-only Mode` 文档与 changelog。
+    fn default() -> Self {
+        Self {
+            allow_relay_fallback: true,
+            allow_overlay_network_addrs: false,
+        }
+    }
+}
+
+impl Default for MobileSyncSettings {
+    /// 默认全部关闭 / 未选定。开启移动端同步暴露 LAN 监听端口,必须由用户
+    /// 在设置页显式开启 + 重启 daemon。详见
+    /// `.context/mobile-sync/SPEC.md` §5 + §14.10。
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lan_listen_enabled: false,
+            lan_advertise_ip: None,
+            lan_port: None,
+        }
+    }
+}
+
 impl Default for Settings {
     /// Constructs a Settings instance populated with the current schema version and sensible nested defaults.
     ///
@@ -258,6 +291,265 @@ impl Default for Settings {
             pairing: PairingSettings::default(),
             keyboard_shortcuts: HashMap::new(),
             file_sync: FileSyncSettings::default(),
+            network: NetworkSettings::default(),
+            mobile_sync: MobileSyncSettings::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::settings::model::{
+        ContentTypes, FileSyncSettings, NetworkSettings, Settings, SyncFrequency, Theme,
+        CURRENT_SCHEMA_VERSION,
+    };
+
+    /// Pitfall 2 防御：默认值必须为 true（允许 fallback），保护老用户
+    /// 跨网段同步行为。改 false = breaking change。
+    #[test]
+    fn network_settings_default_allows_relay_fallback() {
+        let n = NetworkSettings::default();
+        assert!(
+            n.allow_relay_fallback,
+            "NetworkSettings::default().allow_relay_fallback MUST be true (Pitfall 2)"
+        );
+    }
+
+    /// Pitfall 2 防御：顶层 Settings::default 把 network 装配进去，
+    /// 字段值与子结构 default 保持一致。
+    #[test]
+    fn settings_default_includes_network_with_fallback_allowed() {
+        let s = Settings::default();
+        assert!(s.network.allow_relay_fallback);
+        assert_eq!(s.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            s.schema_version, 1,
+            "schema_version MUST stay 1 (no migration)"
+        );
+    }
+
+    /// NETSET-02 success criterion #2：缺 `network` 段的旧 settings.json
+    /// 反序列化必须回填默认值 true。
+    #[test]
+    fn old_settings_json_without_network_section_falls_back_to_default() {
+        // 模拟 v0.6.x 时代写出的 settings.json 片段（无 network 字段）
+        let json = r#"{}"#;
+        let s: Settings = serde_json::from_str(json).expect("parse minimal settings");
+        assert!(
+            s.network.allow_relay_fallback,
+            "missing network section MUST default to true"
+        );
+        assert_eq!(s.schema_version, 1);
+    }
+
+    /// 显式 false 的 JSON 必须保留 false 语义（确认未误取反）。
+    #[test]
+    fn explicit_allow_relay_fallback_false_is_preserved() {
+        let json = r#"{ "network": { "allow_relay_fallback": false } }"#;
+        let s: Settings = serde_json::from_str(json).expect("parse explicit false");
+        assert!(!s.network.allow_relay_fallback);
+    }
+
+    /// 反向断言：显式 true 也保留 true 语义。
+    #[test]
+    fn explicit_allow_relay_fallback_true_is_preserved() {
+        let json = r#"{ "network": { "allow_relay_fallback": true } }"#;
+        let s: Settings = serde_json::from_str(json).expect("parse explicit true");
+        assert!(s.network.allow_relay_fallback);
+    }
+
+    /// 默认值：默认过滤 overlay 网络地址，保持 v0.6.x 起的现行行为。
+    #[test]
+    fn network_settings_default_filters_overlay_addrs() {
+        let n = NetworkSettings::default();
+        assert!(
+            !n.allow_overlay_network_addrs,
+            "NetworkSettings::default().allow_overlay_network_addrs MUST be false"
+        );
+    }
+
+    /// 老 settings.json 缺 `allow_overlay_network_addrs` 字段时回填默认 false。
+    #[test]
+    fn old_settings_json_without_overlay_field_falls_back_to_default() {
+        let json = r#"{ "network": { "allow_relay_fallback": true } }"#;
+        let s: Settings = serde_json::from_str(json).expect("parse old network section");
+        assert!(
+            !s.network.allow_overlay_network_addrs,
+            "missing allow_overlay_network_addrs MUST default to false"
+        );
+    }
+
+    /// 显式 true 必须保留（专业用户主动开启）。
+    #[test]
+    fn explicit_allow_overlay_network_addrs_true_is_preserved() {
+        let json = r#"{ "network": { "allow_relay_fallback": true, "allow_overlay_network_addrs": true } }"#;
+        let s: Settings = serde_json::from_str(json).expect("parse explicit overlay true");
+        assert!(s.network.allow_overlay_network_addrs);
+    }
+
+    /// 显式 false 必须保留（双向覆盖）。
+    #[test]
+    fn explicit_allow_overlay_network_addrs_false_is_preserved() {
+        let json = r#"{ "network": { "allow_relay_fallback": true, "allow_overlay_network_addrs": false } }"#;
+        let s: Settings = serde_json::from_str(json).expect("parse explicit overlay false");
+        assert!(!s.network.allow_overlay_network_addrs);
+    }
+
+    // ============================================================
+    // Issue #581 回归测试：旧版本 settings.json 在升级后被新版本读取时,
+    // 缺失字段必须自动回退到 `Default::default()` 的业务默认值,
+    // 反序列化不得失败。
+    //
+    // 核心场景:`file_sync` 段在 fed7ada2 之前没有 `small_file_threshold`
+    // 字段,daemon 启动时反序列化整个 Settings 直接报错。
+    // ============================================================
+
+    /// Issue #581 直接复现:`file_sync` 段缺 `small_file_threshold`,
+    /// 必须能反序列化并回退到默认 10 MB。
+    #[test]
+    fn file_sync_missing_small_file_threshold_falls_back_to_default() {
+        let json = r#"{
+            "file_sync": {
+                "file_sync_enabled": true,
+                "max_file_size": 5368709120,
+                "file_cache_quota_per_device": 524288000,
+                "file_retention_hours": 24,
+                "file_auto_cleanup": true
+            }
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("must not error on missing field");
+        assert_eq!(s.file_sync.small_file_threshold, 10 * 1024 * 1024);
+        assert!(s.file_sync.file_sync_enabled);
+        assert_eq!(s.file_sync.max_file_size, 5 * 1024 * 1024 * 1024);
+    }
+
+    /// `file_sync` 段为空对象时,所有字段都回退到默认值。
+    #[test]
+    fn file_sync_empty_object_falls_back_to_full_default() {
+        let json = r#"{ "file_sync": {} }"#;
+        let s: Settings = serde_json::from_str(json).expect("empty file_sync must parse");
+        let expected = FileSyncSettings::default();
+        assert_eq!(s.file_sync, expected);
+    }
+
+    /// `general` 段缺 `telemetry_enabled` 字段,必须回退默认 true。
+    #[test]
+    fn general_missing_telemetry_enabled_falls_back_to_default() {
+        let json = r#"{
+            "general": {
+                "auto_start": false,
+                "silent_start": false,
+                "auto_check_update": true,
+                "theme": "system",
+                "theme_color": null,
+                "language": null,
+                "device_name": null
+            }
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("missing telemetry must parse");
+        assert!(s.general.telemetry_enabled);
+    }
+
+    /// `general` 段缺多个字段时仍能解析,缺失字段全部回退。
+    #[test]
+    fn general_partial_object_fills_missing_fields() {
+        let json = r#"{ "general": { "auto_start": true } }"#;
+        let s: Settings = serde_json::from_str(json).expect("partial general must parse");
+        assert!(s.general.auto_start);
+        // 其余字段全部走默认
+        assert!(!s.general.silent_start);
+        assert!(s.general.auto_check_update);
+        assert_eq!(s.general.theme, Theme::System);
+        assert!(s.general.telemetry_enabled);
+    }
+
+    /// `sync` 段缺 `content_types` 与 `auto_sync`,均回退默认。
+    #[test]
+    fn sync_missing_fields_fall_back_to_default() {
+        let json = r#"{ "sync": { "sync_frequency": "interval" } }"#;
+        let s: Settings = serde_json::from_str(json).expect("partial sync must parse");
+        assert_eq!(s.sync.sync_frequency, SyncFrequency::Interval);
+        assert!(s.sync.auto_sync);
+        assert_eq!(s.sync.content_types, ContentTypes::default());
+    }
+
+    /// `security` 段缺所有字段时回退默认,且未来加新字段不会再 break 启动。
+    #[test]
+    fn security_empty_object_falls_back_to_default() {
+        let json = r#"{ "security": {} }"#;
+        let s: Settings = serde_json::from_str(json).expect("empty security must parse");
+        assert!(!s.security.encryption_enabled);
+        assert!(!s.security.passphrase_configured);
+        assert!(!s.security.auto_unlock_enabled);
+    }
+
+    /// `pairing` 段缺字段时回退到 `PairingSettings::default()` —— `serde_with`
+    /// 装饰器与 struct 级 `#[serde(default)]` 协同工作。
+    #[test]
+    fn pairing_partial_object_fills_missing_fields() {
+        let json = r#"{ "pairing": { "max_retries": 7 } }"#;
+        let s: Settings = serde_json::from_str(json).expect("partial pairing must parse");
+        assert_eq!(s.pairing.max_retries, 7);
+        assert_eq!(s.pairing.protocol_version, "1.0.0");
+        assert_eq!(s.pairing.step_timeout, std::time::Duration::from_secs(30));
+    }
+
+    /// `mobile_sync` 段缺 `lan_advertise_ip` / `lan_port` 时回退 None。
+    #[test]
+    fn mobile_sync_missing_optional_fields_fall_back_to_none() {
+        let json = r#"{ "mobile_sync": { "enabled": true } }"#;
+        let s: Settings = serde_json::from_str(json).expect("partial mobile_sync must parse");
+        assert!(s.mobile_sync.enabled);
+        assert!(!s.mobile_sync.lan_listen_enabled);
+        assert!(s.mobile_sync.lan_advertise_ip.is_none());
+        assert!(s.mobile_sync.lan_port.is_none());
+    }
+
+    /// 综合回归:模拟 v0.2 时代的 settings.json(只有 general/sync,
+    /// 完全没有 file_sync / network / mobile_sync 等后续新增段),
+    /// 必须能直接反序列化为完整 Settings。
+    #[test]
+    fn legacy_v02_settings_json_loads_with_all_defaults() {
+        let json = r#"{
+            "schema_version": 1,
+            "general": { "auto_start": true, "theme": "dark" },
+            "sync": { "auto_sync": false, "sync_frequency": "interval" }
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("legacy settings must parse");
+
+        assert_eq!(s.schema_version, 1);
+        assert!(s.general.auto_start);
+        assert_eq!(s.general.theme, Theme::Dark);
+        assert!(s.general.telemetry_enabled);
+        assert!(!s.sync.auto_sync);
+        assert_eq!(s.sync.content_types, ContentTypes::default());
+
+        // 后续新增段全部走 Default
+        assert_eq!(s.file_sync, FileSyncSettings::default());
+        assert!(s.network.allow_relay_fallback);
+        assert!(!s.network.allow_overlay_network_addrs);
+        assert!(!s.mobile_sync.enabled);
+    }
+
+    /// 显式字段值不被 `#[serde(default)]` 误覆盖。
+    #[test]
+    fn explicit_file_sync_values_are_preserved() {
+        let json = r#"{
+            "file_sync": {
+                "file_sync_enabled": false,
+                "small_file_threshold": 1024,
+                "max_file_size": 2048,
+                "file_cache_quota_per_device": 4096,
+                "file_retention_hours": 1,
+                "file_auto_cleanup": false
+            }
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("explicit file_sync must parse");
+        assert!(!s.file_sync.file_sync_enabled);
+        assert_eq!(s.file_sync.small_file_threshold, 1024);
+        assert_eq!(s.file_sync.max_file_size, 2048);
+        assert_eq!(s.file_sync.file_cache_quota_per_device, 4096);
+        assert_eq!(s.file_sync.file_retention_hours, 1);
+        assert!(!s.file_sync.file_auto_cleanup);
     }
 }

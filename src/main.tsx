@@ -5,9 +5,15 @@ import { Provider } from 'react-redux'
 import App from './App'
 import './i18n'
 import { store } from './store'
-import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
+import { connectDaemonWs, registerDaemonShutdownListener } from '@/lib/daemon-ws-bootstrap'
 import { initSentry, Sentry } from '@/observability/sentry'
 
+// Sentry init runs before React mounts so that the global ErrorBoundary,
+// the pino → Sentry.logger transmit hook, and breadcrumb capture are all
+// wired up by the time any module calls `createLogger()`. Whether logs
+// actually leave the process is gated at runtime by
+// `setFrontendSentryEnabled`, which SettingContext flips once the daemon
+// returns the persisted user preference.
 initSentry()
 
 const startupTimingOrigin = Date.now()
@@ -74,6 +80,14 @@ initLogging().then(() => {
 // hooks (useEncryptionState, useClipboardNewContent) mount.
 connectDaemonWs().catch(err => {
   console.error('[main] daemon WS bootstrap failed:', err)
+})
+
+// Listen for the Rust shell's pre-shutdown hint so the WebSocket sends a
+// proper close frame before the daemon's axum graceful_shutdown runs —
+// otherwise the long-lived /ws handler would block shutdown for the full
+// heartbeat timeout (~30s).
+registerDaemonShutdownListener().catch(err => {
+  console.error('[main] daemon shutdown listener registration failed:', err)
 })
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

@@ -1,6 +1,8 @@
 pub mod autostart;
 pub mod error;
+pub mod mobile_sync;
 pub mod quick_panel;
+pub mod restart;
 pub mod startup;
 pub mod storage;
 pub mod tray;
@@ -20,7 +22,7 @@ pub fn get_tauri_pid() -> u32 {
 /// Get the stable local device identifier used for telemetry correlation.
 #[tauri::command]
 pub async fn get_device_id(
-    runtime: tauri::State<'_, std::sync::Arc<crate::bootstrap::AppRuntime>>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::bootstrap::TauriAppRuntime>>,
     _trace: Option<TraceMetadata>,
 ) -> Result<String, CommandError> {
     Ok(runtime.device_id())
@@ -29,6 +31,7 @@ pub async fn get_device_id(
 // Re-export commonly used types
 pub use autostart::*;
 
+pub use restart::*;
 pub use startup::*;
 pub use storage::*;
 pub use updater::*;

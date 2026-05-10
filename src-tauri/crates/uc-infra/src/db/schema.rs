@@ -153,6 +153,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    mobile_device (device_id) {
+        device_id -> Text,
+        label -> Text,
+        client_type -> Text,
+        username -> Text,
+        password_hash -> Text,
+        created_at_ms -> BigInt,
+        last_seen_at_ms -> Nullable<BigInt>,
+        last_seen_ip -> Nullable<Text>,
+        reported_name -> Nullable<Text>,
+        reported_os -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     search_document (profile_id, entry_id) {
         profile_id -> Text,
         entry_id -> Text,
@@ -204,6 +219,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     clipboard_snapshot_representation,
     file_transfer,
     file_transfer_events,
+    mobile_device,
     peer_address,
     space_member,
     trusted_peer,

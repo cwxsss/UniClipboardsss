@@ -6,10 +6,25 @@ use uc_core::ports::AppDirsError;
 
 const APP_DIR_NAME: &str = "app.uniclipboard.desktop";
 
+/// Constructs the application directory name, appending a profile suffix when a profile is resolved.
+///
+/// # Returns
+///
+/// A `String` containing `APP_DIR_NAME` followed by `-<profile>` if a profile is available, otherwise just `APP_DIR_NAME`.
+///
+/// # Examples
+///
+/// ```
+/// use std::env;
+/// env::set_var("UC_PROFILE", "testing");
+/// let name = resolved_app_dir_name();
+/// assert_eq!(name, format!("{}-testing", APP_DIR_NAME));
+/// env::remove_var("UC_PROFILE");
+/// ```
 fn resolved_app_dir_name() -> String {
-    match std::env::var("UC_PROFILE") {
-        Ok(profile) if !profile.is_empty() => format!("{APP_DIR_NAME}-{profile}"),
-        _ => APP_DIR_NAME.to_string(),
+    match crate::resolve_profile() {
+        Some(profile) => format!("{APP_DIR_NAME}-{profile}"),
+        None => APP_DIR_NAME.to_string(),
     }
 }
 

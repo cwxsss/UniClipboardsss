@@ -199,50 +199,67 @@
         "loadError": "Failed to load settings:"
       },
       "network": {
-        "title": "Network",
-        "syncMethod": {
-          "label": "Sync method",
-          "description": "Choose sync method",
-          "lanFirst": "LAN first (recommended)",
-          "cloudOnly": "Cloud only",
-          "lanOnly": "LAN only"
-        },
-        "webserverPort": {
-          "label": "Local server port",
-          "description": "Set local server port (1024-65535)",
-          "errors": {
-            "invalid": "Please enter a valid port number",
-            "range": "Port must be between 1024-65535"
-          }
-        },
-        "customPeerDevice": {
-          "label": "Custom peer device",
-          "description": "Manually specify the device address and port to sync",
-          "peerIp": {
-            "label": "Peer IP address",
-            "description": "Enter the IPv4 address of the device to sync",
-            "errors": {
-              "empty": "IP address cannot be empty",
-              "invalid": "Please enter a valid IPv4 address"
-            }
-          },
-          "peerPort": {
-            "label": "Peer port",
-            "description": "Enter the port of the device to sync (1024-65535)",
-            "errors": {
-              "empty": "Port cannot be empty",
-              "invalid": "Please enter a valid port number",
-              "range": "Port must be between 1024-65535"
+        "loadError": "Failed to load settings:",
+        "lanOnly": {
+          "label": "LAN-only Mode",
+          "description": "Disable public-relay fallback. Devices sync only over the same local network. Takes effect after restart.",
+          "infoIconAriaLabel": "View the list of requests that still reach the internet when LAN-only Mode is on",
+          "saveError": "Save failed: {{message}}. Reverted to the previous setting.",
+          "disclosure": {
+            "title": "Requests that still reach the internet with LAN-only Mode on",
+            "intro": "The following 4 request types are controlled by independent modules and are not affected by LAN-only Mode:",
+            "rendezvous": {
+              "title": "First-pairing rendezvous",
+              "description": "Pairing a new device still requires reaching rendezvous.uniclipboard.app to exchange NodeIds. Once paired, day-to-day sync no longer uses rendezvous."
+            },
+            "otlp": {
+              "title": "OTLP telemetry",
+              "description": "Telemetry is controlled independently by General → Telemetry, not by LAN-only Mode. To disable it, go to the General section."
+            },
+            "pkarr": {
+              "title": "pkarr DHT NodeId resolution",
+              "description": "Cross-subnet connections resolve peer NodeIds via the public pkarr DHT, similar in nature to DNS. Disabling it would drop cross-subnet connection rate from ~90% to near zero."
+            },
+            "autoUpdate": {
+              "title": "Auto-update GitHub check",
+              "description": "Controlled independently by General → Auto-update, which queries the GitHub Release API for new versions."
             }
           }
         },
-        "cloudServer": {
-          "label": "Cloud server",
-          "badge": "Coming soon",
-          "advanced": "Advanced",
-          "default": "Using default cloud server"
+        "allowOverlayAddrs": {
+          "label": "Allow overlay network addresses",
+          "description": "Off by default. Enable when both peers share the same VPN (e.g. Tailscale) so connections can use that overlay network. Takes effect after restart.",
+          "infoIconAriaLabel": "Learn what overlay network addresses are and when to enable this option",
+          "saveError": "Save failed: {{message}}. Reverted to the previous setting.",
+          "disclosure": {
+            "title": "About overlay network addresses",
+            "intro": "When establishing direct connections, your machine has multiple IP addresses (real LAN, VPN tunnels, etc.). \"Overlay network addresses\" refers to virtual NIC IPs created by VPN software:",
+            "covered": {
+              "title": "What this affects",
+              "description": "Specifically the CGNAT range 100.64.0.0/10 (Tailscale's default IPv4) and the Tailscale IPv6 ULA fd7a:115c:a1e0::/48. Clash fake-ip (198.18.0.0/15) and link-local (169.254.0.0/16) are always filtered regardless of this setting."
+            },
+            "whyOff": {
+              "title": "Why off by default",
+              "description": "When two peers are not in the same VPN, publishing virtual-NIC IPs as connection candidates wastes path-validation budget on dead candidates and slows the real direct connection."
+            },
+            "whenOn": {
+              "title": "When to turn on",
+              "description": "Turn on if both peers are in the same Tailscale tailnet (or another shared overlay) and direct LAN/Internet paths are blocked, but the overlay route works. iroh will then use the overlay path as a connection candidate."
+            },
+            "tradeoff": {
+              "title": "Trade-off",
+              "description": "If only one peer has the VPN — or peers are in different tailnets — turning this on makes connections slower but doesn't outright break them (relay fallback still works). If unsure, leave it off."
+            }
+          }
         },
-        "loadError": "Failed to load settings:"
+        "restartBanner": {
+          "message": "Restart the app to apply the LAN-only Mode change.",
+          "restartButton": "Restart now",
+          "restartingButton": "Restarting…",
+          "dismissAriaLabel": "Dismiss restart notice",
+          "errorMessage": "Automatic restart failed. Please quit the app manually and reopen it to apply the change.",
+          "retryButton": "Retry"
+        }
       },
       "storage": {
         "title": "Storage",
@@ -485,7 +502,9 @@
       "syncFailed": "Sync to clipboard failed",
       "openLocationFailed": "Failed to open file location",
       "loadDetailFailed": "Failed to load details",
-      "unknown": "An unknown error occurred"
+      "unknown": "An unknown error occurred",
+      "unavailableBadge": "Content unavailable",
+      "unavailableTooltip": "This content is no longer available (bytes lost). Cannot paste. Consider deleting it from history."
     },
     "item": {
       "characters": "characters",
@@ -600,7 +619,9 @@
       "onlineCount": "{{count}} online"
     },
     "pairedDevices": {
-      "title": "Paired Devices"
+      "title": "Paired devices",
+      "subtitle": "{{total}} paired · {{online}} online",
+      "subtitleEmpty": "No devices paired yet"
     },
     "addDevice": {
       "title": "Invite a new device",
@@ -652,12 +673,25 @@
     },
     "list": {
       "empty": {
-        "title": "No paired devices",
-        "description": "Connect your other devices to start syncing clipboard content instantly."
+        "title": "No paired devices yet"
       },
       "status": {
         "online": "Online",
         "offline": "Offline"
+      },
+      "channel": {
+        "lan": "Direct",
+        "relay": "Relayed",
+        "offline": "Disconnected",
+        "unknown": "—",
+        "outOfLan": "Off local network",
+        "tooltip": {
+          "lan": "Sent directly over your local network — traffic stays local.",
+          "relay": "Sent through an encrypted relay server. Content is encrypted, but connection info is visible to the relay.",
+          "offline": "No active connection right now.",
+          "unknown": "Detecting how this device is reachable.",
+          "outOfLan": "Local-network-only sync is on, but this device isn't on the same network. It will reconnect once back on the same network."
+        }
       },
       "labels": {
         "unknownDevice": "Unknown Device"
@@ -674,13 +708,184 @@
       "message": "Clipboard sync is paused. All devices are currently not syncing.",
       "goToSettings": "Go to Settings"
     },
+    "mobileSync": {
+      "title": "Mobile Sync",
+      "description": "Sync your clipboard with mobile devices (iOS / Android) over LAN using the SyncClipboard protocol",
+      "configure": "Configure",
+      "statusBar": {
+        "bindFailed": "Failed to start listener: {{reason}}"
+      },
+      "settingsSheet": {
+        "title": "Mobile sync configuration",
+        "description": "Adjust the switches and network parameters that let mobile devices reach this machine over LAN",
+        "close": "Done"
+      },
+      "enabled": {
+        "label": "Enable mobile sync",
+        "description": "When off, all sync requests from mobile devices are immediately rejected"
+      },
+      "lanListener": {
+        "label": "LAN listener",
+        "description": "Listens for cleartext HTTP on the chosen network interface; required to receive mobile requests",
+        "currentUrl": {
+          "label": "Current listening address",
+          "unavailable": "—"
+        },
+        "bindIp": {
+          "label": "Bind IP",
+          "placeholder": "Choose a network interface",
+          "empty": "No usable LAN IPv4 addresses detected",
+          "auto": "Auto (0.0.0.0)"
+        },
+        "port": {
+          "label": "Port",
+          "placeholder": "42720"
+        },
+        "warning": {
+          "title": "Network exposure warning",
+          "body": "Anyone on this LAN can read or write your clipboard once they obtain this machine's URL and a paired credential. Only enable on trusted Wi-Fi.",
+          "confirm": "I understand",
+          "cancel": "Cancel"
+        },
+        "restartRequired": {
+          "message": "Changes take effect after the daemon is restarted",
+          "restartButton": "Restart now",
+          "dismissAriaLabel": "Dismiss restart notice"
+        },
+        "disabledHint": "Enable the LAN listener before adding a device"
+      },
+      "list": {
+        "title": "Paired devices",
+        "empty": {
+          "title": "No devices paired yet"
+        },
+        "addButton": "Add device"
+      },
+      "add": {
+        "title": "Add device",
+        "subtitle": "Generate a long-lived credential pair. The same pair works on iOS Shortcut and any Android client that speaks the SyncClipboard protocol.",
+        "labelField": {
+          "label": "Device label",
+          "placeholder": "My iPhone"
+        },
+        "advanced": {
+          "title": "Advanced options",
+          "description": "Leave empty to auto-generate a random credential pair"
+        },
+        "username": {
+          "label": "Custom username",
+          "placeholder": "Leave empty to auto-generate",
+          "help": "6–32 chars, must start with a letter, only A-Z a-z 0-9 _"
+        },
+        "password": {
+          "label": "Custom password",
+          "placeholder": "Leave empty to auto-generate",
+          "help": "At least 8 chars; no complexity requirement"
+        },
+        "submit": "Add",
+        "submitting": "Adding…",
+        "cancel": "Cancel"
+      },
+      "credential": {
+        "title": "Device added",
+        "subtitle": "Pick your platform below, then enter the credentials into the client.",
+        "platforms": {
+          "ios": "iOS",
+          "android": "Android"
+        },
+        "warning": {
+          "title": "Important: this password is shown only once",
+          "body": "After this dialog closes, the password cannot be recovered. If you lose it, you must revoke this device and add it again."
+        },
+        "qr": {
+          "label": "Scan to install the SyncClipboard shortcut",
+          "alt": "SyncClipboard shortcut install QR code"
+        },
+        "installUrl": {
+          "label": "Or copy the install link"
+        },
+        "android": {
+          "instructions": "There is no official Android client yet. Use any third-party app that speaks the SyncClipboard protocol (HTTP Basic Auth + GET/PUT /SyncClipboard.json) and configure it with the URL and credentials below."
+        },
+        "baseUrl": {
+          "label": "Server URL"
+        },
+        "username": {
+          "label": "Username"
+        },
+        "password": {
+          "label": "Password"
+        },
+        "copy": "Copy",
+        "copied": "Copied",
+        "confirmSaved": "I have saved these credentials",
+        "close": "Close",
+        "closeBlocked": "Confirm \"I have saved these credentials\" first"
+      },
+      "revoke": {
+        "confirmTitle": "Revoke {{label}}",
+        "confirmDescription": "Once revoked, this device can no longer sync. To reconnect you must add it again (the password cannot be recovered).",
+        "confirm": "Revoke",
+        "cancel": "Cancel"
+      },
+      "rotate": {
+        "button": "Change password",
+        "dialog": {
+          "title": "Change password for {{label}}",
+          "subtitle": "The server only stores a password hash, so the current one cannot be shown. After rotating, update the password field in your mobile client.",
+          "passwordLabel": "New password (optional)",
+          "passwordPlaceholder": "Leave empty to auto-generate",
+          "passwordHelp": "Empty → auto-generated strong password. Custom must be 8–256 chars.",
+          "warning": "The old password is invalidated immediately. The mobile client won't sync until its password field is updated.",
+          "submit": "Generate new password",
+          "submitting": "Working...",
+          "cancel": "Cancel"
+        },
+        "result": {
+          "title": "New password generated",
+          "subtitle": "Here is the new password — shown only this once. Copy it now and paste it into the password field of your mobile client.",
+          "usernameLabel": "Username",
+          "passwordLabel": "New password",
+          "copy": "Copy password",
+          "copied": "Copied",
+          "warning": "The old password no longer works. The mobile client must use this new password to keep syncing.",
+          "confirmSaved": "I have saved the new password",
+          "close": "Close",
+          "closeBlocked": "Confirm \"I have saved the new password\" first"
+        }
+      },
+      "errors": {
+        "facadeUnavailable": "Mobile sync is not enabled in this build",
+        "labelEmpty": "Device label cannot be empty",
+        "labelTooLong": "Device label is too long (max {{max}} chars)",
+        "lanListenerDisabled": "Enable the LAN listener first",
+        "usernameTaken": "Username \"{{username}}\" is already taken",
+        "usernameInvalidShape": "Invalid username: {{reason}}",
+        "passwordTooShort": "Password is too short (min {{min}} chars)",
+        "passwordTooLong": "Password is too long (max {{max}} chars)",
+        "passwordHashFailed": "Password hashing failed: {{message}}",
+        "deviceNotFound": "Device no longer exists; please refresh the list",
+        "invalidLanParameter": "Invalid LAN parameter: {{reason}}",
+        "settingsLoadFailed": "Failed to load settings: {{message}}",
+        "settingsSaveFailed": "Failed to save settings: {{message}}",
+        "endpointInfoProbeFailed": "Failed to probe current LAN address: {{message}}",
+        "lanProbeFailed": "Failed to list network interfaces: {{message}}",
+        "noLanInterfaceAvailable": "No usable LAN IPv4 address detected. Connect to a LAN, or pick a specific address under Configure → Bind IP, then try again.",
+        "persistenceFailed": "Save failed: {{message}}",
+        "qrRenderFailed": "QR rendering failed: {{message}}",
+        "unknown": "Error: {{message}}",
+        "loadFailed": "Load failed: {{message}}"
+      }
+    },
     "settings": {
       "readOnly": "Locked",
       "badges": {
         "mvp": "MVP",
         "comingSoon": "Coming Soon",
         "notEditable": "Not Editable",
-        "globalFileSyncOff": "File sync off"
+        "globalFileSyncOff": "File sync off",
+        "experimental": "Experimental",
+        "experimentalTooltip": "This feature is experimental — its behavior may change or be unstable in future releases."
       },
       "sync": {
         "title": "Sync Settings",

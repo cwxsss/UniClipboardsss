@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { refreshPresence } from '@/api/daemon'
-import { SpaceMembersPanel, ThisDeviceCard } from '@/components'
+import { MobileSyncDevicesPanel, SpaceMembersPanel, ThisDeviceCard } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { createLogger } from '@/lib/logger'
 import { useAppDispatch } from '@/store/hooks'
@@ -38,9 +38,10 @@ const DevicesPage: React.FC = () => {
     <div className="flex flex-col h-full relative">
       <div className="flex-1 overflow-hidden relative">
         <ScrollArea className="h-full">
-          <div className="px-4 pt-6 pb-8 space-y-6">
+          <div className="space-y-6 px-6 pb-10 pt-8">
             <ThisDeviceCard />
             <SpaceMembersPanel />
+            <MobileSyncDevicesPanel />
           </div>
         </ScrollArea>
       </div>

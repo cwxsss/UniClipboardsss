@@ -23,11 +23,13 @@ pub mod clipboard;
 mod clipboard_change_handler;
 mod clipboard_event;
 mod clock;
+pub mod connection_channel;
 pub mod device_identity;
 pub mod errors;
 pub mod file_transfer_repository;
 mod hash;
 pub mod local_identity;
+pub mod mobile_sync;
 pub mod pairing;
 pub mod pairing_invitation;
 pub mod peer_address;
@@ -48,6 +50,7 @@ pub use timer::TimerPort;
 
 pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
+pub use connection_channel::{ConnectionChannel, ConnectionChannelPort};
 pub use device_identity::DeviceIdentityPort;
 pub use errors::AppDirsError;
 pub use file_transfer_repository::{
@@ -56,6 +59,11 @@ pub use file_transfer_repository::{
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
 pub use local_identity::{LocalIdentityError, LocalIdentityPort};
+pub use mobile_sync::{
+    EndpointInfoError, LanInterfaceProbeError, LanInterfaceProbePort, MobileCredentialsMinterPort,
+    MobileDeviceRepositoryPort, MobileFileStagingError, MobileFileStagingPort,
+    MobileSyncEndpointInfoPort, PasswordHasherError, PasswordHasherPort,
+};
 pub use pairing::{
     DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
     SessionError,

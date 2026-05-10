@@ -17,7 +17,7 @@ use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 use crate::daemon::peers::presence_monitor::PresenceMonitor;
 use crate::daemon::service::DaemonService;
 use crate::daemon::state::RuntimeState;
-use uc_daemon_local::process_metadata::DaemonPidManager;
+use uc_daemon_local::process_metadata::{DaemonPidManager, DaemonProcessMode};
 use uc_webserver::api::auth::load_or_create_auth_token;
 use uc_webserver::api::event_emitter::DaemonApiEventEmitter;
 use uc_webserver::api::server::{run_http_server, DaemonApiState};
@@ -111,6 +111,20 @@ pub struct DaemonApp {
     /// pairing-completion forwarder doesn't need to pull
     /// `DeviceIdentityPort` at event time. Pre-resolved in `entrypoint`.
     local_device_id: Option<String>,
+    /// 是否在 main loop 里监听 OS 信号（SIGTERM/SIGINT/Ctrl-C）。
+    ///
+    /// `Standalone` 置 true；`GuiInProcess` 置 false——OS 信号属于 GUI 的
+    /// 责任，daemon 不能抢占 handler，shutdown 必须通过 caller 持有的
+    /// cancel token 触发。
+    listens_to_os_signals: bool,
+    /// 写进 PID 文件的进程模式——决定 `cli stop` 能不能 SIGTERM 这个
+    /// daemon。`GuiInProcess` → `InProcess`；`Standalone` → `Standalone`。
+    process_mode: DaemonProcessMode,
+    /// Mobile sync LAN endpoint adapter 的具体类型,daemon 启动时用它 spawn
+    /// `mobile_lan` listener,起来后 `set` 当前 URL,关闭后 `clear`。
+    /// `None` 表示该装配场景不接 mobile listener(测试或未来 GUI-only 模式)。
+    mobile_lan_endpoint_info:
+        Option<Arc<uc_infra::mobile_sync::InMemoryMobileSyncEndpointInfoAdapter>>,
 }
 
 impl DaemonApp {
@@ -137,6 +151,9 @@ impl DaemonApp {
             external_shutdown: None,
             clipboard_capture_gate: None,
             local_device_id: None,
+            listens_to_os_signals: true,
+            process_mode: DaemonProcessMode::Standalone,
+            mobile_lan_endpoint_info: None,
         }
     }
 
@@ -157,6 +174,8 @@ impl DaemonApp {
         external_shutdown: Option<CancellationToken>,
         clipboard_capture_gate: Option<Arc<AtomicBool>>,
         local_device_id: Option<String>,
+        listens_to_os_signals: bool,
+        process_mode: DaemonProcessMode,
     ) -> Self {
         debug_assert!(
             deferred_services.is_empty() || deferred_ready_notify.is_some(),
@@ -182,7 +201,25 @@ impl DaemonApp {
             external_shutdown,
             clipboard_capture_gate,
             local_device_id,
+            listens_to_os_signals,
+            process_mode,
+            mobile_lan_endpoint_info: None,
         }
+    }
+
+    /// 注入 mobile sync LAN endpoint adapter。daemon `run()` 看到 `Some(...)`
+    /// 且 `MobileSyncSettings.enabled && lan_listen_enabled` 时会 spawn
+    /// `mobile_lan` listener, 始终绑 `0.0.0.0:lan_port`(默认 42720),
+    /// 起来后写 `endpoint_info.set(...)`, 关闭后 `clear()`。`None`(默认)
+    /// 表示当前装配场景不接 listener (测试 / 未来 GUI-only 路径)。
+    /// `lan_advertise_ip` 由 application 层 register_device 直接读 settings
+    /// 决定二维码 URL, 不在本侧使用。
+    pub fn with_mobile_lan_endpoint_info(
+        mut self,
+        endpoint_info: Arc<uc_infra::mobile_sync::InMemoryMobileSyncEndpointInfoAdapter>,
+    ) -> Self {
+        self.mobile_lan_endpoint_info = Some(endpoint_info);
+        self
     }
 
     /// Run the daemon: start the HTTP API server and services, wait for shutdown, cleanup.
@@ -200,9 +237,8 @@ impl DaemonApp {
         );
         let auth_token = load_or_create_auth_token(&token_path)?;
         let pid_manager = DaemonPidManager::new(self.storage_paths.clone());
-        let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone())?;
-        let pid = pid_manager.write_current_pid()?;
-        info!(pid, "wrote daemon pid metadata");
+        let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone(), self.process_mode)?;
+        let pid = std::process::id();
 
         let presence_monitor = Arc::new(PresenceMonitor::new(
             Arc::clone(&self.app_facade),
@@ -268,14 +304,104 @@ impl DaemonApp {
 
         let _cleanup_handle = cleanup_rate_limiter_task(security_for_cleanup, cleanup_cancel);
 
+        // Phase 3 子步骤 5e + Phase 4 子步骤 5.5: spawn mobile sync LAN listener
+        // (SyncClipboard 协议: 根路径 GET/PUT /SyncClipboard.json +
+        // GET/PUT /file/:dataName)。
+        //
+        // bind 行为是常量推导 (不读 lan_advertise_ip):
+        //   - `enabled && lan_listen_enabled` → bind `0.0.0.0:lan_port`
+        //   - 任一为 false → 不起 listener
+        //   - `lan_port` 为 None → 默认 42720 (SPEC §3.2)
+        //
+        // `lan_advertise_ip` 仅由 application 层 register_device 使用来
+        // 合成给 iPhone 的 base_url, 与 daemon socket bind 解耦 (避免多
+        // 网卡场景下用户做选择题)。
+        //
+        // bind / serve 失败只 log, 不阻断 daemon 主流程。listener 需要 mobile
+        // sync facade 做 Basic Auth + 业务路由对接;facade 在 AppFacade 上是
+        // Option(GUI-only 入口可不带), 这里只在 mobile_sync 装配存在 *且*
+        // endpoint_info 注入存在时才起 listener。
+        if let (Some(endpoint_info), Some(mobile_sync_facade)) = (
+            self.mobile_lan_endpoint_info.clone(),
+            self.app_facade.mobile_sync.clone(),
+        ) {
+            // 同步读一次设置 —— daemon 启动时一次性决定 listener 行为, 配
+            // 置变更不热重载(SPEC §1.2.5: 用户必须 stop+start daemon)。读取
+            // 失败时按"未配置"处理: 不起 listener, daemon 继续跑(下一次
+            // start 时会重试)。
+            let settings_view = mobile_sync_facade.get_settings().await.ok();
+            let should_start = settings_view
+                .as_ref()
+                .map(|v| v.enabled && v.lan_listen_enabled)
+                .unwrap_or(false);
+
+            if !should_start {
+                info!(
+                    enabled = settings_view.as_ref().map(|v| v.enabled).unwrap_or(false),
+                    lan_listen_enabled = settings_view
+                        .as_ref()
+                        .map(|v| v.lan_listen_enabled)
+                        .unwrap_or(false),
+                    "mobile_sync LAN listener disabled by settings or unreadable; not starting"
+                );
+            } else {
+                let view = settings_view.expect("should_start implies Some");
+                let lan_cancel = self.cancel.child_token();
+                tokio::spawn(async move {
+                    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+                    use uc_core::mobile_sync::LanEndpointInfo;
+                    use uc_webserver::mobile_lan::start_mobile_lan_server;
+
+                    let port = view.lan_port.unwrap_or(42720);
+                    let bind = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+                    match start_mobile_lan_server(bind, lan_cancel, mobile_sync_facade).await {
+                        Ok(handle) => {
+                            let url = format!("http://{}", handle.bound_addr);
+                            endpoint_info
+                                .set(LanEndpointInfo { url: url.clone() })
+                                .await;
+                            info!(url, "mobile LAN listener up; endpoint_info populated");
+
+                            if let Err(e) = handle.join_handle.await {
+                                error!(error = %e, "mobile LAN listener task panicked");
+                            }
+
+                            endpoint_info.clear().await;
+                            info!("mobile LAN listener stopped; endpoint_info cleared");
+                        }
+                        Err(e) => {
+                            // 把 bind 失败原因写进 endpoint_info,UI 状态条与
+                            // settings sheet 据此显示具体错误(端口占用 / IP
+                            // 不存在 / 权限),不再让 facade 永远报 None。
+                            endpoint_info.set_bind_failure(format!("{}", e)).await;
+                            error!(
+                                bind = %bind,
+                                error = %e,
+                                "mobile LAN listener failed to bind; daemon continues without SyncClipboard endpoint"
+                            );
+                        }
+                    }
+                });
+            }
+        }
+
         // Prepare deferred services start
         let mut deferred = std::mem::take(&mut self.deferred_services);
         let ready_notify = self.deferred_ready_notify.take();
 
         // 7. Wait for shutdown signal, infrastructure crash, service crash, or deferred start
+        let listens_to_os_signals = self.listens_to_os_signals;
         loop {
             tokio::select! {
-                _ = wait_for_shutdown_signal() => {
+                _ = async {
+                    if listens_to_os_signals {
+                        if let Err(error) = wait_for_shutdown_signal().await {
+                            warn!(error = %error, "shutdown signal handler error");
+                        }
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
                     info!("shutdown signal received");
                     break;
                 }
@@ -353,9 +479,9 @@ struct DaemonPidFileGuard {
 }
 
 impl DaemonPidFileGuard {
-    fn activate(manager: DaemonPidManager) -> anyhow::Result<Self> {
-        let pid = manager.write_current_pid()?;
-        info!(pid, "wrote daemon pid metadata");
+    fn activate(manager: DaemonPidManager, mode: DaemonProcessMode) -> anyhow::Result<Self> {
+        let pid = manager.write_current_pid_with_mode(mode)?;
+        info!(pid, ?mode, "wrote daemon pid metadata");
         Ok(Self { manager })
     }
 }

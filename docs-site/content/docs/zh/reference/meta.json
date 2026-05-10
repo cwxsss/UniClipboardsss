@@ -1,0 +1,6 @@
+{
+  "title": "参考",
+  "icon": "Wrench",
+  "defaultOpen": true,
+  "pages": ["cli", "mobile-api", "search-internals"]
+}

@@ -91,6 +91,21 @@ export interface FileSyncSettings {
 }
 
 /**
+ * Network settings — wire fields camelCase aligned with daemon serde.
+ *
+ * 网络设置 — 前端只允许在 NetworkSection.tsx 一处对 `allowRelayFallback` 取反；
+ * 不要在前端维护反向布尔镜像字段（反向命名铁律）。
+ *
+ * `allowOverlayNetworkAddrs` 控制是否把 VPN/overlay 类虚拟网卡 IP（CGNAT
+ * 100.64.0.0/10、Tailscale ULA fd7a:115c:a1e0::/48）作为 iroh 直连候选。
+ * 默认 `false`。专业用户在两端都接入同一 VPN 时可开启。
+ */
+export interface NetworkSettings {
+  allowRelayFallback: boolean
+  allowOverlayNetworkAddrs: boolean
+}
+
+/**
  * Retention rule — discriminated union matching the Rust `RetentionRule` enum.
  *
  * 保留规则 — 与 Rust `RetentionRule` 枚举匹配的可区分联合类型。
@@ -135,6 +150,7 @@ export interface Settings {
   pairing: PairingSettings
   keyboardShortcuts: Record<string, ShortcutKey>
   fileSync: FileSyncSettings
+  network: NetworkSettings
 }
 
 // ── API response wrappers ──────────────────────────────────────
@@ -145,10 +161,17 @@ interface SettingsGetResponse {
   ts: number
 }
 
-/** PUT /settings response shape. / PUT /settings 响应结构。 */
+/** PUT /settings response shape. / PUT /settings 响应结构。
+ *
+ * 后端 `UpdateSettingsResponse` 的 `success` 与 `restartRequired` 在 **顶层**，
+ * `data` 是 `SettingsDto`（更新后的完整设置）。前端只关心 `success` + `restartRequired`，
+ * 故 `data` 用 `unknown` 占位避免 over-typing。
+ */
 interface SettingsUpdateResponse {
-  data: { success: boolean }
+  success: boolean
+  data: unknown
   ts: number
+  restartRequired: boolean
 }
 
 interface SettingsPatchRequest {
@@ -170,6 +193,7 @@ interface SettingsPatchRequest {
     shortcuts: Record<string, ShortcutKey>
   }
   fileSync?: Partial<FileSyncSettings>
+  network?: Partial<NetworkSettings>
 }
 
 // ── Public API ─────────────────────────────────────────────────
@@ -188,24 +212,33 @@ export async function getSettings(): Promise<Settings> {
 }
 
 /**
- * Update application settings via deep merge on the server.
+ * Apply a partial settings update to the daemon.
  *
- * 通过服务器端深度合并更新应用设置。
+ * Only the provided fields are changed; omitted fields retain their current values
+ * on the daemon (server-side deep merge).
  *
- * Only the provided fields are changed; omitted fields retain their current
- * values. Nested objects are merged recursively.
- *
- * @param settings Partial settings payload.
- * @throws {DaemonApiError} On HTTP or validation errors.
+ * @param settings - Partial settings object containing only the fields to update
+ * @returns An object with `success` indicating whether the patch was applied, and
+ *          `restartRequired` indicating the daemon requests a restart (e.g., after
+ *          certain network-related changes)
  */
-export async function updateSettings(settings: Partial<Settings>): Promise<void> {
+export async function updateSettings(
+  settings: Partial<Settings>
+): Promise<{ success: boolean; restartRequired: boolean }> {
   const patch = toSettingsPatchRequest(settings)
-  await daemonClient.request<SettingsUpdateResponse>('/settings', {
+  const res = await daemonClient.request<SettingsUpdateResponse>('/settings', {
     method: 'PUT',
     body: patch,
   })
+  return { success: res.success, restartRequired: res.restartRequired }
 }
 
+/**
+ * Constructs a patch object that includes only the top-level settings sections present in the input.
+ *
+ * @param settings - A partial Settings object; only top-level sections that are defined will be included in the patch.
+ * @returns A SettingsPatchRequest containing the provided sections with their corresponding fields.
+ */
 function toSettingsPatchRequest(settings: Partial<Settings>): SettingsPatchRequest {
   const patch: SettingsPatchRequest = {}
 
@@ -295,6 +328,14 @@ function toSettingsPatchRequest(settings: Partial<Settings>): SettingsPatchReque
       fileRetentionHours,
       fileAutoCleanup,
     }
+  }
+
+  if (settings.network) {
+    // Spread to only mirror fields actually present on the input — both
+    // existing tests and SettingContext sometimes pass `Partial<NetworkSettings>`
+    // (e.g. just `{ allowRelayFallback: ... }`); we must not emit undefined
+    // fields, since the wire patch interprets `null/undefined` as "no change".
+    patch.network = { ...settings.network }
   }
 
   return patch

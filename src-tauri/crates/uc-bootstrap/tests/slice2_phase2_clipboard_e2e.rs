@@ -373,6 +373,7 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         IrohNodeConfig {
             rendezvous_base_url: Some(rendezvous_base_url),
             disable_relays: true,
+            allow_overlay_network_addrs: false,
         },
     )
     .await
@@ -387,6 +388,8 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
     );
     let presence: Arc<dyn PresencePort> = builder.install_presence(
         Arc::clone(&peer_addr_repo) as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+        Arc::clone(&member_repo) as Arc<dyn MemberRepositoryPort>,
+        Arc::new(Sha256IdentityFingerprintFactory),
         Arc::new(SystemClock),
     );
     let ClipboardHandlers {
@@ -447,11 +450,13 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         trusted_peer_repo: Arc::clone(&trusted_peer_repo) as Arc<dyn TrustedPeerRepositoryPort>,
         local_identity: local_identity_for_roster,
         presence: presence_for_roster,
+        connection_channel: None,
     }));
 
     let clipboard_sync = Arc::new(ClipboardSyncFacade::new(ClipboardSyncDeps {
         peer_addr_repo: Arc::clone(&peer_addr_repo)
             as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+        member_repo: Arc::clone(&member_repo) as Arc<dyn MemberRepositoryPort>,
         presence: presence_for_clipboard,
         transfer_cipher,
         clipboard_dispatch,

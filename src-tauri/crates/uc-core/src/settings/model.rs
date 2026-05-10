@@ -6,7 +6,11 @@ use serde_with::{serde_as, DurationSeconds};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+// 所有 settings struct 统一使用 `#[serde(default)]`：缺字段时回退到
+// `Default::default()`（在 `defaults.rs` 中实现），保证向后兼容。
+// 详见 issue #581：旧版本 settings.json 缺新增字段会让 daemon 启动失败。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GeneralSettings {
     pub auto_start: bool,
     pub silent_start: bool,
@@ -17,17 +21,11 @@ pub struct GeneralSettings {
     pub device_name: Option<String>,
     /// Update channel preference. `None` means auto-detect from version string;
     /// `Some(channel)` means the user has overridden the channel.
-    #[serde(default)]
     pub update_channel: Option<UpdateChannel>,
     /// Whether anonymous diagnostic telemetry is enabled.
-    /// When `true` and an OTLP endpoint is configured, the app sends
-    /// info/warn/error level events (never clipboard content).
-    #[serde(default = "default_telemetry_enabled")]
+    /// When `true` and a Sentry DSN is configured, the app forwards
+    /// errors / warnings / structured logs (never clipboard content).
     pub telemetry_enabled: bool,
-}
-
-fn default_telemetry_enabled() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,6 +57,7 @@ pub enum ShortcutKey {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct ContentTypes {
     pub text: bool,
     pub image: bool,
@@ -69,11 +68,10 @@ pub struct ContentTypes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct SyncSettings {
     pub auto_sync: bool,
     pub sync_frequency: SyncFrequency,
-
-    #[serde(default)]
     pub content_types: ContentTypes,
 }
 
@@ -122,7 +120,7 @@ pub enum RuleEvaluation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(default, rename_all = "snake_case")]
 pub struct RetentionPolicy {
     pub enabled: bool,
     pub rules: Vec<RetentionRule>,
@@ -131,7 +129,7 @@ pub struct RetentionPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(default, rename_all = "snake_case")]
 pub struct SecuritySettings {
     /// 是否启用本地数据加密
     pub encryption_enabled: bool,
@@ -146,12 +144,12 @@ pub struct SecuritySettings {
     ///
     /// 仅用于 UI 与流程判断
     /// 需要用户在系统弹窗中选择“始终允许”才能静默生效
-    #[serde(default)]
     pub auto_unlock_enabled: bool,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PairingSettings {
     #[serde_as(as = "DurationSeconds<u64>")]
     pub step_timeout: Duration,
@@ -164,6 +162,7 @@ pub struct PairingSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct FileSyncSettings {
     pub file_sync_enabled: bool,
     pub small_file_threshold: u64,
@@ -171,6 +170,107 @@ pub struct FileSyncSettings {
     pub file_cache_quota_per_device: u64,
     pub file_retention_hours: u32,
     pub file_auto_cleanup: bool,
+}
+
+// ======================================================================
+// NetworkSettings —— LAN-only Mode（v0.7.0）的后端持久化字段
+//
+// 反向命名规则（Pitfall 1 防御 — 见 .planning/research/PITFALLS.md §Pitfall 1）：
+// - UI = "LAN-only Mode = ON"
+// - 后端 = `allow_relay_fallback = false`
+// - infra (iroh) = `IrohNodeConfig.disable_relays = true`
+//
+// 三层语义两次反转。**全工程只允许在 `uc-bootstrap/src/network_policy.rs`
+// 唯一一处取反**；DTO ↔ View ↔ core 三层只搬运 `allow_relay_fallback`
+// 业务正向语义，不取反。
+// ======================================================================
+
+/// 网络相关设置（LAN-only Mode 字段族）。
+///
+/// `#[serde(default)]` 让缺字段时回退到 `Default::default()`：
+/// - `allow_relay_fallback = true`（允许 fallback，breaking change 警惕）
+/// - `allow_overlay_network_addrs = false`（默认过滤虚拟网卡候选）
+///
+/// 修改默认值前请先 grep `LAN-only Mode` 文档与 changelog。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NetworkSettings {
+    /// 是否允许 iroh 在直连失败时回落到公网中继。
+    /// `true`（默认）= 允许 fallback，跨网段设备仍可通过 relay 同步；
+    /// `false` = LAN-only，禁用 relay，跨网段设备会失联。
+    /// 业务正向语义：UI "LAN-only Mode = ON" → 此字段 = `false`。
+    pub allow_relay_fallback: bool,
+
+    /// 是否允许把 VPN / overlay 类虚拟网卡地址（CGNAT 100.64.0.0/10、
+    /// Tailscale ULA fd7a:115c:a1e0::/48）作为 iroh 直连候选。
+    ///
+    /// 默认 `false`：默认过滤，避免对端不在同一 tailnet 时把死候选发给 peer，
+    /// 拖慢 path-validation、占用 PathId 预算。两端确实都接入同一 VPN
+    /// （如 Tailscale）希望让 iroh 借用该 overlay 网络互联时改为 `true`。
+    ///
+    /// 注意：`198.18.0.0/15`（Clash fake-ip）、`169.254.0.0/16`（IPv4 link-local）
+    /// 与本字段无关，永远过滤。
+    ///
+    /// 修改后需重启 daemon 生效（iroh endpoint bind-time 常量）。
+    pub allow_overlay_network_addrs: bool,
+}
+
+// ======================================================================
+// MobileSyncSettings —— 移动端同步（v1：iOS Shortcut）的总开关。
+//
+// 字段刻意从一个 `enabled` 起步：v1 SPEC 要求 listen_port / bind_address
+// 由 daemon 端常量 + profile offset 自动推导，不暴露给用户配置；
+// install_method 是 register flow 的一次性选择而非持久化偏好。这里只
+// 持久化"用户是否打开移动端同步监听"这一项，其余调用所需信息（当前
+// LAN URL、可用 install_method）由 application 层 use case 在 view 中
+// 实时拼装。
+//
+// 修改 enabled 后需要重启 daemon 才会生效（v1 不做热重载，详见
+// `.context/mobile-sync/SPEC.md` §5）。
+// ======================================================================
+
+/// 移动端同步功能的设置族。
+///
+/// v3 SyncClipboard 兼容版(SPEC §14.10)按"功能开关 + 广告 URL 细节"两层
+/// 拆分。daemon socket bind 行为是常量推导:`enabled && lan_listen_enabled`
+/// 时 bind `0.0.0.0:lan_port`,否则不起 listener。
+///
+/// * `enabled` —— 总开关。关闭时 daemon 完全不起 LAN listener,即使
+///   `lan_listen_enabled=true` 也无效。
+/// * `lan_listen_enabled` —— LAN listener 子开关。仅在 `enabled=true` 时
+///   生效。让用户能在不撤销已登记设备的情况下临时停用 listener
+///   (例如出差换不可信网络时)。
+/// * `lan_advertise_ip` —— 用户选定的、要写进 SyncClipboard install URL /
+///   二维码的 IPv4 字符串(`192.168.1.5` 这类)。仅决定 iPhone 客户端看到
+///   的 base_url,**不**决定 daemon socket 绑哪里(daemon 永远绑 `0.0.0.0`)。
+///   从 list-interfaces 候选里挑一个 RFC1918 私有地址。`None` 对应 UI 的
+///   "自动"选项,展示 / register_device base_url 都退回 `0.0.0.0`(iPhone
+///   连不上,需用户挑一个具体 IP 后再添加设备)。
+/// * `lan_port` —— 自定义端口。`None` 时取默认 `42720`(SPEC §3.2)。
+///
+/// 任意字段变更后都需要重启 daemon 才能生效(v1 不做配置热重载,详见
+/// `.context/mobile-sync/SPEC.md` §1.2.5)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MobileSyncSettings {
+    /// 是否启用移动端同步 LAN 监听总开关。
+    /// 默认 `false`:移动端同步对未配对的局域网邻居有暴露面,必须由
+    /// 用户在设置页显式开启。
+    pub enabled: bool,
+
+    /// LAN listener 子开关。`enabled=true` 时由本字段决定 daemon 启动
+    /// 后是否真的把 listener spawn 起来(绑 0.0.0.0:lan_port);否则不起
+    /// listener。默认 `false`。
+    pub lan_listen_enabled: bool,
+
+    /// 写进 install URL / 二维码的 LAN IPv4 字符串(用户从 list-interfaces
+    /// 挑一个)。仅决定 iPhone 端 base_url, 不决定 daemon socket bind
+    /// (daemon 永远绑 `0.0.0.0`)。`None` 对应 UI 的"自动"选项,退回
+    /// `0.0.0.0`(iPhone 连不上,需挑具体 IP)。
+    pub lan_advertise_ip: Option<String>,
+
+    /// 用户自定义的 LAN 监听端口。`None` 时取默认 `42720`(SPEC §3.2)。
+    pub lan_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,8 +298,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub file_sync: FileSyncSettings,
-    // #[serde(default)]
-    // pub network: NetworkSettings,
+
+    #[serde(default)]
+    pub network: NetworkSettings,
+
+    #[serde(default)]
+    pub mobile_sync: MobileSyncSettings,
 }
 
 /// The current schema version used for settings persistence.

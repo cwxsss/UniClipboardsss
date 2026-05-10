@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://huacnlee.github.io/autocorrect/schema.json
+# Project-level AutoCorrect config. Only invoked on Markdown files via
+# lint-staged; applies the default CJK ↔ ASCII spacing rules.
+rules:
+  # Disable spellcheck — too opinionated for technical project docs.
+  spellcheck: 0
+context:
+  # Don't rewrite content inside fenced code blocks.
+  codeblock: 0

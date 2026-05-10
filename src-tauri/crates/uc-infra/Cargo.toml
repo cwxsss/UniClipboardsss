@@ -5,6 +5,16 @@ license.workspace = true
 edition = "2021"
 description = "Infrastructure utilities and shared components for UniClipboard"
 
+[features]
+default = []
+# Phase 94 / Pitfall 3 — disables `IrohNodeBuilder::bind` 的 OnceCell 单进程
+# 守护，让下游 crate 的 e2e 测试在同 binary 内多次 bind sponsor + joiner
+# endpoint。`#[cfg(test)]` 只对正在 `cargo test` 的 crate 生效，不传递到
+# 依赖；下游 e2e（如 uc-bootstrap/tests/slice*_e2e.rs）必须显式启用此 feature
+# 来 elide 守护。**production build 严禁启用此 feature**，否则 Pitfall 3
+# 结构性防御失效。见 src/network/iroh/node.rs 上的 BIND_LOCK doc comment。
+test-util = []
+
 [dependencies]
 # ===== Workspace crates =====
 uc-core = { path = "../uc-core" }
@@ -37,9 +47,6 @@ diesel = { version = "2.3.5", features = [
 libsqlite3-sys = { version = "0.35", features = ["bundled"] }    # SQLite系统库绑定
 diesel_migrations = { version = "2.2.0", features = ["sqlite"] } # Diesel迁移工具
 
-# File system paths
-dirs = "6.0"
-
 # Async runtime (for mpsc channels in ports)
 tokio = { version = "1", features = [
     "sync",
@@ -50,12 +57,15 @@ tokio = { version = "1", features = [
     "io-util",
 ] }
 
-log = "0.4.29"
 tracing = "0.1"
 argon2 = "0.5.3"
+base64 = "0.22"
 subtle = "2.5.0"
 chacha20poly1305 = "0.10.1"
 rand = "0.9.2"
+# Memory hygiene: zero out MasterKey / Kek bytes when dropped so residual key
+# material does not linger in heap/stack pages after lock/clear/refresh paths.
+zeroize = { version = "1.8.2", features = ["derive"] }
 blake3 = "1.8.2"
 hex = "0.4.3"
 hkdf = "0.12"
@@ -90,6 +100,10 @@ postcard = { version = "1", features = ["use-std"] }
 # the stream/facade boundary without extra clones. Same crate uc-core already
 # pulls in on its own port contracts.
 bytes = "1.7"
+# Mobile-sync v1 LAN interface enumeration (`NetworkInterfaceLanProbe`).
+# Cross-platform wrapper over getifaddrs / GetAdaptersAddresses; we only
+# read IPv4 addresses + interface name, no other features pulled in.
+network-interface = "2.0"
 
 [dependencies.uuid]
 version = "1.10.0"

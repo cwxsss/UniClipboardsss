@@ -20,7 +20,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use uc_application::deps::{
-    AppDeps, ClipboardPorts, DevicePorts, SearchPorts, SecurityPorts, StoragePorts, SystemPorts,
+    AppDeps, ClipboardPorts, DevicePorts, MobileSyncPorts, SearchPorts, SecurityPorts,
+    StoragePorts, SystemPorts,
 };
 use uc_application::facade::HostEventEmitterPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
@@ -45,7 +46,7 @@ use uc_infra::db::mappers::{
     blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
     clipboard_event_mapper::ClipboardEventRowMapper,
     clipboard_selection_mapper::ClipboardSelectionRowMapper,
-    peer_address_mapper::PeerAddressRowMapper,
+    mobile_device_mapper::MobileDeviceRowMapper, peer_address_mapper::PeerAddressRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
     space_member_mapper::SpaceMemberRowMapper, trusted_peer_mapper::TrustedPeerRowMapper,
 };
@@ -54,8 +55,8 @@ use uc_infra::db::repositories::{
     DieselBlobMigrationRepository, DieselBlobReferenceRepository, DieselBlobRepository,
     DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselFileTransferRepository, DieselPeerAddressRepository, DieselSpaceMemberRepository,
-    DieselThumbnailRepository, DieselTrustedPeerRepository,
+    DieselFileTransferRepository, DieselMobileDeviceRepository, DieselPeerAddressRepository,
+    DieselSpaceMemberRepository, DieselThumbnailRepository, DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -157,6 +158,14 @@ pub struct WiredDependencies {
     /// Slice 3 Phase 1:iroh-blobs store 目录。由 `SpaceSetupAssembly`
     /// 装配 iroh blob handler 时使用。
     pub iroh_blob_store_dir: PathBuf,
+    /// iroh 长期 Ed25519 设备身份的文件存储根目录(`<app_data>/iroh-identity[_<profile>]/`)。
+    ///
+    /// 与 KEK 的系统 keychain 隔离:iroh 设备身份是网络栈的"我是哪台机器"
+    /// 标识,**不是**用户秘密;不应跟用户口令派生密钥共用同一条 macOS
+    /// keychain 条目,否则启动期 `IrohNodeBuilder::bind` 会在用户没有任何
+    /// 操作前触发 keychain 弹窗(违反"只在用户解锁/初始化时访问 keychain"
+    /// 的边界规则)。
+    pub iroh_identity_dir: PathBuf,
     /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
     pub blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
     /// Switch-space 重加密迁移：跨重启的阶段持久化 port，落地为
@@ -168,6 +177,15 @@ pub struct WiredDependencies {
     pub key_migration: Arc<dyn uc_core::ports::security::KeyMigrationPort>,
     /// Switch-space backup 表 + 主表 inline_data 批量读写 port。
     pub blob_migration_repo: Arc<dyn uc_core::ports::clipboard::BlobMigrationRepoPort>,
+    /// Mobile sync LAN 端点状态(单例)的具体类型旁路。
+    ///
+    /// daemon LAN listener 启停时需要调 inherent `set` / `clear`,这两个方法
+    /// 不在 `MobileSyncEndpointInfoPort` 上(只读契约 vs 写入事件,见
+    /// `MobileSyncPorts.endpoint_info` 的文档)。同一份 Arc 已经装入
+    /// `AppDeps.mobile_sync.endpoint_info`,daemon 写、facade 读,共享同一份
+    /// 内存,不会出现"两条路径看不到同一个 URL"的撕裂。
+    pub mobile_sync_endpoint_info:
+        Arc<uc_infra::mobile_sync::InMemoryMobileSyncEndpointInfoAdapter>,
 }
 
 /// Infrastructure layer implementations
@@ -231,6 +249,16 @@ struct InfraLayer {
     // `seed_receiver_context`, which is not part of the `FileTransferEventStorePort`
     // surface on purpose (entry_id / cached_path are receiver-local concerns).
     file_transfer_store: Arc<crate::file_transfer_lifecycle::FileTransferEventStore>,
+
+    // Mobile sync 设备仓库 — `DieselMobileDeviceRepository`,跨重启 / 跨进
+    // 程稳定的已登记设备列表(替代之前进程内 HashMap)。
+    mobile_device_repo: Arc<dyn uc_core::ports::MobileDeviceRepositoryPort>,
+
+    // Mobile sync LAN 端点状态(单例) — daemon listener 启停时调 inherent
+    // `set` / `clear` 写它,facade 通过 `MobileSyncEndpointInfoPort` 只读。
+    // 持有具体类型是为了让 daemon 拿到写入面;同一份 Arc 通过 unsizing
+    // coercion 也能 share 给 AppDeps.mobile_sync.endpoint_info。
+    mobile_sync_endpoint_info: Arc<uc_infra::mobile_sync::InMemoryMobileSyncEndpointInfoAdapter>,
 }
 
 /// Platform layer implementations
@@ -405,6 +433,16 @@ fn create_infra_layer(
         uc_infra::file_transfer::SqliteReceiverFileTransferStore::new(Arc::clone(&db_executor)),
     );
 
+    let mobile_device_repo: Arc<dyn uc_core::ports::MobileDeviceRepositoryPort> = Arc::new(
+        DieselMobileDeviceRepository::new(Arc::clone(&db_executor), MobileDeviceRowMapper),
+    );
+
+    // Phase 3 子步骤 3:endpoint_info adapter 提升为 bootstrap 装配的单例,
+    // daemon LAN listener 与 facade 各持一份 Arc,避免 facade 看到的"当前
+    // LAN URL"和 daemon 实际绑定的 URL 走两条不同的内存路径。
+    let mobile_sync_endpoint_info =
+        Arc::new(uc_infra::mobile_sync::InMemoryMobileSyncEndpointInfoAdapter::new());
+
     let infra = InfraLayer {
         clipboard_entry_repo,
         clipboard_event_repo,
@@ -427,6 +465,8 @@ fn create_infra_layer(
         hash,
         file_transfer_repo,
         file_transfer_store,
+        mobile_device_repo,
+        mobile_sync_endpoint_info,
     };
 
     Ok(infra)
@@ -799,11 +839,28 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
     let blob_reference_repo_for_wiring = Arc::clone(&infra.blob_reference_repo);
     let iroh_blob_store_dir_for_wiring =
         apply_profile_suffix(paths.app_data_root_dir.join("iroh-blobs"));
+    // iroh 设备身份的文件存储目录。先 mkdir,确保 `FileSecureStorage::with_base_dir`
+    // 在首次写身份时不会因目录不存在而失败。`apply_profile_suffix` 与
+    // `iroh_blob_store_dir` 用同一规则,保证 multi-profile dev 隔离。
+    let iroh_identity_dir_for_wiring =
+        apply_profile_suffix(paths.app_data_root_dir.join("iroh-identity"));
+    std::fs::create_dir_all(&iroh_identity_dir_for_wiring).map_err(|e| {
+        WiringError::SecureStorageInit(format!(
+            "failed to create iroh-identity dir {}: {e}",
+            iroh_identity_dir_for_wiring.display()
+        ))
+    })?;
 
     // Switch-space migration ports for SpaceSetupFacade. Same WiredDependencies
     // bypass pattern as `peer_addr_repo` — consumer lives in uc-application.
     let migration_state_for_wiring = Arc::clone(&infra.migration_state);
     let blob_migration_repo_for_wiring = Arc::clone(&infra.blob_migration_repo);
+    // Phase 3 子步骤 3:把 endpoint_info adapter 也通过旁路暴露给 daemon
+    // builder——daemon LAN listener 需要具体类型来调 inherent `set` / `clear`
+    // 写入面,trait object 拿不到这两个方法。同一份 Arc 已经通过 unsizing
+    // coercion 装入 `AppDeps.mobile_sync.endpoint_info`,daemon 写、facade
+    // 读,共享同一份内存。
+    let mobile_sync_endpoint_info_for_wiring = Arc::clone(&infra.mobile_sync_endpoint_info);
     // `key_migration` adapter consumes secure_storage from PlatformLayer,
     // so it's constructed here at wire_dependencies level rather than in
     // create_infra_layer.
@@ -869,6 +926,10 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
             search_key_derivation,
             search_pipeline,
         },
+        mobile_sync: MobileSyncPorts {
+            device_repo: infra.mobile_device_repo,
+            endpoint_info: infra.mobile_sync_endpoint_info.clone(),
+        },
     };
 
     // Create shared emitter cell at wire time using the logging placeholder.
@@ -898,10 +959,12 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
         trusted_peer_repo: trusted_peer_repo_for_wiring,
         peer_addr_repo: peer_addr_repo_for_wiring,
         iroh_blob_store_dir: iroh_blob_store_dir_for_wiring,
+        iroh_identity_dir: iroh_identity_dir_for_wiring,
         blob_reference_repo: blob_reference_repo_for_wiring,
         migration_state: migration_state_for_wiring,
         key_migration: key_migration_for_wiring,
         blob_migration_repo: blob_migration_repo_for_wiring,
+        mobile_sync_endpoint_info: mobile_sync_endpoint_info_for_wiring,
         background: BackgroundRuntimeDeps {
             representation_cache,
             spool_manager,

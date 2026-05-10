@@ -78,6 +78,36 @@ It enables seamless and secure syncing of text, images, and files across multipl
 
 Visit the [GitHub Releases](https://github.com/UniClipboard/UniClipboard/releases) page to download the installation package for your operating system.
 
+### Linux
+
+Each release ships `.deb`, `.rpm`, and `.AppImage` artifacts for both `x86_64` and `aarch64` (where supported).
+
+**Fedora / RHEL / openSUSE — via COPR (recommended, auto-updating)**
+
+```bash
+sudo dnf copr enable mkdir700/uniclipboard-alpha   # alpha channel; or mkdir700/uniclipboard for stable
+sudo dnf install uniclipboard
+```
+
+After enabling, `sudo dnf upgrade` will pick up new releases automatically.
+
+**Or download a single .rpm / .deb / AppImage from the Releases page:**
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i uniclipboard_<version>_amd64.deb
+sudo apt-get install -f                                 # resolve missing deps if any
+
+# Fedora / RHEL / openSUSE (one-shot, no COPR)
+sudo dnf install ./UniClipboard-<version>-1.x86_64.rpm
+
+# AppImage (any distro)
+chmod +x UniClipboard_<version>_amd64.AppImage
+./UniClipboard_<version>_amd64.AppImage
+```
+
+> Packaged installs (COPR / one-shot rpm / deb) do not auto-update from inside the app — use `dnf upgrade` / `apt upgrade` against your package source. The AppImage is what the in-app updater uses on Linux.
+
 ### Homebrew (macOS)
 
 On macOS, install via the official tap [`UniClipboard/homebrew-tap`](https://github.com/UniClipboard/homebrew-tap):
@@ -230,13 +260,15 @@ The 0.6 release replaced the underlying networking stack. Existing pairings from
 
 ## Contributing
 
-Contributions of all kinds are welcome! If you're interested in improving UniClipboard:
+Contributions of all kinds are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for the full development setup, branching strategy, commit conventions, and PR process.
+
+Quick start:
 
 1. Fork this repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+3. Commit your changes following the project's [commit conventions](./CONTRIBUTING.md#commit-conventions)
 4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Create a Pull Request
+5. Open a Pull Request against the `dev` branch
 
 ## License
 

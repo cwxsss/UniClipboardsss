@@ -1,7 +1,7 @@
 import type { ErrorEvent } from '@sentry/core'
 import * as Sentry from '@sentry/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { initSentry } from '../sentry'
+import { initSentry, setFrontendSentryEnabled } from '@/observability/sentry'
 
 // Mock Sentry
 vi.mock('@sentry/react', async importOriginal => {
@@ -17,6 +17,13 @@ vi.mock('@sentry/react', async importOriginal => {
 describe('initSentry', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // 清掉 localStorage 镜像，确保下面 dynamic-import 测试能从"首次启动"状态出发。
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem('uc.telemetry_enabled')
+    }
+    // 重置当前模块的运行时 gate 到 false，避免上条测试的状态泄漏到下一条；
+    // 注意这一步会把 localStorage 镜像也写成 'false'，所以放在 removeItem 之后。
+    setFrontendSentryEnabled(false)
   })
 
   it('initializes Sentry with correct configuration', () => {
@@ -34,6 +41,7 @@ describe('initSentry', () => {
   })
 
   it('scrubs sensitive data from breadcrumbs', () => {
+    setFrontendSentryEnabled(true)
     initSentry()
     const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
     const beforeBreadcrumb = initCall.beforeBreadcrumb!
@@ -55,6 +63,7 @@ describe('initSentry', () => {
   })
 
   it('scrubs sensitive data from event extra', async () => {
+    setFrontendSentryEnabled(true)
     initSentry()
     const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
     const beforeSend = initCall.beforeSend!
@@ -75,6 +84,7 @@ describe('initSentry', () => {
   })
 
   it('preserves existing ResizeObserver filter in beforeSend', async () => {
+    setFrontendSentryEnabled(true)
     initSentry()
     const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
     const beforeSend = initCall.beforeSend!
@@ -88,5 +98,73 @@ describe('initSentry', () => {
     const result = await Promise.resolve(beforeSend(resizeEvent, {}))
 
     expect(result).toBeNull()
+  })
+
+  it('drops events when telemetry runtime gate is disabled', async () => {
+    initSentry()
+    const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
+    const beforeSend = initCall.beforeSend!
+    const beforeBreadcrumb = initCall.beforeBreadcrumb!
+    const beforeSendLog = initCall.beforeSendLog!
+
+    setFrontendSentryEnabled(false)
+
+    const event = { extra: { foo: 'bar' } } as unknown as ErrorEvent
+    const breadcrumb: Sentry.Breadcrumb = { message: 'click' }
+    const log = { body: 'hello', attributes: { x: 1 } } as unknown as Parameters<
+      NonNullable<typeof beforeSendLog>
+    >[0]
+
+    expect(await Promise.resolve(beforeSend(event, {}))).toBeNull()
+    expect(beforeBreadcrumb(breadcrumb, {})).toBeNull()
+    expect(beforeSendLog(log)).toBeNull()
+  })
+
+  it('starts with the runtime gate disabled until settings enable it', async () => {
+    initSentry()
+    const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
+    const beforeSend = initCall.beforeSend!
+
+    const event = { extra: { early: 'startup' } } as unknown as ErrorEvent
+    expect(await Promise.resolve(beforeSend(event, {}))).toBeNull()
+  })
+
+  it('honors a localStorage mirror of "true" so early startup events are captured', async () => {
+    // Simulate a previous session that left the user's preference as enabled.
+    window.localStorage.setItem('uc.telemetry_enabled', 'true')
+    vi.resetModules()
+    const fresh = await import('@/observability/sentry')
+    fresh.initSentry()
+    const calls = vi.mocked(Sentry.init).mock.calls
+    const initCall = calls[calls.length - 1][0]
+    const beforeSend = initCall.beforeSend!
+
+    const event = { extra: { early: 'startup' } } as unknown as ErrorEvent
+    const result = await Promise.resolve(beforeSend(event, {}))
+    expect(result).not.toBeNull()
+    expect(result?.extra).toEqual({ early: 'startup' })
+  })
+
+  it('persists the runtime gate to localStorage so the next session can read it synchronously', () => {
+    setFrontendSentryEnabled(true)
+    expect(window.localStorage.getItem('uc.telemetry_enabled')).toBe('true')
+
+    setFrontendSentryEnabled(false)
+    expect(window.localStorage.getItem('uc.telemetry_enabled')).toBe('false')
+  })
+
+  it('passes events through when telemetry runtime gate is re-enabled', async () => {
+    initSentry()
+    const initCall = vi.mocked(Sentry.init).mock.calls[0][0]
+    const beforeSend = initCall.beforeSend!
+
+    setFrontendSentryEnabled(false)
+    setFrontendSentryEnabled(true)
+
+    const event = { extra: { safe: 'data' } } as unknown as ErrorEvent
+    const result = await Promise.resolve(beforeSend(event, {}))
+
+    expect(result).not.toBeNull()
+    expect(result?.extra).toEqual({ safe: 'data' })
   })
 })

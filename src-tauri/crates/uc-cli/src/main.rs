@@ -185,16 +185,22 @@ enum Commands {
         #[command(subcommand)]
         subcommand: commands::upgrade::UpgradeCommands,
     },
+    /// Hidden clipboard-diagnostic subcommand group (replaces the standalone
+    /// `clipboard-probe` binary). Development and E2E debugging only.
+    #[command(hide = true)]
+    Probe {
+        #[command(subcommand)]
+        subcommand: commands::probe::ProbeCommands,
+    },
+    /// Manage mobile-sync (iPhone over LAN, SyncClipboard-compatible).
+    #[command(name = "mobile-sync")]
+    MobileSync {
+        #[command(subcommand)]
+        subcommand: commands::mobile_sync::MobileSyncCommands,
+    },
     /// 内联运行 daemon 进程，供 `start` 内部使用
     #[command(hide = true)]
-    Daemon {
-        /// 由 GUI 父进程启动，并通过 stdin 判断父进程生命周期
-        #[arg(long)]
-        gui_managed: bool,
-        /// 以常驻桌面 daemon 运行，不绑定 GUI 进程生命周期
-        #[arg(long, conflicts_with = "gui_managed")]
-        hybrid: bool,
-    },
+    Daemon,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -231,14 +237,11 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    if let Commands::Daemon {
-        gui_managed,
-        hybrid,
-    } = command
-    {
-        let run_mode =
-            uc_desktop::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
-        return uc_desktop::daemon::run(run_mode);
+    if let Commands::Daemon = command {
+        // CLI `start` detached-spawns this same binary with the `daemon`
+        // subcommand. Standalone is the only mode this binary ever runs in
+        // since the GUI has been switched to in-process daemon startup.
+        return uc_desktop::daemon::run(uc_desktop::daemon::run_mode::DaemonRunMode::Standalone);
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -324,7 +327,11 @@ fn main() -> anyhow::Result<()> {
             Commands::Upgrade { subcommand } => {
                 commands::upgrade::run(subcommand, cli.json, cli.verbose).await
             }
-            Commands::Daemon { .. } => unreachable!("handled above"),
+            Commands::Probe { subcommand } => commands::probe::run(subcommand, cli.verbose).await,
+            Commands::MobileSync { subcommand } => {
+                commands::mobile_sync::run(subcommand, cli.json, cli.verbose).await
+            }
+            Commands::Daemon => unreachable!("handled above"),
         }
     });
 
@@ -373,5 +380,139 @@ mod tests {
             result.is_err(),
             "standalone CLI search rebuild must be synchronous and reject --no-wait"
         );
+    }
+
+    #[test]
+    fn mobile_sync_kebab_case_is_accepted() {
+        // 子命令名是 kebab-case `mobile-sync` 而非默认的 `mobile_sync` /
+        // `mobilesync`。锁住这个外部契约 —— 改名会让所有发布的脚本失效。
+        // (Step 4 起 `enable` 已删, 用 `status` 这个稳定读命令探针。)
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "status"]);
+        assert!(result.is_ok(), "expected `mobile-sync status` to parse");
+    }
+
+    #[test]
+    fn mobile_sync_lan_enable_requires_advertise() {
+        // `lan enable` 必须强制 `--advertise <IP>` —— iPhone 客户端需要
+        // 一个具体可达的 IP 写进 install URL;daemon 自己始终绑 0.0.0.0,
+        // 与 advertise 无关。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "lan", "enable"]);
+        assert!(
+            result.is_err(),
+            "expected `lan enable` to require --advertise"
+        );
+    }
+
+    #[test]
+    fn mobile_sync_devices_add_requires_label() {
+        // `devices add` 接管原 `shortcut add` 的契约 —— `--label` 必填,
+        // 否则 register flow 拿不到设备名。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "devices", "add"]);
+        assert!(result.is_err(), "expected `devices add` to require --label");
+    }
+
+    #[test]
+    fn mobile_sync_shortcut_subcommand_is_removed() {
+        // Step 4/5 拓扑重组:`shortcut add` 已搬到 `devices add`,老路径
+        // 直接删除(项目未发布,无 deprecation 周期)。
+        let result =
+            Cli::try_parse_from(["uniclip", "mobile-sync", "shortcut", "add", "--label", "X"]);
+        assert!(
+            result.is_err(),
+            "expected `shortcut` subcommand to be removed"
+        );
+    }
+
+    #[test]
+    fn mobile_sync_enable_subcommand_is_removed() {
+        // Step 4/5 拓扑重组:`enable` 与 `setup` / `lan enable` 重叠, 已删除。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "enable"]);
+        assert!(
+            result.is_err(),
+            "expected `enable` subcommand to be removed"
+        );
+    }
+
+    #[test]
+    fn mobile_sync_revoke_id_optional() {
+        // Step 4/5: `devices revoke` device_id 改为可选(无 id 走交互式
+        // 选)。clap 解析层应允许两种形态。
+        let r1 = Cli::try_parse_from(["uniclip", "mobile-sync", "devices", "revoke"]);
+        assert!(r1.is_ok(), "expected `devices revoke` (no id) to parse");
+        let r2 = Cli::try_parse_from(["uniclip", "mobile-sync", "devices", "revoke", "did_abc"]);
+        assert!(r2.is_ok(), "expected `devices revoke <id>` to parse");
+    }
+
+    #[test]
+    fn mobile_sync_status_parses() {
+        // Step 4/5: 新增 `status` 综合视图(读命令)。
+        let r = Cli::try_parse_from(["uniclip", "mobile-sync", "status"]);
+        assert!(r.is_ok(), "expected `status` to parse");
+    }
+
+    #[test]
+    fn mobile_sync_debug_subcommands_parse() {
+        // P5a.9 引入的 4 个 debug 子命令解析契约。
+        for args in [
+            vec!["uniclip", "mobile-sync", "debug", "put-text", "hello"],
+            vec!["uniclip", "mobile-sync", "debug", "put-file", "/tmp/x.png"],
+            vec!["uniclip", "mobile-sync", "debug", "get-doc"],
+            vec!["uniclip", "mobile-sync", "debug", "get-file", "photo.png"],
+        ] {
+            let result = Cli::try_parse_from(args.clone());
+            assert!(result.is_ok(), "expected `{args:?}` to parse");
+        }
+    }
+
+    #[test]
+    fn mobile_sync_debug_put_text_requires_text() {
+        // put-text 必须带 TEXT 位置参数,否则 facade 拿不到内容。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "debug", "put-text"]);
+        assert!(result.is_err(), "expected `put-text` to require <TEXT>");
+    }
+
+    #[test]
+    fn mobile_sync_debug_put_file_requires_path() {
+        // put-file 必须带 PATH;mime 是可选的。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "debug", "put-file"]);
+        assert!(result.is_err(), "expected `put-file` to require <PATH>");
+    }
+
+    #[test]
+    fn mobile_sync_debug_get_file_requires_data_name() {
+        // get-file 必须带 DATANAME 位置参数。
+        let result = Cli::try_parse_from(["uniclip", "mobile-sync", "debug", "get-file"]);
+        assert!(result.is_err(), "expected `get-file` to require <DATANAME>");
+    }
+
+    #[test]
+    fn mobile_sync_setup_parses_with_no_args() {
+        // `setup` 不强制任何 flag —— 默认全交互式。runtime 才会按
+        // `--non-interactive` / `--json` 决定是否要求 --label / --advertise /
+        // --accept-network-risk;clap 解析层不下结论。
+        let r = Cli::try_parse_from(["uniclip", "mobile-sync", "setup"]);
+        assert!(r.is_ok(), "expected `setup` to parse with no args");
+    }
+
+    #[test]
+    fn mobile_sync_setup_accepts_full_non_interactive_flags() {
+        // CI 友好的全 flag 形态。
+        let r = Cli::try_parse_from([
+            "uniclip",
+            "mobile-sync",
+            "setup",
+            "--non-interactive",
+            "--label",
+            "iPhone",
+            "--advertise",
+            "192.168.1.5",
+            "--port",
+            "42720",
+            "--username",
+            "alice_001",
+            "--password-stdin",
+            "--accept-network-risk",
+        ]);
+        assert!(r.is_ok(), "expected full-flag setup to parse");
     }
 }

@@ -61,6 +61,10 @@ const baseSetting: Settings = {
     maxRetries: 3,
     protocolVersion: '1.0.0',
   },
+  network: {
+    allowRelayFallback: true,
+    allowOverlayNetworkAddrs: false,
+  },
 }
 
 describe('AboutSection', () => {
@@ -85,6 +89,7 @@ describe('AboutSection', () => {
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
           updateFileSyncSetting: vi.fn(),
+          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
         }}
       >
         <UpdateContext.Provider
@@ -128,6 +133,7 @@ describe('AboutSection', () => {
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
           updateFileSyncSetting: vi.fn(),
+          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
         }}
       >
         <UpdateContext.Provider
@@ -167,6 +173,7 @@ describe('AboutSection', () => {
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
           updateFileSyncSetting: vi.fn(),
+          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
         }}
       >
         <UpdateContext.Provider

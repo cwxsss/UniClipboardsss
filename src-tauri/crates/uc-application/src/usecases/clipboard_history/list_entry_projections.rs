@@ -33,6 +33,11 @@ pub(crate) struct EntryProjectionDto {
     pub(crate) file_sizes: Option<Vec<i64>>,
     pub(crate) image_width: Option<i32>,
     pub(crate) image_height: Option<i32>,
+    /// `paste_rep` 的 payload_state, 仅在该 representation 已不可恢复时输出
+    /// (`Lost`)。其他状态返回 `None` —— 由前端默认渲染。这是面向 UI 列表
+    /// "灰显损坏 entry" 的最小信号；list 渲染基于 preview_rep, 但实际粘贴
+    /// 用的是 paste_rep, 必须用 paste_rep 的 state 判断"点了能不能用"。
+    pub(crate) payload_state: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -278,6 +283,36 @@ impl ListClipboardEntryProjectionsUseCase {
                     PayloadAvailability::Staged | PayloadAvailability::Processing
                 );
 
+            // paste_rep 是用户点"粘贴"时实际写入系统剪贴板的 representation。
+            // 当它降级为 Lost 时, restore 会回 410 + "内容已不可用"; 列表灰显
+            // 这条 entry 让用户在点之前就能知道。如果 paste_rep == preview_rep,
+            // 复用刚拿到的 representation; 否则单独查一次 (paste_rep 通常和
+            // preview_rep 不同—— 比如复制文本时同时有 plain + RTF)。
+            let paste_rep_state = if selection.selection.paste_rep_id
+                == selection.selection.preview_rep_id
+            {
+                Some(representation.payload_state.clone())
+            } else {
+                match self
+                    .representation_repo
+                    .get_representation(&entry.event_id, &selection.selection.paste_rep_id)
+                    .await
+                {
+                    Ok(Some(rep)) => Some(rep.payload_state),
+                    Ok(None) => None,
+                    Err(e) => {
+                        warn!(
+                            entry_id = %entry_id_str,
+                            paste_rep_id = %selection.selection.paste_rep_id,
+                            error = %e,
+                            "Failed to fetch paste_rep state for projection; treating as healthy"
+                        );
+                        None
+                    }
+                }
+            };
+            let payload_state = paste_rep_state_to_payload_state(paste_rep_state.as_ref());
+
             let (file_transfer_status, file_transfer_reason, file_transfer_ids) = match self
                 .file_transfer_repo
                 .get_entry_transfer_summary(&entry_id_str)
@@ -319,6 +354,7 @@ impl ListClipboardEntryProjectionsUseCase {
                 file_sizes,
                 image_width,
                 image_height,
+                payload_state,
             });
         }
 
@@ -330,5 +366,137 @@ impl ListClipboardEntryProjectionsUseCase {
         );
 
         Ok(projections)
+    }
+}
+
+/// Map a paste-rep `PayloadAvailability` to the compact UI signal
+/// (only `Lost` is surfaced; everything else renders normally).
+///
+/// 抽出为独立函数, 让"`Lost` 必须冒泡, 其它状态保持透明"这条业务契约能被
+/// 单独单测; 同时 `execute()` 的两条分支 (paste == preview / 单独 fetch)
+/// 都复用这同一段映射, 防止两边漂移。
+fn paste_rep_state_to_payload_state(state: Option<&PayloadAvailability>) -> Option<String> {
+    match state {
+        Some(PayloadAvailability::Lost) => Some("Lost".to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_link_urls_filters_file_uris_from_uri_list() {
+        let body = "https://example.com/a\nfile:///tmp/x\nhttps://example.com/b\n";
+        let urls = detect_link_urls("text/uri-list", Some(body.as_bytes()));
+        assert_eq!(
+            urls,
+            Some(vec![
+                "https://example.com/a".to_string(),
+                "https://example.com/b".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn detect_link_urls_returns_none_when_uri_list_only_contains_files() {
+        let body = "file:///tmp/a\nfile:///tmp/b\n";
+        let urls = detect_link_urls("text/uri-list", Some(body.as_bytes()));
+        assert_eq!(urls, None);
+    }
+
+    #[test]
+    fn detect_link_urls_recognises_single_url_in_plain_text() {
+        let urls = detect_link_urls("text/plain", Some(b"https://example.com/page"));
+        assert_eq!(urls, Some(vec!["https://example.com/page".to_string()]));
+    }
+
+    #[test]
+    fn detect_link_urls_returns_none_for_non_url_plain_text() {
+        let urls = detect_link_urls("text/plain", Some(b"just some words"));
+        assert_eq!(urls, None);
+    }
+
+    #[test]
+    fn detect_link_urls_returns_none_for_unsupported_mime() {
+        let urls = detect_link_urls("image/png", Some(b"\x89PNG"));
+        assert_eq!(urls, None);
+    }
+
+    #[test]
+    fn detect_link_urls_returns_none_when_inline_data_missing() {
+        let urls = detect_link_urls("text/plain", None);
+        assert_eq!(urls, None);
+    }
+
+    #[test]
+    fn detect_link_urls_handles_invalid_utf8_gracefully() {
+        // `from_utf8` 失败 ⇒ 函数返回 None, 不 panic
+        let urls = detect_link_urls("text/plain", Some(&[0xff, 0xfe, 0xfd]));
+        assert_eq!(urls, None);
+    }
+
+    #[test]
+    fn compute_file_sizes_returns_neg_one_for_missing_file() {
+        let body = "file:///definitely/not/here/abc.txt";
+        let sizes = compute_file_sizes(body.as_bytes());
+        assert_eq!(sizes, vec![-1]);
+    }
+
+    #[test]
+    fn compute_file_sizes_returns_neg_one_for_non_file_uri() {
+        let body = "https://example.com/x";
+        let sizes = compute_file_sizes(body.as_bytes());
+        assert_eq!(sizes, vec![-1]);
+    }
+
+    #[test]
+    fn compute_file_sizes_reports_size_for_existing_file() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("hello.txt");
+        std::fs::write(&path, b"abcde").expect("write");
+        let uri = format!("file://{}", path.display());
+
+        let sizes = compute_file_sizes(uri.as_bytes());
+        assert_eq!(sizes, vec![5]);
+    }
+
+    #[test]
+    fn compute_file_sizes_returns_empty_for_invalid_utf8() {
+        let sizes = compute_file_sizes(&[0xff, 0xfe]);
+        assert!(sizes.is_empty());
+    }
+
+    #[test]
+    fn paste_rep_state_to_payload_state_only_surfaces_lost() {
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::Lost)),
+            Some("Lost".to_string())
+        );
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::Inline)),
+            None
+        );
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::Staged)),
+            None
+        );
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::BlobReady)),
+            None
+        );
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::Processing)),
+            None
+        );
+        assert_eq!(
+            paste_rep_state_to_payload_state(Some(&PayloadAvailability::Failed {
+                last_error: "x".into(),
+            })),
+            None
+        );
+        // None 路径: paste_rep fetch 失败时映射为透明
+        assert_eq!(paste_rep_state_to_payload_state(None), None);
     }
 }

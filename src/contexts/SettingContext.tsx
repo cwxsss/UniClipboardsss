@@ -9,6 +9,7 @@ import { emitSettingsChanged } from '@/lib/settings-events'
 import { invokeWithTrace } from '@/lib/tauri-command'
 import { applyThemePreset } from '@/lib/theme-engine'
 import { startThemeTransition } from '@/lib/theme-transition'
+import { setFrontendSentryEnabled } from '@/observability/sentry'
 import type { SettingContextType, Settings } from '@/types/setting'
 
 const log = createLogger('setting-context')
@@ -43,10 +44,12 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   }, [])
 
   // 保存设置
-  const saveSetting = async (newSetting: Settings) => {
+  // Phase 95: 返回 { restartRequired } 透传 daemon PUT /settings 响应；
+  // 现有调用方 await 但不读返回值，向后兼容（Promise<X> 可被忽略）。
+  const saveSetting = async (newSetting: Settings): Promise<{ restartRequired: boolean }> => {
     try {
       setLoading(true)
-      await updateSettings(newSetting)
+      const result = await updateSettings(newSetting)
       setSetting(newSetting)
       setError(null)
       try {
@@ -54,6 +57,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
       } catch (err) {
         log.error({ err }, 'Failed to broadcast settings change')
       }
+      return { restartRequired: result.restartRequired }
     } catch (err) {
       log.error({ err }, '保存设置失败')
       setError(`保存设置失败: ${err}`)
@@ -140,6 +144,23 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
       },
     }
     await saveSetting(updatedSetting)
+  }
+
+  // Update network settings (Phase 95)
+  // 镜像 partial 进 setting.network 后调 saveSetting；透传 restartRequired。
+  // 反向命名铁律：此处 partial 真值传递，绝不取反；UI 取反点仅在 NetworkSection.tsx。
+  const updateNetworkSetting = async (
+    newNetworkSetting: Partial<Settings['network']>
+  ): Promise<{ restartRequired: boolean }> => {
+    if (!setting) return { restartRequired: false }
+    const updatedSetting: Settings = {
+      ...setting,
+      network: {
+        ...setting.network,
+        ...newNetworkSetting,
+      },
+    }
+    return await saveSetting(updatedSetting)
   }
 
   // Update keyboard shortcuts
@@ -239,6 +260,16 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     })
   }, [setting?.general?.language])
 
+  // 将用户侧遥测开关同步到前端观测出口；初次加载设置和后续变更都会立即生效。
+  // 前端通过 Sentry 的 beforeSend / beforeBreadcrumb / beforeSendLog 钩子
+  // 在 sentryRuntimeEnabled=false 时直接丢弃事件；后端 Sentry 由
+  // uc-observability 的 telemetry_gate 同步，不需要重启。
+  useEffect(() => {
+    const enabled = setting?.general?.telemetryEnabled
+    if (typeof enabled !== 'boolean') return
+    setFrontendSentryEnabled(enabled)
+  }, [setting?.general?.telemetryEnabled])
+
   const value: SettingContextType = {
     setting,
     loading,
@@ -250,6 +281,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     updateRetentionPolicy,
     updateKeyboardShortcuts,
     updateFileSyncSetting,
+    updateNetworkSetting,
   }
 
   return <SettingContext.Provider value={value}>{children}</SettingContext.Provider>

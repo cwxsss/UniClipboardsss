@@ -1,0 +1,230 @@
+---
+title: Mobile sync
+description: How to sync clipboard between desktop and an iPhone or any SyncClipboard-compatible client over the LAN.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps'
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
+
+<Feature since="0.7.0" status="experimental">
+  LAN-only HTTP companion mode. iPhone via the bundled Shortcut, or any SyncClipboard-compatible
+  client.
+</Feature>
+
+Mobile sync is the **0.7 LAN companion mode**: the desktop daemon
+exposes a small SyncClipboard-compatible HTTP service on your local
+network, and a paired phone reads / pushes clips to it with HTTP
+Basic Auth.
+
+It is intentionally narrower than desktop ↔ desktop sync:
+
+- Same Wi-Fi only — no NAT punching, no relay, no cross-network
+  reachability.
+- Plain HTTP with Basic Auth (TLS comes in v2). Only enable on
+  trusted networks.
+- Phone is **not** a peer of the space — it doesn't get a node ID
+  and doesn't see the encrypted history database.
+
+Two phones don't sync with each other; they each talk to the desktop.
+
+<Callout type="warn">
+  v1 wire format is unencrypted HTTP on the LAN. **Don't enable** the listener on coffee-shop Wi-Fi,
+  conference Wi-Fi, or any network where you don't trust everyone on the same SSID.
+</Callout>
+
+## Enable mobile sync (one-shot)
+
+The fastest way is the wizard — flip the feature on, configure the
+LAN listener, register the phone, and print a QR code in one go.
+
+<Tabs items={['GUI', 'CLI']}>
+
+<Tab value="GUI">
+
+<Steps>
+
+<Step>
+
+### Open the **Devices** page
+
+The page is split into "This device", "Space members", and
+**"Mobile sync"**. The mobile-sync panel header shows the listener
+status (`Disabled`, `Listening @ <url>`, or `Bind failed: …`) and
+two buttons: **Configure** and **Add device**.
+
+</Step>
+
+<Step>
+
+### Click **Configure**
+
+A right-side sheet opens. Toggle **Enable mobile sync** and **Enable
+LAN listener**, then choose:
+
+- **Bind / advertised IP** — pick a specific RFC1918 LAN IPv4 from
+  the dropdown. **Don't ship `Auto` / `0.0.0.0` to your phone** — it
+  works as a placeholder for the daemon's actual bind, but a phone
+  cannot dial it. Pick the interface the phone will be on.
+- **Port** — defaults to `42720`. Change only if there's a conflict.
+
+The sheet shows the **current listening address** as you go — that's
+the URL the phone will use.
+
+</Step>
+
+<Step>
+
+### Apply, then restart the daemon
+
+Save the sheet. A `Restart required` banner appears at the top of
+the panel. Restart the daemon (tray menu → quit & relaunch, or
+`uniclip stop && uniclip start`) so the listener actually binds.
+
+If binding fails, the panel surfaces the reason as **Listener bind
+error** — typically port-in-use or permission-denied.
+
+</Step>
+
+<Step>
+
+### Click **Add device**
+
+Pick a label (e.g. "My iPhone 15"). The desktop mints a one-time
+**username** and **password** and shows them inside a credentials
+modal with iOS / Android tabs:
+
+- **iOS** — scan the QR with the iPhone Camera. The bundled
+  UniClipboard Shortcut installs with the base URL and credentials
+  pre-filled.
+- **Android / other clients** — copy the base URL, username, and
+  password into any SyncClipboard-compatible client.
+
+The plaintext password is shown **once**. The desktop only retains
+an Argon2id hash after the modal closes.
+
+</Step>
+
+</Steps>
+
+</Tab>
+
+<Tab value="CLI">
+
+```bash
+# One-shot: enable feature + LAN listener, register one device,
+# print install QR + a one-time password.
+uniclip stop                                 # required: writes refuse a running daemon
+uniclip mobile-sync setup                    # interactive (recommended)
+
+# Or non-interactive (e.g. CI / scripts)
+uniclip mobile-sync setup \
+    --label "My iPhone 15" \
+    --advertise 192.168.1.5 \
+    --accept-network-risk \
+    --non-interactive
+# → prints baseUrl, username, password (one-time), installUrl,
+#   QR ASCII, and a "restart daemon" hint
+
+uniclip start                                # bring the daemon back up
+```
+
+For non-interactive runs, `--label`, `--advertise`, and
+`--accept-network-risk` are required. `--username` / `--password-stdin`
+are optional and default to auto-mint.
+
+</Tab>
+
+</Tabs>
+
+<Callout type="info">
+  The plaintext password is shown **once**. If the user loses it,
+  click **Rotate password** on the device row (or
+  `uniclip mobile-sync devices revoke <id>` + `devices add`) — there
+  is no way to retrieve the original.
+</Callout>
+
+## Pair a device
+
+The credentials modal has two paths.
+
+### iOS (Shortcut)
+
+1. Scan the QR with the iPhone Camera. iOS prompts to install the
+   bundled `UniClipboard.shortcut`.
+2. The Shortcut's `url`, `username`, and `password` fields come
+   pre-filled from the QR.
+3. Run the Shortcut (or trigger it with the iOS share sheet) to
+   sync the latest clip in either direction.
+
+### Android / other clients
+
+There is **no first-party Android app**. Any SyncClipboard-compatible
+client (e.g. the upstream SyncClipboard Android app) can connect by
+filling in:
+
+- **Base URL** — `http://<advertised-IP>:<port>` (e.g.
+  `http://192.168.1.5:42720`).
+- **Username** — printed by the credentials modal / `setup`.
+- **Password** — printed by the credentials modal / `setup` (one-time).
+
+## Manage paired devices
+
+| Action               | GUI                                | CLI                                                    |
+| -------------------- | ---------------------------------- | ------------------------------------------------------ |
+| List paired devices  | Devices page → Mobile sync panel   | `uniclip mobile-sync devices list`                     |
+| Add another device   | Mobile sync panel → **Add device** | `uniclip mobile-sync devices add --label "…"`          |
+| Rotate password      | Device row → **Rotate password**   | _GUI only today_; mint a new one and re-edit the phone |
+| Revoke a device      | Device row → **Revoke**            | `uniclip mobile-sync devices revoke <device-id>`       |
+| Disable feature      | Configure sheet → switch off       | `uniclip mobile-sync disable`                          |
+| Inspect listener URL | Mobile sync panel header           | `uniclip mobile-sync status`                           |
+
+**Rotating** mints a fresh one-time password and atomically
+invalidates the previous Argon2id hash. The old credentials stop
+working immediately. Update the phone's Shortcut (or other client)
+with the new password.
+
+**Revoking** removes the device record. Any subsequent request with
+the old credentials gets `401 Unauthorized`.
+
+**Disabling** the feature turns the master switch and listener off
+together but **leaves paired-device records in place** — re-enable
+later and the same usernames continue to work. To wipe paired
+records, use `devices revoke` (or the GUI revoke button) explicitly.
+
+## Security model — what's covered, what isn't
+
+| Surface                       | Covered                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| On-disk password storage      | **Yes** — only an Argon2id hash is persisted server-side.                 |
+| Credential rotation           | **Yes** — `Rotate password` mints a new one and invalidates the old hash. |
+| LAN-side wire confidentiality | **No (v1)** — plain HTTP. TLS comes in v2.                                |
+| Cross-network reachability    | **No** — LAN only. Phone off the LAN can't reach the desktop.             |
+| Mobile-as-peer trust          | **No** — phone never participates in the iroh / space trust mesh.         |
+
+Practical implications:
+
+- Treat the LAN listener like an SSH server on a private network: be
+  selective about where you turn it on.
+- Public Wi-Fi: keep the listener disabled. Re-enable on a trusted
+  network when you actually want the integration.
+- VPN: a VPN that gives both desktop and phone the same RFC1918
+  subnet works as a workaround for "I want LAN-style sync from
+  outside the home" — but it's still plain HTTP, so the VPN itself
+  must be trusted.
+
+## Troubleshooting
+
+For the full checklist (phone can't open the URL, `401`, broken
+images, what to do after changing the LAN IP), see
+[Troubleshooting — Mobile sync (iOS Shortcut)](./troubleshooting#mobile-sync-ios-shortcut).
+
+## Where to look next
+
+- [Mobile LAN API](../reference/mobile-api) — the wire protocol that
+  the listener speaks (SyncClipboard-compatible HTTP + JSON).
+- [CLI reference — Mobile sync](../reference/cli#mobile-sync) — every
+  `uniclip mobile-sync ...` subcommand and flag.
+- [Pairing & sync — Mobile companion](./pairing#mobile-companion-lan-only)
+  — how mobile sync compares to desktop ↔ desktop pairing.
+- [Devices — Mobile sync devices](./devices#mobile-sync-devices) —
+  the panel layout and per-device row controls.

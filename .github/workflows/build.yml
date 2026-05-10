@@ -11,9 +11,20 @@ on:
           - 'macos-aarch64'
           - 'macos-x86_64'
           - 'ubuntu-22.04'
+          - 'ubuntu-22.04-arm'
           - 'windows-latest'
           - 'all'
         default: 'all'
+      channel:
+        description: '发布渠道(决定 Sentry/OTLP environment 标签)'
+        required: false
+        type: choice
+        options:
+          - 'stable'
+          - 'alpha'
+          - 'beta'
+          - 'rc'
+        default: 'stable'
   workflow_call:
     inputs:
       platform:
@@ -26,6 +37,11 @@ on:
         required: false
         type: string
         default: ''
+      channel:
+        description: '发布渠道,决定 APP_ENV/VITE_APP_ENV 注入值(stable→production,其他→channel 原样)'
+        required: false
+        type: string
+        default: 'stable'
 
 jobs:
   setup-matrix:
@@ -36,19 +52,26 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
+          # Linux 构建在 host=ubuntu-22.04 / ubuntu-22.04-arm 上启容器跑
+          # (debian:bookworm, glibc 2.36),其他 platform (macOS/Windows) 不带
+          # container 字段 → 直接在 host runner 跑。
+          # aarch64 走 native arm runner (ubuntu-22.04-arm),避免在 x86 容器里
+          # cross-compile webkit/gtk 栈;x86_64 仍在 ubuntu-22.04。
           PLATFORM="${{ inputs.platform || 'all' }}"
           if [ "$PLATFORM" == "all" ]; then
-            echo 'matrix=[{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"},{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"},{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":""},{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":""}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"},{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"},{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"","container":"debian:bookworm"},{"platform":"ubuntu-22.04-arm","target":"aarch64-unknown-linux-gnu","args":"","container":"debian:bookworm"},{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":""}]' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" == "macos-aarch64" ]; then
             echo 'matrix=[{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"}]' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" == "macos-x86_64" ]; then
             echo 'matrix=[{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"}]' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" == "ubuntu-22.04" ]; then
-            echo 'matrix=[{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":""}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"","container":"debian:bookworm"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" == "ubuntu-22.04-arm" ]; then
+            echo 'matrix=[{"platform":"ubuntu-22.04-arm","target":"aarch64-unknown-linux-gnu","args":"","container":"debian:bookworm"}]' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" == "windows-latest" ]; then
             echo 'matrix=[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":""}]' >> "$GITHUB_OUTPUT"
           else
-            echo "Error: Unknown platform '$PLATFORM'. Valid options: all, macos-aarch64, macos-x86_64, ubuntu-22.04, windows-latest"
+            echo "Error: Unknown platform '$PLATFORM'. Valid options: all, macos-aarch64, macos-x86_64, ubuntu-22.04, ubuntu-22.04-arm, windows-latest"
             exit 1
           fi
 
@@ -56,12 +79,34 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: setup-matrix
     runs-on: ${{ matrix.platform }}
+    # matrix.container 仅 Linux 条目设置,其他 platform 该字段缺失 → null →
+    # GitHub Actions 跳过容器,直接在 host runner 上执行。
+    container: ${{ matrix.container || null }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
 
     steps:
+      # bookworm 容器是 minimal,actions/checkout 需要 git;后续 step 还要
+      # curl/ca-certificates 用于装 rustup/bun/node。一次装齐 Tauri Linux
+      # 所需的全部 dev 包,glibc 基线 = bookworm 的 2.36。
+      # `rpm` 提供 rpmbuild,Tauri v2 在 bundle.targets="all" 下据此产出 .rpm;
+      # 缺失则 Tauri 静默跳过 RPM bundle,只剩 deb/AppImage。
+      - name: Install container deps (Linux)
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git curl wget ca-certificates xz-utils unzip sudo \
+            build-essential pkg-config cmake clang \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            file desktop-file-utils \
+            xdg-utils \
+            rpm
+
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.branch || github.ref }}
@@ -95,12 +140,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
       - name: install frontend dependencies
         run: bun install
 
@@ -111,6 +150,27 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: resolve APP_ENV from channel
+        # Sentry/OTLP environment 标签来源:
+        #   stable  → "production" (Sentry 默认值,符合大多数 dashboard 习惯)
+        #   alpha/beta/rc → 同名,作为独立 environment
+        # 该值同时注入给 Rust 后端 (APP_ENV, option_env! 编译期读取) 和前端
+        # (VITE_APP_ENV, Vite 在 build 时内联),保证前后端 environment 一致。
+        id: resolve-env
+        shell: bash
+        run: |
+          CHANNEL="${{ inputs.channel || 'stable' }}"
+          case "$CHANNEL" in
+            stable) APP_ENV="production" ;;
+            alpha|beta|rc) APP_ENV="$CHANNEL" ;;
+            *)
+              echo "::warning::未知 channel '$CHANNEL',回退为 production"
+              APP_ENV="production"
+              ;;
+          esac
+          echo "app_env=$APP_ENV" >> "$GITHUB_OUTPUT"
+          echo "Resolved APP_ENV=$APP_ENV (from channel=$CHANNEL)"
+
       - name: build Tauri app (macOS signed)
         if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@v0
@@ -119,13 +179,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
+          # Backend Sentry DSN — independent Rust project DSN, baked into the
+          # binary at compile time via option_env! in uc-bootstrap/src/tracing.rs.
+          # MUST be a separate Sentry project from VITE_SENTRY_DSN (front-end);
+          # see "阶段 2" decision in the dependency-prune branch discussion.
+          # Empty secret = backend Sentry disabled.
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          VITE_OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
-          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
         with:
           tauriScript: bun run tauri
           args: ${{ matrix.args }}
@@ -138,14 +204,45 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_APP_VERSION: ${{ steps.app-version.outputs.version }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
-          VITE_OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
-          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          VITE_APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
+          # Backend Sentry DSN — independent Rust project DSN.
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
         run: |
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             bun run tauri build ${{ matrix.args }} --bundles nsis
           else
             bun run tauri build ${{ matrix.args }}
           fi
+
+      - name: Upload Sentry debug symbols
+        # 把 release 编译出的 .dSYM (macOS) / .pdb (Windows) / DWARF (Linux)
+        # 上传给 Sentry,后续 panic 上报时 Sentry 用 build-id 把地址翻译回
+        # 函数名 + 文件 + 行号(配合 --include-sources 还会嵌源码片段)。
+        # 没配 SENTRY_AUTH_TOKEN / SENTRY_PROJECT 时整个 step 跳过,不阻断构建。
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ] || [ -z "$SENTRY_PROJECT" ]; then
+            echo "::warning::SENTRY_AUTH_TOKEN/SENTRY_PROJECT not configured — skipping debug-files upload"
+            exit 0
+          fi
+          npm install -g @sentry/cli
+          # macOS 用 --target,产物在 target/<triple>/release/;
+          # Linux/Windows args 为空,产物在 target/release/。
+          if [ -d "src-tauri/target/${{ matrix.target }}/release" ]; then
+            TARGET_DIR="src-tauri/target/${{ matrix.target }}/release"
+          elif [ -d "src-tauri/target/release" ]; then
+            TARGET_DIR="src-tauri/target/release"
+          else
+            echo "::warning::No release directory found — skipping"
+            exit 0
+          fi
+          echo "Uploading debug files from $TARGET_DIR"
+          sentry-cli debug-files upload --include-sources "$TARGET_DIR"
 
       - name: upload artifacts
         uses: actions/upload-artifact@v7

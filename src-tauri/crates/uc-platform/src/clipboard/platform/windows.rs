@@ -15,23 +15,42 @@ use uc_core::ports::SystemClipboardPort;
 /// 既用于前置 "有无可写 rep" 扫描，也用于主循环分派，避免两处逻辑漂移。
 /// 与 `common.rs` 单 rep 快路径的 format_id → mime 推断表对齐。
 fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str> {
-    rep.mime
-        .as_ref()
-        .map(|m| m.as_str())
-        .or_else(|| match rep.format_id.as_str() {
-            "public.utf8-plain-text" | "public.text" | "NSStringPboardType" | "text" => {
-                Some("text/plain")
-            }
-            "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
-            // PixPin 截图等场景 format_id 为 "image"，mime 通常为 "image/png"。
-            // `common.rs::read_snapshot` 把 macOS `public.png` / `public.tiff` 都转成 PNG。
-            "public.png" | "image" => Some("image/png"),
-            // file-list 表示：接收端 materializer 会把 rep.bytes 改写为本机 file:// URI
-            // 列表（每行一条），写入时解析为原生路径后通过 CF_HDROP 提交，Explorer /
-            // 资源管理器识别的规范形式。
-            "public.file-url" | "NSFilenamesPboardType" | "files" => Some("text/uri-list"),
-            _ => None,
-        })
+    let format_default = match rep.format_id.as_str() {
+        "public.utf8-plain-text" | "public.text" | "NSStringPboardType" | "text" => {
+            Some("text/plain")
+        }
+        "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
+        // RTF：从 Word / Pages / 写字板等富文本源复制时常与 plain + html 一起出现；
+        // common.rs::read_snapshot 写库时使用 format_id="rtf", mime="text/rtf"。
+        // Windows 上对应 RegisterClipboardFormat("Rich Text Format") 注册的自定义
+        // format（CF_RTF 不是 Win32 预定义常量）。
+        "public.rtf" | "rtf" => Some("text/rtf"),
+        // PixPin 截图等场景 format_id 为 "image"，mime 通常为 "image/png"。
+        // `common.rs::read_snapshot` 把 macOS `public.png` / `public.tiff` 都转成 PNG。
+        "public.png" | "image" => Some("image/png"),
+        // file-list 表示：接收端 materializer 会把 rep.bytes 改写为本机 file:// URI
+        // 列表（每行一条），写入时解析为原生路径后通过 CF_HDROP 提交，Explorer /
+        // 资源管理器识别的规范形式。
+        "public.file-url" | "NSFilenamesPboardType" | "files" => Some("text/uri-list"),
+        _ => None,
+    };
+
+    // image-like format_id 但显式 mime 非 image/*:见 `common.rs::write_snapshot` 同位置注释。
+    match (rep.mime.as_deref(), format_default) {
+        (Some(m), Some(default)) if default.starts_with("image/") && !m.starts_with("image/") => {
+            let recovered =
+                crate::clipboard::common::sniff_image_magic(&rep.bytes).unwrap_or(default);
+            tracing::warn!(
+                format_id = %rep.format_id,
+                wire_mime = m,
+                recovered_mime = recovered,
+                "Windows multi-rep: image rep declared non-image mime; recovered via byte sniff/format_id default"
+            );
+            Some(recovered)
+        }
+        (Some(m), _) => Some(m),
+        (None, default) => default,
+    }
 }
 
 /// 把 text/uri-list rep 的字节解析为本机路径列表（`Vec<PathBuf>`）。
@@ -225,9 +244,12 @@ const RETRY_BACKOFF_MS: [u64; MAX_WRITE_ATTEMPTS as usize] = [0, 20, 40];
 ///   与全部 PNG 元数据。CF_DIBV5 原生带 alpha 通道（`bV5AlphaMask = 0xFF000000`），
 ///   粘贴到 PowerPoint / Photoshop 时透明度不会被压平。
 ///
-/// `image/jpeg` / `image/tiff` / `image/webp` / `image/gif` 以及 RTF (CF_RTF) /
-/// files (CF_HDROP) 的多 rep 互操作性留到后续 phase 补齐（各自有独立编码 / format
-/// 注册 / 文件同步依赖）。遇到本路径不认的 rep 记 debug 日志并跳过。
+/// `text/rtf` → "Rich Text Format" 自定义 format（`register_format("Rich Text Format")`
+///   返回的 RegisterClipboardFormat 注册码；这是 Word / 写字板识别的标准 RTF 剪贴
+///   板 format 名）。RTF 字节直接 `set_without_clear` 累加到同一会话。
+///
+/// `image/jpeg` / `image/tiff` / `image/webp` / `image/gif` 仍未支持（各自需要独立的
+/// 编码 / format 注册）。遇到本路径不认的 rep 记 debug 日志并跳过。
 ///
 /// ### 调用方注意
 /// 此函数由 `common.rs::write_snapshot_multi` 在 `#[cfg(target_os = "windows")]`
@@ -259,7 +281,11 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     let has_writable = snapshot.representations.iter().any(|rep| {
         matches!(
             resolve_multi_rep_mime(rep),
-            Some("text/plain") | Some("text/html") | Some("image/png") | Some("text/uri-list")
+            Some("text/plain")
+                | Some("text/html")
+                | Some("text/rtf")
+                | Some("image/png")
+                | Some("text/uri-list")
         )
     });
 
@@ -275,8 +301,8 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
             "Windows 多 rep 写入：无可写 rep；未清空 OS 剪贴板（防副作用兜底）"
         );
         anyhow::bail!(
-            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html, image/png, text/uri-list）；\
-             未清空 OS 剪贴板；跳过的 rep = {:?}",
+            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html, text/rtf, \
+             image/png, text/uri-list）；未清空 OS 剪贴板；跳过的 rep = {:?}",
             skipped
         );
     }
@@ -390,6 +416,12 @@ fn attempt_multi_write_inner(
     // RegisterClipboardFormat 对相同名称是幂等的，返回值在整个进程生命周期内固定。
     let html_fmt_opt: Option<u32> = HtmlFmt::new().map(|h| h.code());
 
+    // 提前注册 "Rich Text Format"——这是 Word / 写字板 / Outlook 等富文本应用约定的
+    // RTF 剪贴板 format 名（CF_RTF 不是 Win32 预定义常量）。同样靠 RegisterClipboardFormat
+    // 幂等性保证返回值在进程内稳定。失败时记 warn，主循环里跳过 RTF rep（不影响其他
+    // rep 的写入）。
+    let rtf_fmt_opt: Option<u32> = cb_raw::register_format("Rich Text Format").map(|nz| nz.get());
+
     let mut wrote_any = false;
     let mut skipped: Vec<String> = Vec::new();
 
@@ -421,6 +453,21 @@ fn attempt_multi_write_inner(
                 cb_raw::set_html(html_fmt, &html)
                     .map_err(|e| anyhow::anyhow!("set CF_HTML failed: {}", e))?;
                 debug!(bytes = rep.bytes.len(), "写入 CF_HTML 成功");
+                wrote_any = true;
+            }
+            Some("text/rtf") => {
+                // RTF 走 RegisterClipboardFormat("Rich Text Format")。RTF 1.x 规范要求
+                // 字节流是 ASCII 安全（非 ASCII 字符均通过 \uN 转义），因此可以直接以
+                // 原始字节写入 raw set_without_clear，不需要 UTF-8 / UTF-16 转换。
+                // set_without_clear 不调用 EmptyClipboard，保持累加语义。
+                let Some(rtf_fmt) = rtf_fmt_opt else {
+                    warn!("注册 Rich Text Format 失败，跳过 text/rtf rep");
+                    skipped.push(rep.format_id.as_str().to_string());
+                    continue;
+                };
+                cb_raw::set_without_clear(rtf_fmt, &rep.bytes)
+                    .map_err(|e| anyhow::anyhow!("set Rich Text Format failed: {}", e))?;
+                debug!(bytes = rep.bytes.len(), "写入 Rich Text Format 成功");
                 wrote_any = true;
             }
             Some("image/png") => {
@@ -510,14 +557,14 @@ fn attempt_multi_write_inner(
                 );
                 wrote_any = true;
             }
-            // image/jpeg / image/tiff / image/webp / image/gif / RTF 等均未支持，
+            // image/jpeg / image/tiff / image/webp / image/gif 等均未支持，
             // 未来在独立 phase 补齐（各自需要独立的编码转换 / format 注册）。
             other => {
                 info!(
                     format_id = %rep.format_id,
                     mime = ?other,
                     bytes = rep.bytes.len(),
-                    "Windows 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, image/png, text/uri-list）"
+                    "Windows 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, text/rtf, image/png, text/uri-list）"
                 );
                 skipped.push(rep.format_id.as_str().to_string());
             }
@@ -530,8 +577,8 @@ fn attempt_multi_write_inner(
         // 本函数返回 Err，由外层重试兜底；若所有 attempt 都落到这里，最终由
         // `write_snapshot_multi_windows` 的 `bail!` 报给调用方。
         anyhow::bail!(
-            "Windows 多 rep 写入：所有候选 rep 在写入阶段均失败（支持 text/plain, text/html, image/png）；\
-             跳过的 rep = {:?}",
+            "Windows 多 rep 写入：所有候选 rep 在写入阶段均失败（支持 text/plain, text/html, \
+             text/rtf, image/png, text/uri-list）；跳过的 rep = {:?}",
             skipped
         );
     }
@@ -913,5 +960,40 @@ fn get_bmp_header(width: u32, height: u32) -> Vec<u8> {
 fn set_bytes(to: &mut [u8], from: &[u8], range: Range<usize>) {
     for (from_idx, i) in range.enumerate() {
         to[i] = from[from_idx];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::MimeType;
+
+    fn rep(format: &str, mime: Option<&str>) -> ObservedClipboardRepresentation {
+        ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from_str(format),
+            mime.map(|m| MimeType(m.to_string())),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn resolves_text_rtf_from_format_id() {
+        // 与 common.rs::read_snapshot 写库时使用的 format_id="rtf" 对齐；
+        // 与 macos.rs 同名测试镜像，保证两个平台的 multi-rep 派发结果一致。
+        assert_eq!(resolve_multi_rep_mime(&rep("rtf", None)), Some("text/rtf"));
+        assert_eq!(
+            resolve_multi_rep_mime(&rep("public.rtf", None)),
+            Some("text/rtf")
+        );
+    }
+
+    #[test]
+    fn explicit_text_rtf_mime_takes_priority_over_format_id() {
+        // 显式 mime 必须优先于 format_id 推断（与 macos.rs 对称），
+        // 避免被未来的 format_id 重命名意外打回 None。
+        let r = rep("unknown-format-id", Some("text/rtf"));
+        assert_eq!(resolve_multi_rep_mime(&r), Some("text/rtf"));
     }
 }

@@ -23,6 +23,7 @@ use uc_core::ports::{
     ClipboardDispatchPort, ClipboardReceiverPort, ClockPort, DeviceIdentityPort, DispatchAck,
     LocalIdentityPort, PeerAddressRepositoryPort, PresencePort, SettingsPort,
 };
+use uc_core::MemberRepositoryPort;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 
 use crate::usecases::clipboard_sync::payload_codec::{
@@ -33,11 +34,13 @@ use crate::usecases::clipboard_sync::{
     DispatchOutcome, DispatchPerTarget, DispatchSyncError, InboundAction as UcInboundAction,
     InboundClipboardNotice as UcInboundNotice, IngestInboundClipboardUseCase, IngestSpawnHandle,
 };
+use uc_core::clipboard::ClipboardContentCategorySet;
 
 /// Construction bundle, mirrors `MemberRosterDeps` pattern so bootstrap
 /// wiring stays consistent across facades.
 pub struct ClipboardSyncDeps {
     pub peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+    pub member_repo: Arc<dyn MemberRepositoryPort>,
     pub presence: Arc<dyn PresencePort>,
     pub transfer_cipher: Arc<dyn TransferCipherPort>,
     pub clipboard_dispatch: Arc<dyn ClipboardDispatchPort>,
@@ -139,6 +142,7 @@ impl ClipboardSyncFacade {
     pub fn new(deps: ClipboardSyncDeps) -> Self {
         let dispatch_uc = Arc::new(DispatchClipboardEntryUseCase::new(
             Arc::clone(&deps.peer_addr_repo),
+            Arc::clone(&deps.member_repo),
             Arc::clone(&deps.transfer_cipher),
             Arc::clone(&deps.clipboard_dispatch),
             Arc::clone(&deps.device_identity),
@@ -148,6 +152,7 @@ impl ClipboardSyncFacade {
         ));
         let ingest_uc = Arc::new(IngestInboundClipboardUseCase::new(
             Arc::clone(&deps.clipboard_receiver),
+            Arc::clone(&deps.member_repo),
             Arc::clone(&deps.transfer_cipher),
             Arc::clone(&deps.clock),
         ));
@@ -160,9 +165,12 @@ impl ClipboardSyncFacade {
     /// Fan out one plaintext payload to every online paired peer.
     ///
     /// Phase 2 / CLI / test entry point — caller has already encoded the
-    /// payload and computed `content_hash`. Daemon (Phase 3) prefers
-    /// [`Self::dispatch_snapshot`] which encodes the V3 envelope + the
-    /// canonical snapshot_hash internally.
+    /// payload and computed `content_hash`. The per-device
+    /// `send_content_types` filter is bypassed here (empty
+    /// `ClipboardContentCategorySet`, fail open) because raw-bytes callers
+    /// don't carry the snapshot structure needed to classify; daemon goes through
+    /// [`Self::dispatch_snapshot`] / [`Self::dispatch_snapshot_with_blob_refs`]
+    /// which preserve the snapshot and apply the filter.
     #[instrument(skip_all, fields(content_hash = %input.content_hash))]
     pub async fn dispatch_entry(
         &self,
@@ -174,6 +182,30 @@ impl ClipboardSyncFacade {
                 plaintext: input.plaintext,
                 content_hash: input.content_hash.clone(),
                 payload_version: input.payload_version,
+                categories: ClipboardContentCategorySet::empty(),
+            })
+            .await?;
+        Ok(lift_outcome(internal))
+    }
+
+    /// Internal helper used by snapshot-aware dispatch entry points to
+    /// thread the snapshot's content category set into the gate.
+    /// Public callers go through `dispatch_entry` (empty set, fail open)
+    /// or `dispatch_snapshot*` (set computed from the snapshot reps).
+    async fn dispatch_internal(
+        &self,
+        plaintext: Bytes,
+        content_hash: String,
+        payload_version: u8,
+        categories: ClipboardContentCategorySet,
+    ) -> Result<DispatchEntryOutcome, ClipboardSyncError> {
+        let internal = self
+            .dispatch_uc
+            .execute(DispatchClipboardEntryInput {
+                plaintext,
+                content_hash,
+                payload_version,
+                categories,
             })
             .await?;
         Ok(lift_outcome(internal))
@@ -197,14 +229,11 @@ impl ClipboardSyncFacade {
         origin: ClipboardChangeOrigin,
     ) -> Result<DispatchEntryOutcome, ClipboardSyncError> {
         let _ = origin; // span metadata only (see doc above)
+        let categories = ClipboardContentCategorySet::from_snapshot(&snapshot);
         let (plaintext, content_hash) = encode_snapshot_to_v3_bytes(&snapshot)
             .map_err(|e| ClipboardSyncError::CipherFailure(format!("payload encode: {e}")))?;
-        self.dispatch_entry(DispatchEntryInput {
-            plaintext,
-            content_hash,
-            payload_version: 3,
-        })
-        .await
+        self.dispatch_internal(plaintext, content_hash, 3, categories)
+            .await
     }
 
     /// 编码并发送带 Slice 3 blob 引用的剪贴板快照。
@@ -219,15 +248,12 @@ impl ClipboardSyncFacade {
         origin: ClipboardChangeOrigin,
     ) -> Result<DispatchEntryOutcome, ClipboardSyncError> {
         let _ = origin;
+        let categories = ClipboardContentCategorySet::from_snapshot(&snapshot);
         let (plaintext, content_hash) =
             encode_snapshot_with_blob_refs_to_v3_bytes(&snapshot, &blob_refs)
                 .map_err(|e| ClipboardSyncError::CipherFailure(format!("payload encode: {e}")))?;
-        self.dispatch_entry(DispatchEntryInput {
-            plaintext,
-            content_hash,
-            payload_version: 3,
-        })
-        .await
+        self.dispatch_internal(plaintext, content_hash, 3, categories)
+            .await
     }
 
     /// Subscribe to the inbound-notice broadcast. CLI `watch` / future
@@ -339,6 +365,7 @@ mod tests {
     };
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
+    use uc_core::{MemberSyncPreferences, MembershipError, SpaceMember};
 
     // ── mockall ──────────────────────────────────────────────────────────
 
@@ -419,6 +446,37 @@ mod tests {
         }
     }
 
+    mockall::mock! {
+        pub MemberRepo {}
+        #[async_trait]
+        impl MemberRepositoryPort for MemberRepo {
+            async fn get(
+                &self,
+                device_id: &DeviceId,
+            ) -> Result<Option<SpaceMember>, MembershipError>;
+            async fn list(&self) -> Result<Vec<SpaceMember>, MembershipError>;
+            async fn save(&self, member: &SpaceMember) -> Result<(), MembershipError>;
+            async fn remove(&self, device_id: &DeviceId) -> Result<bool, MembershipError>;
+        }
+    }
+
+    /// `MemberRepo` mock that returns a default-allowed `SpaceMember` for
+    /// every device. The two pre-existing facade verdicts (dispatch +
+    /// ingest) predate per-device gating; this keeps them green.
+    fn make_member_repo_all_enabled() -> MockMemberRepo {
+        let mut m = MockMemberRepo::new();
+        m.expect_get().returning(|did| {
+            Ok(Some(SpaceMember {
+                device_id: did.clone(),
+                device_name: format!("Test {}", did.as_str()),
+                identity_fingerprint: fp(),
+                joined_at: chrono::Utc::now(),
+                sync_preferences: MemberSyncPreferences::default(),
+            }))
+        });
+        m
+    }
+
     // ── hand-written: ClipboardReceiverPort + ClockPort ─────────────────
 
     /// `subscribe()` returns a non-Clone `broadcast::Receiver` and the
@@ -489,7 +547,8 @@ mod tests {
 
     /// Wire the facade with the given mock ports + a `FakeReceiver`. The
     /// FakeReceiver is returned alongside so the caller can `publish(...)`
-    /// during the test.
+    /// during the test. `member_repo` defaults to "all peers allowed"
+    /// because the two facade verdicts here predate per-device gating.
     fn build_facade(
         peer_addr_repo: MockPeerAddrRepo,
         presence: MockPresence,
@@ -502,6 +561,7 @@ mod tests {
         let receiver = Arc::new(FakeReceiver::new());
         let facade = ClipboardSyncFacade::new(ClipboardSyncDeps {
             peer_addr_repo: Arc::new(peer_addr_repo),
+            member_repo: Arc::new(make_member_repo_all_enabled()),
             presence: Arc::new(presence),
             transfer_cipher: Arc::new(cipher),
             clipboard_dispatch: Arc::new(dispatch),
