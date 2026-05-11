@@ -15,7 +15,7 @@
 //! | [`MobileSyncFacade::list_devices`] | `ListMobileDevicesUseCase` | 列出已登记设备(不含 password_hash) |
 //! | [`MobileSyncFacade::rotate_password`] | `RotateMobilePasswordUseCase` | 给已登记设备换一份新密码(返回一次性明文) |
 //! | [`MobileSyncFacade::get_settings`] | `GetMobileSyncSettingsUseCase` | 读 enabled + LAN URL + install methods |
-//! | [`MobileSyncFacade::update_settings`] | `UpdateMobileSyncSettingsUseCase` | 写 enabled, 返回 restart_required |
+//! | [`MobileSyncFacade::update_settings`] | `UpdateMobileSyncSettingsUseCase` | 写 enabled / lan 字段, 装入 lifecycle 时 listener 即时生效 |
 //! | [`MobileSyncFacade::list_lan_interfaces`] | `ListLanInterfacesUseCase` | 列出可作为二维码 URL 的 RFC1918 网卡 |
 //! | [`MobileSyncFacade::authenticate_basic`] | `AuthenticateBasicAuthUseCase` | LAN HTTP 路由用:校验 Basic Auth 头 |
 //! | [`MobileSyncFacade::get_latest_sync_doc`] | `GetLatestMobileSyncDocUseCase` | `GET /SyncClipboard.json` |
@@ -42,11 +42,13 @@
 
 use std::sync::Arc;
 
+use uc_core::mobile_sync::LanListenerStatus;
 use uc_core::mobile_sync::MobileDeviceId;
 use uc_core::ports::mobile_sync::LatestClipboardSnapshotPort;
 use uc_core::ports::{
     ClockPort, LanInterfaceProbePort, MobileCredentialsMinterPort, MobileDeviceRepositoryPort,
-    MobileFileStagingPort, MobileSyncEndpointInfoPort, PasswordHasherPort, SettingsPort,
+    MobileFileStagingPort, MobileLanLifecyclePort, MobileLanTarget, MobileSyncEndpointInfoPort,
+    PasswordHasherPort, SettingsPort,
 };
 
 use crate::facade::file_transfer::FileTransferFacade;
@@ -100,6 +102,31 @@ pub use crate::usecases::mobile_sync::update_settings::{
     UpdateMobileSyncSettingsError, UpdateMobileSyncSettingsInput, UpdateMobileSyncSettingsOutput,
 };
 
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+/// 默认 LAN 监听端口。与 daemon 装配期一次性读 settings 时的兜底完全一致,
+/// 也与前端 `EnableMobileSyncDialog` 展示给用户的文案保持一致。
+const DEFAULT_LAN_PORT: u16 = 42720;
+
+/// 从写盘后的 settings 派生出 [`MobileLanTarget`]。
+///
+/// 单点真相:"两个开关都 on" → 起监听器,其它组合 → 不监听。port 取
+/// 配置值或默认 [`DEFAULT_LAN_PORT`]。
+///
+/// 深度防御:`Some(0)` 在 use case 入口已被 `InvalidLanParameter` 拒绝,
+/// 理论上跑到这里只剩 `None` 或合法值;但若磁盘 settings 文件被外部工具
+/// 直接写入 `Some(0)`(绕过 use case 校验),也按 `None` fallback,避免把
+/// 0 当 ephemeral 端口传给 adapter 导致"用户配置端口"与"实际监听端口"
+/// 永久不一致。
+fn lan_target_from_settings(out: &UpdateMobileSyncSettingsOutput) -> MobileLanTarget {
+    if out.enabled && out.lan_listen_enabled {
+        let port = out.lan_port.filter(|&p| p != 0).unwrap_or(DEFAULT_LAN_PORT);
+        MobileLanTarget::Enabled { port }
+    } else {
+        MobileLanTarget::Disabled
+    }
+}
+
 // ─── Deps ───────────────────────────────────────────────────────────────
 
 /// 构造 [`MobileSyncFacade`] 所需的端口集合。
@@ -138,6 +165,16 @@ pub struct MobileSyncFacadeDeps {
     /// (`webserver`)在收 body 期间自己调 `start` / `Progress` —— 本字段
     /// 仅用于 apply 阶段收尾。
     pub file_transfer: Option<Arc<FileTransferFacade>>,
+    /// 可选 LAN 监听器生命周期 port,让 `update_settings` 在写盘后立即把
+    /// listener 状态对齐到新设置(开/关/换端口),无需重启进程。
+    ///
+    /// 装配语义:
+    /// - GUI daemon 模式(`uc-desktop`)装入 [`MobileLanLifecyclePort`] 的
+    ///   in-process adapter, update_settings 即时生效;
+    /// - CLI fallback / 单元测试装入 `None`, update_settings 仅写盘 ——
+    ///   等下一次 daemon 进程启动时一次性读 settings 起 listener,
+    ///   与本字段引入前的现有行为完全一致, 不退化。
+    pub lan_lifecycle: Option<Arc<dyn MobileLanLifecyclePort>>,
 }
 
 // ─── Facade ─────────────────────────────────────────────────────────────
@@ -158,6 +195,14 @@ pub struct MobileSyncFacade {
     apply_incoming: ApplyIncomingMobileClipUseCase,
     get_latest_doc: GetLatestMobileSyncDocUseCase,
     get_file: GetMobileSyncFileUseCase,
+    /// 见 [`MobileSyncFacadeDeps::lan_lifecycle`]。`None` 表示当前装配不要求
+    /// 即时生效(CLI fallback / 单测),`update_settings` 写盘后不调 apply。
+    lan_lifecycle: Option<Arc<dyn MobileLanLifecyclePort>>,
+    /// `update_settings` 在调完 `lifecycle.apply(target)` 后读这个 port 判断
+    /// adapter 是否报了 `BindFailed`,据此把 reason 透传进 output 的
+    /// `lan_listener_bind_error`。与 `get_settings` use case 共用同一份 Arc,
+    /// 无额外资源开销。
+    endpoint_info: Arc<dyn MobileSyncEndpointInfoPort>,
 }
 
 impl MobileSyncFacade {
@@ -177,6 +222,7 @@ impl MobileSyncFacade {
             file_staging,
             snapshot_ports,
             file_transfer,
+            lan_lifecycle,
         } = deps;
 
         let snapshot_port: Arc<dyn LatestClipboardSnapshotPort> =
@@ -198,7 +244,10 @@ impl MobileSyncFacade {
                 password_hasher.clone(),
                 credentials_minter,
             ),
-            get_settings: GetMobileSyncSettingsUseCase::new(settings.clone(), endpoint_info),
+            get_settings: GetMobileSyncSettingsUseCase::new(
+                settings.clone(),
+                endpoint_info.clone(),
+            ),
             update_settings: UpdateMobileSyncSettingsUseCase::new(settings),
             list_lan_interfaces: ListLanInterfacesUseCase::new(lan_interface_probe),
             authenticate_basic: AuthenticateBasicAuthUseCase::new(device_repo, password_hasher),
@@ -211,6 +260,8 @@ impl MobileSyncFacade {
             ),
             get_latest_doc: GetLatestMobileSyncDocUseCase::new(snapshot_port.clone()),
             get_file: GetMobileSyncFileUseCase::new(snapshot_port, file_staging),
+            lan_lifecycle,
+            endpoint_info,
         }
     }
 
@@ -256,13 +307,46 @@ impl MobileSyncFacade {
         self.get_settings.execute().await
     }
 
-    /// 更新移动端同步设置。返回值的 `restart_required` 标记仅在 enabled
-    /// 实际发生变化时为 `true`;同值重复保存为 `false` 且不写盘。
+    /// 更新移动端同步设置。
+    ///
+    /// 装入了 [`MobileLanLifecyclePort`] 的装配下(GUI daemon),写盘成功后立即
+    /// 把 LAN listener 状态对齐到新设置 —— 用户不再需要重启进程才能让"开关
+    /// 移动同步 / 改监听端口"生效。返回值的 `restart_required` 在这条路径下
+    /// 永远是 `false`(字段保留,见
+    /// [`UpdateMobileSyncSettingsOutput::restart_required`] 的字段 doc)。
+    ///
+    /// `apply` 完成后读一次 `MobileSyncEndpointInfoPort.current_status()`:
+    /// 若 adapter 报 `BindFailed{reason}`(端口占用 / 权限 / IP 不可分配),
+    /// 把 reason 透传进 output 的 `lan_listener_bind_error`,让调用方
+    /// (典型:首次添加移动设备的 GUI 引导对话框)在导航到下一步前就能
+    /// 看到 listener 没起来,而不是用户填完 label 才发现 iPhone 连不上。
+    ///
+    /// 没装入 lifecycle port 的装配(CLI fallback / 单测)只写盘不通知,
+    /// `restart_required` 仍按"任一字段实际变化"返回,
+    /// `lan_listener_bind_error` 保持 `None`(use case 默认值)。
     pub async fn update_settings(
         &self,
         input: UpdateMobileSyncSettingsInput,
     ) -> Result<UpdateMobileSyncSettingsOutput, UpdateMobileSyncSettingsError> {
-        self.update_settings.execute(input).await
+        let mut out = self.update_settings.execute(input).await?;
+        if let Some(lifecycle) = self.lan_lifecycle.as_ref() {
+            let target = lan_target_from_settings(&out);
+            lifecycle.apply(target).await;
+            // 即时生效路径下"重启"语义不再适用,字段拍 false 让 UI 跳过
+            // restart banner。详见 update_settings use case 文档。
+            out.restart_required = false;
+            // apply 后读 endpoint_info 一次。bind 失败时 adapter 已经把
+            // reason 写进 BindFailed,这里把它透传到 output 字段,让前端
+            // 在 happy-path 流程里就能感知到"设置落盘但 listener 没起来"。
+            // endpoint_info 自身读失败(底层 storage 异常)按"无报错"处理 ——
+            // 不让"探测错误"覆盖"实际是否成功",避免给前端虚假信号。
+            if let Ok(LanListenerStatus::BindFailed { reason }) =
+                self.endpoint_info.current_status().await
+            {
+                out.lan_listener_bind_error = Some(reason);
+            }
+        }
+        Ok(out)
     }
 
     /// 列出可作为二维码 URL 候选的本机 IPv4 LAN 接口。仅返回 RFC1918 私
@@ -710,6 +794,7 @@ mod tests {
                 blob_reader: Arc::new(UnusedBlobReader),
             },
             file_transfer: None,
+            lan_lifecycle: None,
         })
     }
 
@@ -789,6 +874,8 @@ mod tests {
             .await
             .unwrap();
         assert!(upd.enabled);
+        // build_facade() 不装 lan_lifecycle → 仍走 use case 旧语义,
+        // 任一字段变化即 restart_required = true。
         assert!(upd.restart_required);
 
         // 再读:enabled 已生效。
@@ -860,6 +947,7 @@ mod tests {
                 blob_reader: Arc::new(UnusedBlobReader),
             },
             file_transfer: None,
+            lan_lifecycle: None,
         });
 
         // happy path
@@ -937,6 +1025,7 @@ mod tests {
                 blob_reader: Arc::new(UnusedBlobReader),
             },
             file_transfer: None,
+            lan_lifecycle: None,
         });
 
         // 1. 旧密码可用
@@ -997,5 +1086,280 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RotateMobilePasswordError::NotFound(_)));
+    }
+
+    // ── lan_lifecycle wire-up 测试 ─────────────────────────────────────────
+    //
+    // 验证装入了 [`MobileLanLifecyclePort`] 的装配下,update_settings 写盘后
+    // 立刻调 apply(),且 restart_required 永远 false。
+
+    /// 记录每次 apply 被调时的 target,供单测断言。
+    #[derive(Default)]
+    struct RecordingLanLifecycle {
+        calls: Mutex<Vec<MobileLanTarget>>,
+    }
+
+    #[async_trait]
+    impl MobileLanLifecyclePort for RecordingLanLifecycle {
+        async fn apply(&self, target: MobileLanTarget) {
+            self.calls.lock().unwrap().push(target);
+        }
+    }
+
+    fn build_facade_with_lifecycle(lifecycle: Arc<RecordingLanLifecycle>) -> MobileSyncFacade {
+        let entry_repo: Arc<dyn ClipboardEntryRepositoryPort> = Arc::new(UnusedEntryRepo);
+        let apply_inbound = Arc::new(ApplyInboundClipboardUseCase::new(
+            entry_repo.clone(),
+            Arc::new(UnusedCapture),
+            Arc::new(UnusedWrite),
+        ));
+        MobileSyncFacade::new(MobileSyncFacadeDeps {
+            clock: Arc::new(FixedClock(1_000)),
+            credentials_minter: Arc::new(StaticMinter),
+            password_hasher: Arc::new(FakeHasher),
+            device_repo: Arc::new(InMemoryDeviceRepo::default()),
+            endpoint_info: Arc::new(FixedEndpoint),
+            lan_interface_probe: Arc::new(StubLanProbe),
+            settings: Arc::new(InMemorySettings::default()),
+            apply_inbound,
+            incoming_buffer: Arc::new(IncomingMobileBuffer::new()),
+            file_staging: Arc::new(UnusedStaging),
+            snapshot_ports: MobileSyncSnapshotPorts {
+                entry_repo,
+                selection_repo: Arc::new(UnusedSelectionRepo),
+                representation_repo: Arc::new(UnusedRepRepo),
+                payload_resolver: Arc::new(UnusedResolver),
+                blob_reader: Arc::new(UnusedBlobReader),
+            },
+            file_transfer: None,
+            lan_lifecycle: Some(lifecycle),
+        })
+    }
+
+    #[tokio::test]
+    async fn update_settings_with_lifecycle_applies_target_and_clears_restart_required() {
+        let lifecycle = Arc::new(RecordingLanLifecycle::default());
+        let facade = build_facade_with_lifecycle(lifecycle.clone());
+
+        // 1. enable + lan_listen + 自定义 port → Enabled{port}
+        let upd = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                enabled: Some(true),
+                lan_listen_enabled: Some(true),
+                lan_advertise_ip: Some(Some("192.168.1.5".into())),
+                lan_port: Some(Some(43210)),
+            })
+            .await
+            .unwrap();
+        assert!(upd.enabled);
+        assert!(
+            !upd.restart_required,
+            "lifecycle 注入路径下 restart_required 永远 false"
+        );
+
+        // 2. lifecycle.apply 调一次,target = Enabled{43210}
+        {
+            let calls = lifecycle.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0], MobileLanTarget::Enabled { port: 43210 });
+        }
+
+        // 3. 关 lan_listen → Disabled
+        let upd2 = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                lan_listen_enabled: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!upd2.restart_required);
+
+        {
+            let calls = lifecycle.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[1], MobileLanTarget::Disabled);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_settings_with_lifecycle_defaults_port_to_42720_when_unset() {
+        let lifecycle = Arc::new(RecordingLanLifecycle::default());
+        let facade = build_facade_with_lifecycle(lifecycle.clone());
+
+        // 只开两个开关, 不设 lan_port → adapter 应收到 Enabled{port: 42720}
+        let _ = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                enabled: Some(true),
+                lan_listen_enabled: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let calls = lifecycle.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], MobileLanTarget::Enabled { port: 42720 });
+    }
+
+    /// endpoint_info mock,可被测试替换为"apply 后我已经写了 BindFailed"。
+    /// 用 Mutex<LanListenerStatus> 持当前状态;facade 调 current_status 直接读。
+    struct BindFailureEndpoint {
+        status: Mutex<LanListenerStatus>,
+    }
+
+    #[async_trait]
+    impl MobileSyncEndpointInfoPort for BindFailureEndpoint {
+        async fn current_status(&self) -> Result<LanListenerStatus, EndpointInfoError> {
+            Ok(self.status.lock().unwrap().clone())
+        }
+    }
+
+    /// 类似 RecordingLanLifecycle,但 apply 时把预设 BindFailed reason 写进
+    /// endpoint_info,模拟生产 controller 在 bind 失败时的行为。
+    struct FailingLanLifecycle {
+        endpoint: Arc<BindFailureEndpoint>,
+        reason: String,
+    }
+
+    #[async_trait]
+    impl MobileLanLifecyclePort for FailingLanLifecycle {
+        async fn apply(&self, target: MobileLanTarget) {
+            // 只有 Enabled 时模拟 bind 失败;Disabled 写 Stopped。
+            let next = match target {
+                MobileLanTarget::Enabled { .. } => LanListenerStatus::BindFailed {
+                    reason: self.reason.clone(),
+                },
+                MobileLanTarget::Disabled => LanListenerStatus::Stopped,
+            };
+            *self.endpoint.status.lock().unwrap() = next;
+        }
+    }
+
+    #[tokio::test]
+    async fn update_settings_with_lifecycle_propagates_bind_failure_to_output() {
+        // 构造一份 facade,endpoint_info 与 lifecycle 共享同一份"模拟 daemon
+        // 状态"的 Arc<BindFailureEndpoint>:lifecycle.apply 写 BindFailed,
+        // facade 紧接着读出来填 lan_listener_bind_error。
+        let endpoint = Arc::new(BindFailureEndpoint {
+            status: Mutex::new(LanListenerStatus::Stopped),
+        });
+        let lifecycle = Arc::new(FailingLanLifecycle {
+            endpoint: endpoint.clone(),
+            reason: "Address already in use (os error 48)".into(),
+        });
+
+        let entry_repo: Arc<dyn ClipboardEntryRepositoryPort> = Arc::new(UnusedEntryRepo);
+        let apply_inbound = Arc::new(ApplyInboundClipboardUseCase::new(
+            entry_repo.clone(),
+            Arc::new(UnusedCapture),
+            Arc::new(UnusedWrite),
+        ));
+        let facade = MobileSyncFacade::new(MobileSyncFacadeDeps {
+            clock: Arc::new(FixedClock(1_000)),
+            credentials_minter: Arc::new(StaticMinter),
+            password_hasher: Arc::new(FakeHasher),
+            device_repo: Arc::new(InMemoryDeviceRepo::default()),
+            // 关键:endpoint_info 装的是 BindFailureEndpoint, lifecycle 也持
+            // 同一份 Arc, apply 写完 facade 立刻能读到。
+            endpoint_info: endpoint.clone(),
+            lan_interface_probe: Arc::new(StubLanProbe),
+            settings: Arc::new(InMemorySettings::default()),
+            apply_inbound,
+            incoming_buffer: Arc::new(IncomingMobileBuffer::new()),
+            file_staging: Arc::new(UnusedStaging),
+            snapshot_ports: MobileSyncSnapshotPorts {
+                entry_repo,
+                selection_repo: Arc::new(UnusedSelectionRepo),
+                representation_repo: Arc::new(UnusedRepRepo),
+                payload_resolver: Arc::new(UnusedResolver),
+                blob_reader: Arc::new(UnusedBlobReader),
+            },
+            file_transfer: None,
+            lan_lifecycle: Some(lifecycle),
+        });
+
+        // enable 两开关 → lifecycle.apply(Enabled) → endpoint = BindFailed
+        let out = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                enabled: Some(true),
+                lan_listen_enabled: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            out.lan_listener_bind_error.as_deref(),
+            Some("Address already in use (os error 48)"),
+            "facade 必须把 endpoint_info 的 BindFailed reason 透传到 output"
+        );
+        // restart_required 仍然在 lifecycle 路径下被拍 false ——
+        // 不让前端在 bind 失败时还弹 restart banner(那是误导)。
+        assert!(!out.restart_required);
+
+        // 关掉 lan_listen → Disabled → endpoint = Stopped → 字段回 None
+        let out2 = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                lan_listen_enabled: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            out2.lan_listener_bind_error.is_none(),
+            "Disabled 目标下 endpoint=Stopped, bind_error 必须清零"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_settings_with_lifecycle_zero_port_falls_back_to_default() {
+        // 深度防御:若 settings 文件被外部写入 lan_port=Some(0)(绕过 use case
+        // 校验),facade 把它当 None 处理, target 走默认 42720。
+        let lifecycle = Arc::new(RecordingLanLifecycle::default());
+        let facade = build_facade_with_lifecycle(lifecycle.clone());
+
+        // 注意 lan_port=Some(Some(0)) 会被 use case 拒绝, 这里通过
+        // lan_target_from_settings 单元函数直接验证 fallback 即可。
+        // (use case 边界已被 update_settings.rs::rejects_zero_port 钉死)
+        let synthetic_out = UpdateMobileSyncSettingsOutput {
+            enabled: true,
+            lan_listen_enabled: true,
+            lan_advertise_ip: None,
+            lan_port: Some(0),
+            restart_required: false,
+            lan_listener_bind_error: None,
+        };
+        let target = lan_target_from_settings(&synthetic_out);
+        assert_eq!(
+            target,
+            MobileLanTarget::Enabled { port: 42720 },
+            "Some(0) 必须 fallback 到默认端口,不能透传给 adapter"
+        );
+
+        // 静默 unused —— facade 在本测试不被实际调用, 只是为了证明 helper
+        // 是 facade 模块内可见且可单元测试的。
+        let _ = facade;
+    }
+
+    #[tokio::test]
+    async fn update_settings_without_lifecycle_preserves_legacy_restart_required() {
+        // 没装 lifecycle port → 走 build_facade() 路径, 不调 apply,
+        // restart_required 保持 use case 原始判定(改了字段 → true)。
+        // 与 settings_round_trip_through_facade 互补:那个测试覆盖
+        // 同值不写盘 → restart_required = false 的现有行为,本测试
+        // 钉死"实际变化 → 仍为 true"的现有行为不退化。
+        let facade = build_facade();
+        let upd = facade
+            .update_settings(UpdateMobileSyncSettingsInput {
+                enabled: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(upd.enabled);
+        assert!(
+            upd.restart_required,
+            "no-lifecycle 装配下保留旧的 restart_required 语义"
+        );
     }
 }
