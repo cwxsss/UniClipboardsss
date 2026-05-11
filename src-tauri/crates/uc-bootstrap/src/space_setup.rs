@@ -412,7 +412,7 @@ pub async fn build_space_setup_assembly(
         // file_transfer lifecycle facade —— iroh 路径每次 fetch 通过它落
         // `Started` / `Completed` / `Failed` 事件,让 file_transfer 表的
         // 状态投影与 sweep / reconcile workers 真正发挥作用。
-        file_transfer: Some(Arc::clone(&wired.background.file_transfer_facade)),
+        file_transfer: Some(Arc::clone(&wired.file_transfer_facade)),
     }));
 
     info!("Slice 2/3 SpaceSetupFacade + MemberRosterFacade + ClipboardSyncFacade + BlobTransferFacade assembled");

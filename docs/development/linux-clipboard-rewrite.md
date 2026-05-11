@@ -178,7 +178,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }  # 0.
 
 **现象**：write_snapshot OK，wl-paste 能读到，**但 read_snapshot 返回 0 reps**。日志里 `clipboard read timed out for mime 'text/plain;charset=utf-8'`。
 
-**根因**：`wlr/ext-data-control` 协议把每个 `set_selection` 反射回**所有** data-control 设备 — 包括发起者自己。我们的 worker 在 dispatch 里收到 Selection 事件，调 `build_from_offer` 想读 mime 数据：
+**根因**：`wlr/ext-data-control` 协议把每个 `set_selection` 反射回 **所有** data-control 设备 — 包括发起者自己。我们的 worker 在 dispatch 里收到 Selection 事件，调 `build_from_offer` 想读 mime 数据：
 
 1. `offer.receive(mime, write_fd)` 发请求
 2. compositor 把请求 forward 成 `Send` 事件给我们的 source
@@ -212,7 +212,7 @@ if state.self_echo_pending > 0 {
 
 `clipboard_rs::WatcherShutdown` 内部就是一个 `std::sync::mpsc::Sender<()>`。`Sender<()>` 自动是 `Send`（`Send` 当 `T: Send`，`T = ()`）。所以可以直接 `move` 进 spawn 的辅助线程，不需要 `unsafe impl Send`。
 
-旧 worker 注释说 "WatcherShutdown is NOT Send" 是**错的**（或者是早期版本的注释），新代码已直接 `move`。
+旧 worker 注释说 "WatcherShutdown is NOT Send" 是 **错的**（或者是早期版本的注释），新代码已直接 `move`。
 
 ### 4.5 rustix 0.38 没有 `io-lifetimes` feature
 
@@ -449,7 +449,7 @@ crates/uc-platform/src/clipboard/platform/linux/
 **Phase 3 风险**：
 
 1. **INCR 协议复杂度**：大数据 (>chunk_size) 必须分块。`x11rb` 没有内置 INCR helper，需要自己写。Bug 风险高。必须有大文本回归测试。
-2. **selection ownership 与 watcher 冲突**：watcher 进程**也可能**是 selection owner（Phase 2b 之后 daemon 写入剪贴板时是）。XFIXES 通知会反射回来。需要 origin guard（实际现有 `clipboard_change_origin` 在 daemon 层已经处理）。
+2. **selection ownership 与 watcher 冲突**：watcher 进程 **也可能** 是 selection owner（Phase 2b 之后 daemon 写入剪贴板时是）。XFIXES 通知会反射回来。需要 origin guard（实际现有 `clipboard_change_origin` 在 daemon 层已经处理）。
 
 **Phase 3 验收**：
 
@@ -482,7 +482,7 @@ crates/uc-platform/src/clipboard/platform/linux/
 5. `crates/uc-platform/src/clipboard/platform/linux.rs`：`Legacy` 变体彻底移除，`new()` 不再 fallback —— 如果 Wayland + X11 都不可用，应该返回 Err（罕见的 headless 环境，用户自己处理）
 6. `crates/uc-platform/src/clipboard/platform/linux/legacy.rs`：删除
 7. `crates/uc-cli/src/commands/probe.rs:15,140`：probe 命令也走平台 event loop（保持一致）。当前 probe 直接 import clipboard_rs。
-8. CI / packaging：snap / Flatpak 应当**已经**不依赖 clipboard_rs 的 X11 运行时；但 verify 一下 snap build 体积无意外增长。
+8. CI / packaging：snap / Flatpak 应当 **已经** 不依赖 clipboard_rs 的 X11 运行时；但 verify 一下 snap build 体积无意外增长。
 
 **Phase 4 验收**：
 
@@ -547,7 +547,7 @@ crates/uc-desktop/
 3. **`EventQueue` 不是 `Send`**。任何把 `EventQueue` 移过线程边界的代码会编译错误。worker 模式是必需的。
 4. **`WaylandClipboard::write_snapshot` 是同步阻塞的**（带 5s 超时）。不要在 hot-path async 上下文里直接调，应当 `tokio::task::spawn_blocking`。daemon `apply_inbound` 路径（`ClipboardWriteCoordinator::write`）是从 facade 同步调入；目前没 spawn_blocking 包裹。**已知潜在问题**：如果 worker 真的卡 5 秒，会阻塞调用方所在的 tokio worker 一段时间。实测下来 wayland 写入毫秒级，目前不算紧迫；Phase 3/4 完成后再考虑是否需要在 application 层包 spawn_blocking。
 5. **clipboard_rs 0.3.3 的 `WatcherShutdown` 实际是 Send 的**（4.4），不要被旧注释误导。
-6. **rustfmt 与 clippy 在 Fedora 44 上的 Rust 1.95.0 包不是默认装的**：`sudo dnf install rustfmt`（用过；本机已装）；clippy 同理但本机**还没装**。CI 上 clippy 是必须的；本机做 commit 时 pre-commit hook 跑 fmt 但不跑 clippy，所以本机能 commit 通过 → 全靠 CI 兜底。
+6. **rustfmt 与 clippy 在 Fedora 44 上的 Rust 1.95.0 包不是默认装的**：`sudo dnf install rustfmt`（用过；本机已装）；clippy 同理但本机 **还没装**。CI 上 clippy 是必须的；本机做 commit 时 pre-commit hook 跑 fmt 但不跑 clippy，所以本机能 commit 通过 → 全靠 CI 兜底。
 7. **wayland-rs 的 `Dispatch` 是具体 interface 上的 impl**：试图写 `impl<B: Backend> Dispatch<B::Device, ()>` 这种泛型 impl 会失败（且 `event_created_child!` 也只支持具体子类型）。Phase 5 的 wlr/ext 拆分因此采用 "helper 协议无关 + dispatch 协议特定" 的折中；后续若要再拆协议（primary selection、新 staging）应继承同样模式。
 
 ---
@@ -558,7 +558,7 @@ crates/uc-desktop/
 2. `cargo build --manifest-path=src-tauri/Cargo.toml --example wayland_clipboard_test -p uc-platform` 跑一次例子，确认环境 OK
 3. 看本文 Phase 3 节（X11 原生 x11rb 重写）。重点先把 `convert_selection` + `SelectionNotify` 跑通，再补 INCR 流式接收。INCR 是最容易出 bug 的部分，必须有 >16MB 大文本回归测试。
 4. Phase 3 完成后再做 Phase 4 (`clipboard_rs` Linux 依赖清理)；Phase 4 主要是 Cargo.toml 与 cfg gate 调整，跟代码改动量相比是收尾活。
-5. KDE Plasma 6 / GNOME 47+ 的 ext-data-control 路径目前**只在 niri 上验证过**。Phase 3/4 PR 合并前，让能访问这两个环境的 reviewer 各跑一遍 `wayland_watch` + `wayland_clipboard_test`。
+5. KDE Plasma 6 / GNOME 47+ 的 ext-data-control 路径目前 **只在 niri 上验证过**。Phase 3/4 PR 合并前，让能访问这两个环境的 reviewer 各跑一遍 `wayland_watch` + `wayland_clipboard_test`。
 
 ---
 

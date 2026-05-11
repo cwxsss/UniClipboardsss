@@ -185,7 +185,7 @@ impl DaemonApp {
         // sponsor device id must be too — the pairing-completion
         // forwarder needs both to emit `setup.pairingCompleted`.
         debug_assert!(
-            app_facade.space_setup.is_some() == local_device_id.is_some(),
+            app_facade.space_setup.get().is_some() == local_device_id.is_some(),
             "space_setup facade and local_device_id must be wired together"
         );
         Self {
@@ -285,7 +285,7 @@ impl DaemonApp {
         // and translates each `PairingOutcome` into a `setup.pairingCompleted`
         // ws frame on the shared event bus.
         if let (Some(facade), Some(sponsor_id)) = (
-            self.app_facade.space_setup.as_ref(),
+            self.app_facade.space_setup.get().cloned(),
             self.local_device_id.as_ref(),
         ) {
             spawn_pairing_completion_forwarder(
@@ -301,6 +301,7 @@ impl DaemonApp {
         let cleanup_cancel = self.cancel.child_token();
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
+        let mut http_handle_consumed = false;
 
         let _cleanup_handle = cleanup_rate_limiter_task(security_for_cleanup, cleanup_cancel);
 
@@ -324,7 +325,7 @@ impl DaemonApp {
         let file_transfer_facade = self.app_facade.file_transfer.clone();
         if let (Some(endpoint_info), Some(mobile_sync_facade)) = (
             self.mobile_lan_endpoint_info.clone(),
-            self.app_facade.mobile_sync.clone(),
+            self.app_facade.mobile_sync.get().cloned(),
         ) {
             // 同步读一次设置 —— daemon 启动时一次性决定 listener 行为, 配
             // 置变更不热重载(SPEC §1.2.5: 用户必须 stop+start daemon)。读取
@@ -425,6 +426,11 @@ impl DaemonApp {
                 }
                 result = &mut http_handle => {
                     warn!("HTTP server exited unexpectedly: {:?}", result);
+                    // JoinHandle 在 select! 这一支已经被 poll 到 Ready 并通过
+                    // take_output 消费掉结果。后续 shutdown 阶段不能再 await
+                    // 同一个 handle，否则触发
+                    // panic!("JoinHandle polled after completion")。
+                    http_handle_consumed = true;
                     break;
                 }
                 Some(result) = service_tasks.join_next() => {
@@ -467,9 +473,11 @@ impl DaemonApp {
         .await
         .ok();
 
-        tokio::time::timeout(Duration::from_secs(5), http_handle)
-            .await
-            .ok();
+        if !http_handle_consumed {
+            tokio::time::timeout(Duration::from_secs(5), http_handle)
+                .await
+                .ok();
+        }
 
         for service in self.services.iter().rev() {
             info!(service = service.name(), "stopping service");
