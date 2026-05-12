@@ -75,12 +75,12 @@ jobs:
       # 含 musl-tools / build-essential / clang / cmake 等 CLI 编译所需 + Tauri 桌面端依赖。
       # 镜像由 build-base-image.yml 维护。
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.branch || github.ref }}
 
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: lts/*
 
@@ -230,7 +230,7 @@ jobs:
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.target }}
           path: uniclipboard-cli-*
