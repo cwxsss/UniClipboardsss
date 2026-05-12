@@ -42,20 +42,62 @@
 //! `ingest_inbound.rs::tests` and Phase 1 `roster/facade.rs::FakePresence`).
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::task::JoinSet;
 use tracing::{debug, info, info_span, instrument, warn, Instrument};
 use uc_observability::FlowId;
 
-use uc_core::clipboard::ClipboardContentCategorySet;
+use uc_core::clipboard::{ClipboardContentCategory, ClipboardContentCategorySet};
 use uc_core::ids::DeviceId;
 use uc_core::ports::security::TransferCipherPort;
 use uc_core::ports::{
     ClipboardDispatchError, ClipboardDispatchPort, ClipboardHeader, ClockPort, DeviceIdentityPort,
-    DispatchAck, LocalIdentityPort, PeerAddressRepositoryPort, SettingsPort, SyncPayload,
+    DispatchAck, FirstSyncStatePort, LocalIdentityPort, PeerAddressRepositoryPort, SettingsPort,
+    SyncPayload,
 };
 use uc_core::MemberRepositoryPort;
+use uc_observability::analytics::{
+    AnalyticsPort, Direction, Event, FailureReason, PayloadSizeBucket, PayloadType, SyncEventProps,
+    TransportType,
+};
+
+/// Slice 8c-1 · classify the dispatched payload by category priority
+/// (File > Image > Text). Empty / unknown sets fall back to Text rather
+/// than dropping the event — schema doc §6 prefers a coarse bucket over
+/// a missing field.
+fn payload_type_from_categories(set: &ClipboardContentCategorySet) -> PayloadType {
+    if set
+        .iter()
+        .any(|c| matches!(c, ClipboardContentCategory::File))
+    {
+        PayloadType::File
+    } else if set
+        .iter()
+        .any(|c| matches!(c, ClipboardContentCategory::Image))
+    {
+        PayloadType::Image
+    } else {
+        // Text / RichText / Link / empty all roll up to Text — fine-grained
+        // breakdown is not part of v1 schema (PayloadType is 3-way).
+        PayloadType::Text
+    }
+}
+
+/// Slice 8c-1 · 1:1 mapping ClipboardDispatchError → schema FailureReason.
+/// Funnel signal lives in this enum, not in error message text. Keep
+/// LocalPolicyExceeded mapped to FileTooLarge (the only triggering case
+/// today is `MAX_PAYLOAD_SIZE`); refine if other size policies appear.
+fn map_dispatch_error_to_failure_reason(err: &ClipboardDispatchError) -> FailureReason {
+    match err {
+        ClipboardDispatchError::Offline => FailureReason::PeerOffline,
+        ClipboardDispatchError::LocalPolicyExceeded(_) => FailureReason::FileTooLarge,
+        ClipboardDispatchError::PeerRejected(_) => FailureReason::NetworkError,
+        ClipboardDispatchError::Io(_) => FailureReason::NetworkError,
+        ClipboardDispatchError::Internal(_) => FailureReason::Unknown,
+    }
+}
 
 /// Input to one dispatch pass. The caller owns the plaintext →
 /// `ClipboardBinaryPayload` → bytes pipeline.
@@ -124,9 +166,20 @@ pub(crate) struct DispatchClipboardEntryUseCase {
     local_identity: Arc<dyn LocalIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     clock: Arc<dyn ClockPort>,
+    /// Slice 8c-1 · per-peer telemetry. One `sync_attempted` /
+    /// `sync_succeeded` / `sync_failed` event fires per fan-out target so
+    /// PostHog reliability dashboards stay per-peer (peer_os, latency,
+    /// failure_reason are all 1:1 with a single peer outcome).
+    analytics: Arc<dyn AnalyticsPort>,
+    /// Slice 8c-2 · first-sync funnel dedup. spawn 内每次 `mark_*` 返回 `Ok(true)`
+    /// 即"我是首次"，同时额外 fire `first_clipboard_sync_attempted` /
+    /// `first_clipboard_sync_succeeded` / `first_file_sync_succeeded`。
+    /// race 防护由 port impl 内部 `tokio::sync::Mutex` 守护，调用方零感知。
+    first_sync_state: Arc<dyn FirstSyncStatePort>,
 }
 
 impl DispatchClipboardEntryUseCase {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
         member_repo: Arc<dyn MemberRepositoryPort>,
@@ -136,6 +189,8 @@ impl DispatchClipboardEntryUseCase {
         local_identity: Arc<dyn LocalIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         clock: Arc<dyn ClockPort>,
+        analytics: Arc<dyn AnalyticsPort>,
+        first_sync_state: Arc<dyn FirstSyncStatePort>,
     ) -> Self {
         Self {
             peer_addr_repo,
@@ -146,6 +201,8 @@ impl DispatchClipboardEntryUseCase {
             local_identity,
             settings,
             clock,
+            analytics,
+            first_sync_state,
         }
     }
 
@@ -245,15 +302,26 @@ impl DispatchClipboardEntryUseCase {
 
         // 4. Fan-out. One JoinSet task per target; results merged at the end.
         //
-        // 每个 peer 走自己的 `peer.dispatch` child span,带上 `peer.device_id`
-        // + `flow.id`。这样 Sentry 上扇出 N 个目标时能看到 N 条平行 child span,
-        // 单点失败一目了然,而不是被 root 的"末次写入"覆盖。`flow.id` 在
-        // child 上也写一份是冗余 —— 但 root span 不一定总在同一个 trace,
+        // 每个 peer 走自己的 `peer.dispatch` child span，带上 `peer.device_id`
+        // + `flow.id`。这样 Sentry 上扇出 N 个目标时能看到 N 条平行 child span，
+        // 单点失败一目了然，而不是被 root 的"末次写入"覆盖。`flow.id` 在
+        // child 上也写一份是冗余 —— 但 root span 不一定总在同一个 trace，
         // 在 worker 任务里显式 carry 更稳。
+        //
+        // Slice 8c-1 · each spawned task fires its own per-peer
+        // `sync_attempted` (before the wire call) and either
+        // `sync_succeeded` (with `sync_latency_ms`) or `sync_failed`
+        // (with `failure_reason`) inside the same async block — keeps
+        // analytics atomically paired with the dispatch outcome and
+        // avoids a second match arm in the merge loop.
+        let payload_type = payload_type_from_categories(&input.categories);
+        let payload_size_bucket = PayloadSizeBucket::from_bytes(input.plaintext.len() as u64);
         let mut set: JoinSet<(DeviceId, Result<DispatchAck, ClipboardDispatchError>)> =
             JoinSet::new();
         for device_id in &candidates {
             let dispatch = Arc::clone(&self.clipboard_dispatch);
+            let analytics = Arc::clone(&self.analytics);
+            let first_sync_state = Arc::clone(&self.first_sync_state);
             let header = header.clone();
             let device_id = device_id.clone();
             let payload = SyncPayload {
@@ -267,7 +335,90 @@ impl DispatchClipboardEntryUseCase {
             );
             set.spawn(
                 async move {
+                    analytics.capture(Event::SyncAttempted(SyncEventProps {
+                        direction: Direction::Outbound,
+                        payload_type,
+                        payload_size_bucket,
+                        transport_type: TransportType::P2pDirect,
+                        peer_os: None,
+                        sync_latency_ms: None,
+                        failure_reason: None,
+                    }));
+                    // Slice 8c-2 · funnel: first attempt fires regardless of
+                    // outcome — keeps the "started but failed"漏点信号. Race
+                    // 防护由 port impl 的 Mutex 守住，N 个 spawn 中只有一个
+                    // 返回 Ok(true)。
+                    match first_sync_state.mark_first_sync_attempted().await {
+                        Ok(true) => analytics.capture(Event::FirstClipboardSyncAttempted {
+                            direction: Direction::Outbound,
+                        }),
+                        Ok(false) => {}
+                        Err(err) => warn!(
+                            error = %err,
+                            "first_sync_state.mark_first_sync_attempted failed; skipping fire",
+                        ),
+                    }
+
+                    let started_at = Instant::now();
                     let result = dispatch.dispatch(&device_id, &header, payload).await;
+                    let duration_ms =
+                        started_at.elapsed().as_millis().min(u32::MAX as u128) as u32;
+                    let event = match &result {
+                        Ok(_) => Event::SyncSucceeded(SyncEventProps {
+                            direction: Direction::Outbound,
+                            payload_type,
+                            payload_size_bucket,
+                            transport_type: TransportType::P2pDirect,
+                            peer_os: None,
+                            sync_latency_ms: Some(duration_ms),
+                            failure_reason: None,
+                        }),
+                        Err(err) => Event::SyncFailed(SyncEventProps {
+                            direction: Direction::Outbound,
+                            payload_type,
+                            payload_size_bucket,
+                            transport_type: TransportType::P2pDirect,
+                            peer_os: None,
+                            sync_latency_ms: None,
+                            failure_reason: Some(map_dispatch_error_to_failure_reason(err)),
+                        }),
+                    };
+                    let is_ok = result.is_ok();
+                    analytics.capture(event);
+
+                    // Slice 8c-2 · funnel: first success path fires both the
+                    // generic clipboard event and (if payload_type=File) the
+                    // file-specific event. Both flags独立 dedup。
+                    if is_ok {
+                        match first_sync_state.mark_first_sync_succeeded().await {
+                            Ok(true) => analytics.capture(Event::FirstClipboardSyncSucceeded {
+                                direction: Direction::Outbound,
+                                peer_os: None,
+                                transport_type: TransportType::P2pDirect,
+                                duration_ms,
+                            }),
+                            Ok(false) => {}
+                            Err(err) => warn!(
+                                error = %err,
+                                "first_sync_state.mark_first_sync_succeeded failed; skipping fire",
+                            ),
+                        }
+                        if matches!(payload_type, PayloadType::File) {
+                            match first_sync_state.mark_first_file_sync_succeeded().await {
+                                Ok(true) => analytics.capture(Event::FirstFileSyncSucceeded {
+                                    peer_os: None,
+                                    transport_type: TransportType::P2pDirect,
+                                    payload_size_bucket,
+                                }),
+                                Ok(false) => {}
+                                Err(err) => warn!(
+                                    error = %err,
+                                    "first_sync_state.mark_first_file_sync_succeeded failed; skipping fire",
+                                ),
+                            }
+                        }
+                    }
+
                     (device_id, result)
                 }
                 .instrument(child_span),
@@ -447,8 +598,8 @@ mod tests {
 
     use uc_core::ports::security::{TransferCipherError, TransferCipherPort};
     use uc_core::ports::{
-        ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, PeerAddressError,
-        PeerAddressRecord, PeerAddressRepositoryPort, SettingsPort,
+        ClockPort, DeviceIdentityPort, FirstSyncStateError, LocalIdentityError, LocalIdentityPort,
+        PeerAddressError, PeerAddressRecord, PeerAddressRepositoryPort, SettingsPort,
     };
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
@@ -609,6 +760,63 @@ mod tests {
         local_identity: MockLocalIdentity,
         settings: MockSettings_,
     ) -> DispatchClipboardEntryUseCase {
+        build_uc_with_analytics(
+            peer_addr_repo,
+            member_repo,
+            cipher,
+            dispatch,
+            device_identity,
+            local_identity,
+            settings,
+            Arc::new(uc_observability::analytics::NoopAnalyticsSink),
+        )
+    }
+
+    /// Variant that accepts an injectable analytics sink — Slice 8c-1
+    /// telemetry tests use `CapturingAnalyticsSink` here; the legacy
+    /// `build_uc` helper falls through to a `NoopAnalyticsSink` so older
+    /// tests stay terse. `first_sync_state` 默认走 `AllMarkedFirstSyncState`
+    /// (永远返回 Ok(false))，避免 sync 三事件测试被 first_* 事件污染；
+    /// 验证 first_* 触发的测试请用 [`build_uc_with_first_sync_state`]。
+    #[allow(clippy::too_many_arguments)]
+    fn build_uc_with_analytics(
+        peer_addr_repo: MockPeerAddrRepo,
+        member_repo: MockMemberRepo,
+        cipher: MockCipher,
+        dispatch: MockDispatch,
+        device_identity: MockDeviceId_,
+        local_identity: MockLocalIdentity,
+        settings: MockSettings_,
+        analytics: Arc<dyn AnalyticsPort>,
+    ) -> DispatchClipboardEntryUseCase {
+        build_uc_with_first_sync_state(
+            peer_addr_repo,
+            member_repo,
+            cipher,
+            dispatch,
+            device_identity,
+            local_identity,
+            settings,
+            analytics,
+            Arc::new(AllMarkedFirstSyncState),
+        )
+    }
+
+    /// Slice 8c-2 · 全显式构造：Slice 8c-2 first-path 测试需要 InMemory
+    /// first_sync_state（默认全 unmarked，首次 mark 返回 true）来验证
+    /// `first_clipboard_sync_*` / `first_file_sync_succeeded` 触发逻辑。
+    #[allow(clippy::too_many_arguments)]
+    fn build_uc_with_first_sync_state(
+        peer_addr_repo: MockPeerAddrRepo,
+        member_repo: MockMemberRepo,
+        cipher: MockCipher,
+        dispatch: MockDispatch,
+        device_identity: MockDeviceId_,
+        local_identity: MockLocalIdentity,
+        settings: MockSettings_,
+        analytics: Arc<dyn AnalyticsPort>,
+        first_sync_state: Arc<dyn FirstSyncStatePort>,
+    ) -> DispatchClipboardEntryUseCase {
         DispatchClipboardEntryUseCase::new(
             Arc::new(peer_addr_repo),
             Arc::new(member_repo),
@@ -618,7 +826,67 @@ mod tests {
             Arc::new(local_identity),
             Arc::new(settings),
             Arc::new(FixedClock(1_700_000_000_000)),
+            analytics,
+            first_sync_state,
         )
+    }
+
+    /// Slice 8c-2 · "all flags already marked" fake: every `mark_*` returns
+    /// `Ok(false)`, so the use case **never** fires a `first_*` event. Used
+    /// by every legacy test so their event-count assertions stay valid.
+    struct AllMarkedFirstSyncState;
+    #[async_trait]
+    impl FirstSyncStatePort for AllMarkedFirstSyncState {
+        async fn mark_first_sync_attempted(&self) -> Result<bool, FirstSyncStateError> {
+            Ok(false)
+        }
+        async fn mark_first_sync_succeeded(&self) -> Result<bool, FirstSyncStateError> {
+            Ok(false)
+        }
+        async fn mark_first_file_sync_succeeded(&self) -> Result<bool, FirstSyncStateError> {
+            Ok(false)
+        }
+    }
+
+    /// Slice 8c-2 · in-memory fake mirroring the production
+    /// `FileFirstSyncStateRepository`: first call returns `Ok(true)`, subsequent
+    /// calls `Ok(false)`. Each flag is independent. Race防护用 `tokio::sync::Mutex`
+    /// 守 read-check-write，与 production impl 等价。
+    #[derive(Default)]
+    struct InMemoryFirstSyncState {
+        attempted: tokio::sync::Mutex<bool>,
+        succeeded: tokio::sync::Mutex<bool>,
+        file_succeeded: tokio::sync::Mutex<bool>,
+    }
+    #[async_trait]
+    impl FirstSyncStatePort for InMemoryFirstSyncState {
+        async fn mark_first_sync_attempted(&self) -> Result<bool, FirstSyncStateError> {
+            let mut g = self.attempted.lock().await;
+            if *g {
+                Ok(false)
+            } else {
+                *g = true;
+                Ok(true)
+            }
+        }
+        async fn mark_first_sync_succeeded(&self) -> Result<bool, FirstSyncStateError> {
+            let mut g = self.succeeded.lock().await;
+            if *g {
+                Ok(false)
+            } else {
+                *g = true;
+                Ok(true)
+            }
+        }
+        async fn mark_first_file_sync_succeeded(&self) -> Result<bool, FirstSyncStateError> {
+            let mut g = self.file_succeeded.lock().await;
+            if *g {
+                Ok(false)
+            } else {
+                *g = true;
+                Ok(true)
+            }
+        }
     }
 
     /// Build a `MemberRepo` mock that returns a stub `SpaceMember` with
@@ -1184,5 +1452,280 @@ mod tests {
         // unrecognised payload should fail open even against an all-off filter.
         let outcome = uc.execute(input()).await.expect("dispatch ok");
         assert_eq!(outcome.total_accepted, 1);
+    }
+
+    // ── Slice 8c-1 analytics: per-peer sync_attempted/succeeded/failed ───
+
+    /// Test fake `AnalyticsPort` that records every captured `Event` for
+    /// inspection. Mirrors the joiner / sponsor / setup test fakes.
+    #[derive(Default)]
+    struct CapturingAnalyticsSink {
+        captured: std::sync::Mutex<Vec<Event>>,
+    }
+    impl CapturingAnalyticsSink {
+        fn events(&self) -> Vec<Event> {
+            self.captured.lock().unwrap().clone()
+        }
+    }
+    impl AnalyticsPort for CapturingAnalyticsSink {
+        fn capture(&self, event: Event) {
+            self.captured.lock().unwrap().push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn analytics_fires_attempted_then_succeeded_per_peer_on_happy_path() {
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a"), record("peer-b")]));
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-a")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-b")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::DuplicateIgnored));
+
+        let analytics = Arc::new(CapturingAnalyticsSink::default());
+        let uc = build_uc_with_analytics(
+            repo,
+            make_member_repo_all_enabled(),
+            cipher,
+            dispatch,
+            make_device_identity("self-device"),
+            make_local_identity_stub(),
+            make_settings_stub(),
+            analytics.clone(),
+        );
+
+        uc.execute(input()).await.expect("dispatch ok");
+
+        // Expect 4 events total: SyncAttempted×2 + SyncSucceeded×2.
+        // Spawn ordering is non-deterministic, but every peer's pair of
+        // (Attempted, Succeeded) must be back-to-back inside its own task —
+        // we settle for "2 attempted + 2 succeeded total".
+        let events = analytics.events();
+        assert_eq!(events.len(), 4, "got {events:?}");
+        let attempted = events
+            .iter()
+            .filter(|e| matches!(e, Event::SyncAttempted(_)))
+            .count();
+        let succeeded = events
+            .iter()
+            .filter(|e| matches!(e, Event::SyncSucceeded(_)))
+            .count();
+        assert_eq!((attempted, succeeded), (2, 2));
+        // Spot-check schema invariants on one succeeded event:
+        // direction=Outbound, transport=P2pDirect, sync_latency_ms set.
+        let sample = events
+            .iter()
+            .find_map(|e| match e {
+                Event::SyncSucceeded(p) => Some(p),
+                _ => None,
+            })
+            .expect("at least one SyncSucceeded");
+        assert_eq!(sample.direction, Direction::Outbound);
+        assert_eq!(sample.transport_type, TransportType::P2pDirect);
+        assert!(sample.sync_latency_ms.is_some());
+        assert!(sample.failure_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn analytics_fires_failed_with_peer_offline_when_dispatch_returns_offline() {
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-off")]));
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-off")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Err(ClipboardDispatchError::Offline));
+
+        let analytics = Arc::new(CapturingAnalyticsSink::default());
+        let uc = build_uc_with_analytics(
+            repo,
+            make_member_repo_all_enabled(),
+            cipher,
+            dispatch,
+            make_device_identity("self-device"),
+            make_local_identity_stub(),
+            make_settings_stub(),
+            analytics.clone(),
+        );
+
+        uc.execute(input()).await.expect("dispatch ok");
+
+        let events = analytics.events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], Event::SyncAttempted(_)));
+        match &events[1] {
+            Event::SyncFailed(p) => {
+                assert_eq!(p.failure_reason, Some(FailureReason::PeerOffline));
+                assert!(p.sync_latency_ms.is_none());
+            }
+            other => panic!("expected SyncFailed, got {other:?}"),
+        }
+    }
+
+    /// Slice 8c-2 · first-path: 2 paired peers, 全部 Accepted, payload_type=File.
+    /// 期望同一 spawn batch 内三个 `first_*` 事件**各自只 fire 一次**：
+    /// `FirstClipboardSyncAttempted` × 1（任意一个 spawn 抢到 attempted mutex）
+    /// + `FirstClipboardSyncSucceeded` × 1（同上 succeeded mutex）
+    /// + `FirstFileSyncSucceeded` × 1（payload_type=File 分支额外 mark）。
+    /// 其余 spawn 进入时 mark 都返回 `Ok(false)`，funnel 漏斗不重复计数。
+    #[tokio::test]
+    async fn first_path_fires_clipboard_and_file_first_events_exactly_once_per_flag() {
+        use uc_core::clipboard::ClipboardContentCategory;
+
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a"), record("peer-b")]));
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-a")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-b")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+
+        let analytics = Arc::new(CapturingAnalyticsSink::default());
+        let first_sync_state = Arc::new(InMemoryFirstSyncState::default());
+        let uc = build_uc_with_first_sync_state(
+            repo,
+            make_member_repo_all_enabled(),
+            cipher,
+            dispatch,
+            make_device_identity("self-device"),
+            make_local_identity_stub(),
+            make_settings_stub(),
+            analytics.clone(),
+            first_sync_state,
+        );
+
+        let mut categories = ClipboardContentCategorySet::empty();
+        categories.insert(ClipboardContentCategory::File);
+        let file_input = DispatchClipboardEntryInput {
+            plaintext: Bytes::from_static(b"hello world"),
+            content_hash: "9".repeat(64),
+            payload_version: 3,
+            categories,
+        };
+
+        uc.execute(file_input).await.expect("dispatch ok");
+
+        let events = analytics.events();
+        let attempted = events
+            .iter()
+            .filter(|e| matches!(e, Event::SyncAttempted(_)))
+            .count();
+        let succeeded = events
+            .iter()
+            .filter(|e| matches!(e, Event::SyncSucceeded(_)))
+            .count();
+        let first_attempted = events
+            .iter()
+            .filter(|e| matches!(e, Event::FirstClipboardSyncAttempted { .. }))
+            .count();
+        let first_succeeded = events
+            .iter()
+            .filter(|e| matches!(e, Event::FirstClipboardSyncSucceeded { .. }))
+            .count();
+        let first_file = events
+            .iter()
+            .filter(|e| matches!(e, Event::FirstFileSyncSucceeded { .. }))
+            .count();
+
+        assert_eq!(
+            (
+                attempted,
+                succeeded,
+                first_attempted,
+                first_succeeded,
+                first_file
+            ),
+            (2, 2, 1, 1, 1),
+            "expected 2 sync_attempted + 2 sync_succeeded + 1 each first_*; got {events:?}",
+        );
+
+        // 字段断言 — FirstClipboardSyncSucceeded 必须 direction=Outbound /
+        // transport=P2pDirect / peer_os=None。
+        let first_succ_event = events
+            .iter()
+            .find(|e| matches!(e, Event::FirstClipboardSyncSucceeded { .. }))
+            .expect("FirstClipboardSyncSucceeded present");
+        match first_succ_event {
+            Event::FirstClipboardSyncSucceeded {
+                direction,
+                peer_os,
+                transport_type,
+                duration_ms: _,
+            } => {
+                assert_eq!(*direction, Direction::Outbound);
+                assert!(peer_os.is_none());
+                assert_eq!(*transport_type, TransportType::P2pDirect);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn map_dispatch_error_covers_all_variants() {
+        // Compile-fence: 1:1 mapping table — any new ClipboardDispatchError
+        // variant added to uc-core will require an explicit decision here
+        // (compiler enforces match completeness on the helper itself).
+        for (err, expected) in [
+            (ClipboardDispatchError::Offline, FailureReason::PeerOffline),
+            (
+                ClipboardDispatchError::LocalPolicyExceeded("too big".into()),
+                FailureReason::FileTooLarge,
+            ),
+            (
+                ClipboardDispatchError::PeerRejected("bad header".into()),
+                FailureReason::NetworkError,
+            ),
+            (
+                ClipboardDispatchError::Io("broken pipe".into()),
+                FailureReason::NetworkError,
+            ),
+            (
+                ClipboardDispatchError::Internal("boom".into()),
+                FailureReason::Unknown,
+            ),
+        ] {
+            assert_eq!(map_dispatch_error_to_failure_reason(&err), expected);
+        }
     }
 }

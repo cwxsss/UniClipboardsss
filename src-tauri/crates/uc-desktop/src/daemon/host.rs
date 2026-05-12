@@ -84,7 +84,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
             background,
             storage_paths,
             config: _config,
-        } = crate::bootstrap::build_process_runtime()?;
+        } = crate::bootstrap::build_process_runtime().await?;
 
         let event_emitter: Arc<dyn uc_application::facade::HostEventEmitterPort> =
             Arc::new(uc_bootstrap::LoggingHostEventEmitter);

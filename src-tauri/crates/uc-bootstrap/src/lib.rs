@@ -5,6 +5,7 @@
 //! All entry points (GUI, CLI, daemon) depend on uc-bootstrap
 //! for dependency wiring and initialization.
 
+pub mod analytics;
 pub mod assembly;
 pub mod background_tasks;
 pub mod builders;
@@ -20,6 +21,12 @@ pub mod tracing;
 
 pub use task_registry::TaskRegistry;
 
+// Slice 6 / Issue #549 — composition-root analytics 装配入口。
+// 详见模块 doc。`build_core` 在 `wire_dependencies` 之后调用一次。
+// `build_analytics_sink` 在 `wire_dependencies` 内被 AppDeps 构造点调用，
+// 装配 GatedAnalyticsSink 包装的 dev/release sink。
+pub use analytics::{build_analytics_sink, compose_event_context};
+
 // Re-export primary public items
 pub use assembly::{
     build_clipboard_write_coordinator, get_storage_paths, resolve_pairing_device_name,
@@ -27,8 +34,8 @@ pub use assembly::{
 };
 pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{
-    build_cli_context, build_cli_context_with_profile, build_daemon_lifecycle,
-    build_slice1_cli_context, CliBootstrapContext, DaemonLifecycle,
+    build_cli_context, build_cli_context_with_profile, build_cli_wiring_context,
+    build_daemon_lifecycle, build_slice1_cli_context, CliBootstrapContext, DaemonLifecycle,
 };
 pub use config::load_config;
 pub use init::{

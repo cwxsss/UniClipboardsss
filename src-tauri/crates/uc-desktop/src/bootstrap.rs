@@ -19,7 +19,7 @@
 use uc_application::facade::AppPaths;
 use uc_bootstrap::assembly::{get_storage_paths, wire_dependencies, WiredDependencies};
 use uc_bootstrap::tracing::install_panic_logging_hook;
-use uc_bootstrap::{init_tracing_subscriber, BackgroundRuntimeDeps};
+use uc_bootstrap::{compose_event_context, init_tracing_subscriber, BackgroundRuntimeDeps};
 use uc_core::config::AppConfig;
 
 /// 进程级运行时装配的全部输出。Caller 从中:
@@ -50,6 +50,12 @@ pub struct ProcessRuntimeContext {
 /// 4. 通过 [`wire_dependencies`] 组装 `WiredDependencies` /
 ///    `BackgroundRuntimeDeps`
 /// 5. 解析 `AppPaths`
+/// 6. 装配并注册进程级 product analytics `EventContext`
+///
+/// ## Async
+///
+/// Slice 6 / Issue #549 起本函数转 async：注册 `EventContext` 需要读
+/// `member_repo` / `setup_status` 这两个 async port。
 ///
 /// daemon-lifecycle 资源（iroh node / space_setup / HTTP server / LAN
 /// listener / PID 文件）**不在这里**装——它们走
@@ -58,7 +64,7 @@ pub struct ProcessRuntimeContext {
 ///
 /// GUI 进程的托盘、pairing 推进、quick panel 等 Tauri/AppKit 特定的事情
 /// 也不在这里——交给各自的 shell crate（`uc-tauri::run` 等）。
-pub fn build_process_runtime() -> anyhow::Result<ProcessRuntimeContext> {
+pub async fn build_process_runtime() -> anyhow::Result<ProcessRuntimeContext> {
     // Idempotent — safe to call multiple times.
     init_tracing_subscriber()?;
     // Mirror panic events into jsonl(target = "panic"). Must be installed
@@ -70,6 +76,16 @@ pub fn build_process_runtime() -> anyhow::Result<ProcessRuntimeContext> {
     let (wired, background) = wire_dependencies(&config)
         .map_err(|e| anyhow::anyhow!("Dependency wiring failed: {}", e))?;
     let storage_paths = get_storage_paths(&config)?;
+
+    // 注册进程级 product analytics `EventContext`。失败不阻断启动 —— 错误
+    // 已在 `compose_event_context` 内 warn-log（见 `uc-bootstrap::analytics`
+    // 模块文档"失败语义"）。这里再 warn 一行让启动日志可追溯。
+    if let Err(err) = compose_event_context(&wired.deps, &storage_paths).await {
+        tracing::warn!(
+            error = %err,
+            "analytics: 进程启动期 compose_event_context 失败，本次进程内事件 sink 将拿不到 EventContext 快照"
+        );
+    }
 
     Ok(ProcessRuntimeContext {
         wired,

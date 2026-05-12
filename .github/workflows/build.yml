@@ -181,6 +181,7 @@ jobs:
           # see "阶段 2" decision in the dependency-prune branch discussion.
           # Empty secret = backend Sentry disabled.
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          POSTHOG_PROJECT_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
           APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
           # Frontend sourcemap upload via @sentry/vite-plugin during vite build.
           # VITE_SENTRY_PROJECT is the front-end Sentry project slug — MUST be
@@ -209,6 +210,7 @@ jobs:
           VITE_APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
           # Backend Sentry DSN — independent Rust project DSN.
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          POSTHOG_PROJECT_KEY: ${{ secrets.POSTHOG_PROJECT_KEY }}
           APP_ENV: ${{ steps.resolve-env.outputs.app_env }}
           # Frontend sourcemap upload via @sentry/vite-plugin during vite build.
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}

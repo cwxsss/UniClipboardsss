@@ -25,6 +25,7 @@ use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::ports::*;
 use uc_core::ports::{MobileDeviceRepositoryPort, MobileSyncEndpointInfoPort};
 use uc_core::MemberRepositoryPort;
+use uc_observability::analytics::AnalyticsPort;
 
 /// Clipboard-domain ports bundle.
 /// 剪贴板领域端口组。
@@ -160,6 +161,11 @@ pub struct AppDeps {
     /// 升级游标端口：持久化"上次运行的应用版本"。
     /// 由 `UpgradeFacade::detect_on_startup` 在启动期读取并比较。
     pub app_version_state: Arc<dyn AppVersionStatePort>,
+    /// 首次同步事件去重端口：持久化"是否已 fire 过 `first_clipboard_sync_*` /
+    /// `first_file_sync_succeeded`"flag。outbound `dispatch_entry` 在 fan-out
+    /// 每个 peer 的 spawn 内 mark + 条件 fire；race 防护由 port impl 内部
+    /// `tokio::sync::Mutex` 守护，调用方只关心 `Ok(true)` 才 fire。
+    pub first_sync_state: Arc<dyn FirstSyncStatePort>,
     /// Storage-domain ports / 存储领域端口
     pub storage: StoragePorts,
     /// Settings (cross-cutting) / 设置（横切关注）
@@ -170,4 +176,11 @@ pub struct AppDeps {
     pub search: SearchPorts,
     /// Mobile-sync 领域端口 / Mobile sync domain ports.
     pub mobile_sync: MobileSyncPorts,
+    /// 产品 telemetry 上报 sink（横切关注点）。
+    ///
+    /// bootstrap 装配时用 [`uc_observability::analytics::GatedAnalyticsSink`]
+    /// 包一层真实 sink（dev=`StdoutSink`、release=`NoopAnalyticsSink`，未来
+    /// 接 `PosthogSink`），调用方只需 `analytics.capture(event)`，不必自己
+    /// 查 `usage_analytics_enabled`——wrapper 内部已 atomic 守卫。
+    pub analytics: Arc<dyn AnalyticsPort>,
 }
