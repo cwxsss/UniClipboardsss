@@ -16,6 +16,7 @@
 //! `Connection::closed` watchdog. Failures are surfaced through
 //! `tracing::warn!` so ops still sees them.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,9 +34,9 @@ use uc_core::setup::SetupStatus;
 
 use crate::facade::space_setup::commands::{
     CurrentInvitation, InitializeSpaceCommand, InitializeSpaceInput, InitializeSpaceResult,
-    IssuePairingInvitationResult, MigrationPhaseKind, MigrationProgress, SetupStateView,
-    SwitchSpaceCommand, SwitchSpaceInput, SwitchSpaceResult, UnlockSpaceCommand, UnlockSpaceInput,
-    UnlockSpaceResult,
+    IssuePairingInvitationResult, MigrationPhaseKind, MigrationProgress,
+    PairingInvitationAddressCandidate, SetupStateView, SwitchSpaceCommand, SwitchSpaceInput,
+    SwitchSpaceResult, UnlockSpaceCommand, UnlockSpaceInput, UnlockSpaceResult,
 };
 use crate::facade::space_setup::commands::{
     RedeemPairingInvitationCommand, RedeemPairingInvitationInput, RedeemPairingInvitationResult,
@@ -137,6 +138,8 @@ impl SpaceSetupFacade {
             settings,
             clock,
             pairing_invitation,
+            pairing_invitation_addresses,
+            pairing_invitation_by_address,
             pairing_session,
             pairing_events,
             proof_port,
@@ -184,6 +187,8 @@ impl SpaceSetupFacade {
         ));
         let issue_pairing_invitation = Arc::new(IssuePairingInvitationUseCase::new(
             Arc::clone(&pairing_invitation),
+            pairing_invitation_addresses,
+            pairing_invitation_by_address,
             Arc::clone(&device_identity),
             Arc::clone(&clock),
             Arc::clone(&invitation_holder),
@@ -213,10 +218,12 @@ impl SpaceSetupFacade {
         // original is moved into the inbound orchestrator below.
         let local_device_id_for_facade = local_device_id.clone();
         // Handshake TTL：sponsor 侧从 begin 到 confirm/reject 的 watchdog
-        // （P7g），joiner 侧每次 recv 的 timeout（P7h）。60s 对齐 legacy
-        // setup orchestrator 的默认值；足够覆盖一次人工口令输入 + 网络
-        // 抖动，又不会让掉线的会话无限期占坑。
-        let handshake_ttl = Duration::from_secs(60);
+        // （P7g），joiner 侧每次 recv 的 timeout（P7h）。180s 是为
+        // Tailscale DERP relay 这种跨区中继路径预留的容差 —— 跨洋 DERP
+        // RTT 300–800ms 叠 iroh 多 path 协商抖动，60s 不够喂完 4 条
+        // 握手消息（实测 #486 复测 13:02 那次 sponsor accept_bi 卡 23s
+        // 又 read_exact 卡 34s，joiner 60s TTL 先到 abort）。
+        let handshake_ttl = Duration::from_secs(180);
         // admit/trust 两侧都要用 —— sponsor orchestrator 把 joiner 登记
         // 进本机；joiner use case 把 sponsor 登记进本机。构造一次 Arc
         // 共享即可，不给一边复制一边。
@@ -480,6 +487,25 @@ impl SpaceSetupFacade {
         self.issue_pairing_invitation.execute().await
     }
 
+    /// 按指定本机地址签发配对邀请。
+    #[instrument(skip_all, fields(selected_ip = %selected_ip))]
+    pub async fn issue_pairing_invitation_for_address(
+        &self,
+        selected_ip: IpAddr,
+    ) -> Result<IssuePairingInvitationResult, IssuePairingInvitationError> {
+        self.issue_pairing_invitation
+            .execute_for_address(selected_ip)
+            .await
+    }
+
+    /// 列出当前可用于签发配对邀请的本机地址。
+    #[instrument(skip_all)]
+    pub async fn list_pairing_invitation_addresses(
+        &self,
+    ) -> Result<Vec<PairingInvitationAddressCandidate>, IssuePairingInvitationError> {
+        self.issue_pairing_invitation.list_addresses().await
+    }
+
     /// B2 · Redeem a sponsor-issued invitation (joiner side).
     ///
     /// Primes presence before dialing because, unlike A1/A2, the joiner's
@@ -713,7 +739,8 @@ mod tests {
         SessionError,
     };
     use uc_core::ports::pairing_invitation::{
-        ConsumeInvitationError, InvitationError, IssuedInvitation, PairingInvitationPort,
+        ConsumeInvitationError, InvitationError, IssuedInvitation,
+        PairingInvitationAddressQueryPort, PairingInvitationByAddressPort, PairingInvitationPort,
     };
     use uc_core::ports::space::{ProofPort, SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
@@ -917,6 +944,25 @@ mod tests {
         ) -> Result<(), ConsumeInvitationError> {
             // Smoke tests don't exercise P7e inbound path.
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PairingInvitationAddressQueryPort for FakeInvitationPort {
+        async fn list_invitation_addresses(
+            &self,
+        ) -> Result<Vec<PairingInvitationAddressCandidate>, InvitationError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[async_trait]
+    impl PairingInvitationByAddressPort for FakeInvitationPort {
+        async fn issue_invitation_for_address(
+            &self,
+            _selected_ip: IpAddr,
+        ) -> Result<IssuedInvitation, InvitationError> {
+            self.issue_invitation().await
         }
     }
 
@@ -1262,6 +1308,8 @@ mod tests {
             settings,
             clock: Arc::new(FixedClock(0)),
             pairing_invitation: pairing_invitation.clone(),
+            pairing_invitation_addresses: pairing_invitation.clone(),
+            pairing_invitation_by_address: pairing_invitation.clone(),
             pairing_session: Arc::new(NoopSessionPort),
             pairing_events: Arc::new(IdleEventPort::new()),
             proof_port: Arc::new(NoopProofPort),

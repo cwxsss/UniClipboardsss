@@ -17,8 +17,6 @@
 //! [`install_presence`]: IrohNodeBuilder::install_presence
 //! [`install_clipboard`]: IrohNodeBuilder::install_clipboard
 
-use std::borrow::Cow;
-use std::net::IpAddr;
 #[cfg(not(any(test, feature = "test-util")))]
 use std::sync::OnceLock;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -35,7 +33,9 @@ use uc_core::file_transfer::OutboundProgressReporterPort;
 use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::blob::BlobTransferPort;
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
-use uc_core::ports::pairing_invitation::PairingInvitationPort;
+use uc_core::ports::pairing_invitation::{
+    PairingInvitationAddressQueryPort, PairingInvitationByAddressPort, PairingInvitationPort,
+};
 use uc_core::ports::security::IdentityFingerprintFactoryPort;
 use uc_core::ports::{
     ClipboardDispatchPort, ClipboardReceiverPort, ClockPort, ConnectionChannelPort,
@@ -45,6 +45,7 @@ use uc_core::ports::{
 use crate::pairing::{IrohPairingSessionAdapter, PAIRING_ALPN};
 use crate::rendezvous::{RendezvousClient, RendezvousPairingInvitationAdapter};
 
+use super::addr_filter::apply_addr_filter;
 use super::blobs::{IrohBlobTransferAdapter, BLOBS_ALPN};
 use super::clipboard_dispatch_adapter::{IrohClipboardDispatchAdapter, CLIPBOARD_ALPN};
 use super::clipboard_receiver_adapter::IrohClipboardReceiverAdapter;
@@ -55,17 +56,25 @@ use super::transfer_progress_adapter::{
     InboundProgressEvent, IrohTransferProgressAdapter, TRANSFER_PROGRESS_ALPN,
 };
 
-/// The three pairing ports produced by [`IrohNodeBuilder::install_pairing`].
+/// The pairing ports produced by [`IrohNodeBuilder::install_pairing`].
 ///
 /// `session` and `events` share the same underlying
 /// [`IrohPairingSessionAdapter`] — both trait objects point at one Arc so
 /// sponsor-side inbound events and the outbound dial/send path use the same
-/// session map. `invitation` is the rendezvous HTTP adapter, which talks to
-/// the same endpoint (its ticket = the endpoint's own [`iroh::EndpointAddr`]).
+/// session map. `invitation`, `invitation_addresses`, and
+/// `invitation_by_address` are three trait-object views over a single
+/// rendezvous HTTP adapter (they read the same endpoint's
+/// [`iroh::EndpointAddr`] — the split is purely a port-surface CQS
+/// concern, not a runtime cost).
 pub struct PairingHandlers {
     pub session: Arc<dyn PairingSessionPort>,
     pub events: Arc<dyn PairingEventPort>,
     pub invitation: Arc<dyn PairingInvitationPort>,
+    pub invitation_addresses: Arc<dyn PairingInvitationAddressQueryPort>,
+    /// Dev-only: issue an invitation pinned to a single local IP. Not
+    /// part of the standard sponsor lifecycle — wired into the CLI's
+    /// hidden `dev pairing` subcommand for multi-NIC diagnosis.
+    pub invitation_by_address: Arc<dyn PairingInvitationByAddressPort>,
 }
 
 /// The two clipboard ports produced by [`IrohNodeBuilder::install_clipboard`].
@@ -310,99 +319,6 @@ fn build_transport_config() -> QuicTransportConfig {
         .build()
 }
 
-/// IP-range predicate that flags well-known *virtual* NIC addresses we don't
-/// want propagated as direct-address candidates.
-///
-/// Two filter classes:
-///
-/// **Always filtered (no escape hatch — `allow_overlay = true` does NOT keep these):**
-/// * `198.18.0.0/15` — the default Clash fake-ip pool. Observed concretely
-///   on this user's macOS box where Clash assigns `198.18.0.1` to its TUN
-///   interface; iroh's magicsock then publishes that to the peer, the peer
-///   races it against the real LAN candidate, and the TUN path occasionally
-///   wins because its local stack ACKs faster than the real LAN. No legitimate
-///   cross-host use case.
-/// * `169.254.0.0/16` — IPv4 link-local autoconf. Only meaningful on the
-///   originating host; useless as a candidate for a remote peer.
-///
-/// **Overlay-network class (filtered only when `allow_overlay = false`):**
-/// * `100.64.0.0/10` — CGNAT / Tailscale default IPv4 range. Tailscale
-///   advertises a 100.x address that's only routable inside the same tailnet;
-///   when peers are not in the same tailnet, this is a dead candidate that
-///   wastes path-validation budget. Power users running both peers inside one
-///   tailnet may opt in via `Settings.network.allow_overlay_network_addrs`.
-/// * `fd7a:115c:a1e0::/48` — Tailscale IPv6 ULA. Same shape of bug as the
-///   IPv4 100.x case; same opt-in semantics.
-fn is_virtual_nic_ip(ip: IpAddr, allow_overlay: bool) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            // Always-filtered classes:
-            if (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15 (Clash fake-ip)
-                || (o[0] == 169 && o[1] == 254)
-            // 169.254.0.0/16 (IPv4 link-local)
-            {
-                return true;
-            }
-            // Overlay class (CGNAT / Tailscale 100.64.0.0/10):
-            if !allow_overlay && o[0] == 100 && (o[1] & 0xc0) == 64 {
-                return true;
-            }
-            false
-        }
-        IpAddr::V6(v6) => {
-            // Tailscale IPv6 ULA `fd7a:115c:a1e0::/48` — overlay class.
-            // Match on the first three 16-bit segments (high 48 bits).
-            let segs = v6.segments();
-            if !allow_overlay && segs[0] == 0xfd7a && segs[1] == 0x115c && segs[2] == 0xa1e0 {
-                return true;
-            }
-            false
-        }
-    }
-}
-
-/// Pure filter logic — given a candidate set, return what to publish.
-///
-/// Extracted from [`build_addr_filter`] so it is unit-testable without
-/// reaching into the iroh `AddrFilter` wrapper (the wrapper is opaque from
-/// outside the crate and offers no introspection).
-fn apply_addr_filter<'a>(
-    addrs: &'a Vec<TransportAddr>,
-    allow_overlay: bool,
-) -> Cow<'a, Vec<TransportAddr>> {
-    let any_virtual = addrs.iter().any(|a| match a {
-        TransportAddr::Ip(s) => is_virtual_nic_ip(s.ip(), allow_overlay),
-        _ => false,
-    });
-    if !any_virtual {
-        return Cow::Borrowed(addrs);
-    }
-    let kept: Vec<TransportAddr> = addrs
-        .iter()
-        .filter(|a| match a {
-            TransportAddr::Ip(s) => !is_virtual_nic_ip(s.ip(), allow_overlay),
-            _ => true,
-        })
-        .cloned()
-        .collect();
-    let dropped: Vec<String> = addrs
-        .iter()
-        .filter_map(|a| match a {
-            TransportAddr::Ip(s) if is_virtual_nic_ip(s.ip(), allow_overlay) => Some(s.to_string()),
-            _ => None,
-        })
-        .collect();
-    debug!(
-        target: "iroh.addr_filter",
-        allow_overlay,
-        dropped_count = dropped.len(),
-        dropped = ?dropped,
-        "filtered virtual-NIC addresses from candidate set",
-    );
-    Cow::Owned(kept)
-}
-
 /// Build the `AddrFilter` we hand to `Endpoint::builder().addr_filter(...)`.
 /// The filter is applied at the `AddressLookupServices` layer (see
 /// iroh#3960 / #4010), upstream of every individual lookup service, so a
@@ -605,18 +521,23 @@ impl IrohNodeBuilder {
         let builder = adapter.install_handler(builder);
         self.router_builder = Some(builder);
 
-        let invitation: Arc<dyn PairingInvitationPort> =
-            Arc::new(RendezvousPairingInvitationAdapter::new(
-                Arc::clone(&self.endpoint),
-                device_identity,
-                settings,
-                rendezvous,
-            ));
+        let invitation_adapter = Arc::new(RendezvousPairingInvitationAdapter::new(
+            Arc::clone(&self.endpoint),
+            device_identity,
+            settings,
+            rendezvous,
+        ));
+        let invitation: Arc<dyn PairingInvitationPort> = invitation_adapter.clone();
+        let invitation_addresses: Arc<dyn PairingInvitationAddressQueryPort> =
+            invitation_adapter.clone();
+        let invitation_by_address: Arc<dyn PairingInvitationByAddressPort> = invitation_adapter;
 
         PairingHandlers {
             session: adapter.clone(),
             events: adapter,
             invitation,
+            invitation_addresses,
+            invitation_by_address,
         }
     }
 
@@ -899,6 +820,7 @@ pub enum IrohNodeError {
 
 #[cfg(test)]
 mod tests {
+    use super::super::addr_filter::is_virtual_nic_ip;
     use super::*;
 
     use std::collections::HashMap;
@@ -1207,7 +1129,7 @@ mod tests {
     // is_virtual_nic_ip / build_addr_filter unit tests
     // ──────────────────────────────────────────────────────────────────
 
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
     fn v4(ip: &str) -> IpAddr {

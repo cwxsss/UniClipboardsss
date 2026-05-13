@@ -142,6 +142,14 @@ pub(crate) async fn issue_invitation(
             E::ServiceUnavailable => {
                 ApiError::service_unavailable("pairing invitation service unavailable")
             }
+            // `AddressNotAvailable` is only emitted by the dev-only
+            // `issue_pairing_invitation_for_address` path. The webserver
+            // never calls that path; collapse to Internal so a future
+            // regression surfaces in logs instead of being silently
+            // mapped to a misleading 400.
+            E::AddressNotAvailable(ip) => ApiError::internal(format!(
+                "unexpected AddressNotAvailable({ip}) on default path"
+            )),
             E::Internal(msg) => ApiError::internal(msg),
         }
     })?;
