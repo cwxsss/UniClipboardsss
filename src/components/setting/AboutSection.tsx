@@ -66,12 +66,16 @@ const AboutSection: React.FC = () => {
     useUpdate()
   const [appVersion, setAppVersion] = useState<string>('')
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(setting?.general.autoCheckUpdate ?? true)
+  const [autoDownloadUpdate, setAutoDownloadUpdate] = useState(
+    setting?.general.autoDownloadUpdate ?? false
+  )
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel | null>(null)
   const [pendingUpdateChannel, setPendingUpdateChannel] = useState<UpdateChannel | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [alphaWarningOpen, setAlphaWarningOpen] = useState(false)
   const [saving, setSaving] = useState(false)
-  const isInstallingUpdate = downloadProgress.phase !== 'idle'
+  const isInstallingUpdate =
+    downloadProgress.phase === 'downloading' || downloadProgress.phase === 'installing'
   const isBusy = settingLoading || saving
   useShortcutLayer({
     layer: 'modal',
@@ -94,6 +98,11 @@ const AboutSection: React.FC = () => {
 
   useEffect(() => {
     if (!setting?.general) return
+    setAutoDownloadUpdate(setting.general.autoDownloadUpdate)
+  }, [setting])
+
+  useEffect(() => {
+    if (!setting?.general) return
     setUpdateChannel(setting.general.updateChannel ?? null)
   }, [setting])
 
@@ -106,6 +115,20 @@ const AboutSection: React.FC = () => {
     } catch (error) {
       log.error({ err: error }, '更改自动检查更新状态失败')
       setAutoCheckUpdate(previous)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleAutoDownloadUpdateChange = async (checked: boolean) => {
+    const previous = autoDownloadUpdate
+    try {
+      setSaving(true)
+      setAutoDownloadUpdate(checked)
+      await updateGeneralSetting({ autoDownloadUpdate: checked })
+    } catch (error) {
+      log.error({ err: error }, '更改自动下载更新状态失败')
+      setAutoDownloadUpdate(previous)
     } finally {
       setSaving(false)
     }
@@ -246,6 +269,21 @@ const AboutSection: React.FC = () => {
         </SettingRow>
 
         <SettingRow
+          label={t('settings.sections.about.autoDownloadUpdate.label')}
+          description={
+            autoCheckUpdate
+              ? t('settings.sections.about.autoDownloadUpdate.description')
+              : t('settings.sections.about.autoDownloadUpdate.disabledHint')
+          }
+        >
+          <Switch
+            checked={autoDownloadUpdate && autoCheckUpdate}
+            onCheckedChange={handleAutoDownloadUpdateChange}
+            disabled={isBusy || !autoCheckUpdate}
+          />
+        </SettingRow>
+
+        <SettingRow
           label={t('settings.sections.about.updateChannel.label')}
           description={t('settings.sections.about.updateChannel.description')}
         >
@@ -326,7 +364,8 @@ const AboutSection: React.FC = () => {
                     <ReleaseNotes content={updateInfo?.body ?? ''} fallback={t('update.noNotes')} />
                   </div>
                 </div>
-                {downloadProgress.phase !== 'idle' && (
+                {(downloadProgress.phase === 'downloading' ||
+                  downloadProgress.phase === 'installing') && (
                   <div className="space-y-2 pt-2">
                     <div className="flex justify-between text-xs text-muted-foreground">
                       <span>
