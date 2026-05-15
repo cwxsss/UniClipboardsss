@@ -287,6 +287,13 @@ pub enum LatencyBucket {
 | `first_clipboard_sync_attempted` | 首次同步发起 | `direction`: `outbound` \| `inbound` |
 | `first_clipboard_sync_succeeded` | 首次同步对端确认 | `direction`, `peer_os`, `transport_type`, `duration_ms` |
 | `first_file_sync_succeeded` | 文件传输已支持时首次成功 | `peer_os`, `transport_type`, `payload_size_bucket` |
+| `setup_completed` | A1 第 7 步 `SetupStatus.has_completed = true` 落地之后 | `has_paired_in_same_flow`: bool, `duration_ms_since_setup_started`: Option&lt;u32&gt;（None 不上 wire） |
+| `space_unlocked` | A2 `unlock_space.execute` 成功分支（每次 daemon 重启的可靠性 anchor） | （仅 EventContext） |
+| `space_unlock_failed` | A2 `unlock_space.execute` 失败分支；pre-condition `SetupNotCompleted` **不** 上报（不属于"用户能不能继续用产品"语义） | `failure_reason`: `UnlockFailureReason`（见 §7.5） |
+| `clipboard_entry_captured` | `clipboard_capture::execute_with_origin` 成功路径，按 `origin` 严格过滤 | `origin`: `system_watcher` \| `manual_restore`, `payload_type`, `payload_size_bucket` |
+
+**`clipboard_entry_captured` 红线**：`ClipboardChangeOrigin::RemotePush`（入站同步写本地剪贴板）**禁止** emit，否则会与入站事件双计、污染 DAU。
+mapping：`LocalCapture` → `system_watcher`；`LocalRestore` → `manual_restore`（当前路径在 use case 入口短路 return None，实际不会触发，留 mapping 以便未来扩展）；`RemotePush` → 不 emit。
 
 ### 7.2 Reliability
 
@@ -429,6 +436,20 @@ pub enum PairingFailureReason {
 分析能直接定位漏点的具体业务原因。`Internal` 占比同样应监控——高于 5%
 说明本机持久化层不稳定。
 
+### 7.5 UnlockFailureReason 枚举（space_unlock_failed 专用）
+
+```rust
+pub enum UnlockFailureReason {
+    PassphraseMismatch,   // 口令错
+    KeyringUnavailable,   // 系统 keyring 不可访问（保留枚举槽位，当前无独立 SpaceAccessError 变体；走 Internal 兜底）
+    KeyslotCorrupted,     // keyslot 解析 / 版本故障
+    SpaceNotFound,        // 当前 profile 没有可解锁的 space（adapter 报 NotInitialized）
+    Internal,             // 兜底：setup_status 读取失败、未分类的 SpaceAccessError 等
+}
+```
+
+mapping：`SpaceAccessError::WrongPassphrase` → `PassphraseMismatch`；`NotInitialized` → `SpaceNotFound`；`CorruptedKeyMaterial` → `KeyslotCorrupted`；其它（`Internal` / 未分类）→ `Internal`。pre-condition 失败 `SetupNotCompleted` **不** emit（语义不属于"用户能不能继续用产品"）。`Internal` 占比 > 5% 视为本机持久化层不稳定，按 §7.3 末尾原则专门排查。
+
 ## 8. Schema 演化策略
 
 | 变更类型 | 处理方式 |
@@ -515,7 +536,35 @@ Content-Type: application/json
   "api_key": "phc_xxx",
   "event": "<event_name>",
   "distinct_id": "<anonymous_user_id>",
-  "properties": { ...EventContext + event-specific 字段 },
+  "properties": {
+    // §4 EventContext 字段（vendor-neutral，schema 单一真相源）
+    "anonymous_user_id": "...",
+    "analytics_device_id": "...",
+    "session_id": "...",
+    "app_version": "...",
+    "app_channel": "...",
+    "os": "...",
+    "os_version": "...",
+    "arch": "...",
+    "locale": "...",
+    "timezone": "...",
+    "install_source": "...",
+    "is_first_run": true,
+    "active_device_count": 2,
+    "space_id_hash": "...",
+
+    // event-specific 字段
+    "<event 自身 properties>": "...",
+
+    // PostHog 标准 $-prefix 字段（仅 PosthogSink 注入，详见 §10.1 字段映射）
+    "$device_id": "<analytics_device_id>",
+    "$session_id": "<session_id>",
+    "$lib": "uniclipboard-rust",
+    "$lib_version": "<app_version>",
+    "$geoip_disable": true,
+    "$set": { "app_version": "...", "os": "...", "active_device_count": 2, ... },
+    "$set_once": { "initial_app_version": "...", "initial_install_source": "...", ... }
+  },
   "timestamp": "2026-05-09T12:34:56+00:00"
 }
 ```
@@ -523,6 +572,60 @@ Content-Type: application/json
 US ingestion endpoint 是 §10 决策第 4 项的 2026-05-09 实际注册区域。
 切 EU 或 self-host 实例只换 endpoint URL（`PosthogSink::with_endpoint`
 是测试 / 后续迁移入口），事件 wire 形态零改动。
+
+#### PostHog 标准 `$`-prefix 字段映射
+
+PostHog 服务端识别带 `$` 前缀的 property 解锁三类能力：Person ↔ Device /
+Session funnel & Replay、按客户端来源过滤、按 Person 维度切片。自写
+HTTP client 没有 SDK 自动注入，需要在 `PosthogSink::build_capture_body`
+手动构造。
+
+**重要分层约束**：`$`-prefix 字段 **只在 PosthogSink 内部注入**，
+`build_event_payload`（vendor-neutral 共享层）以及 §4 `EventContext`
+**绝不** 感知它们。后续切 self-host PostHog 仍走原 wire 形态；切别的
+后端（Mixpanel / 自建）只需在新 sink 里写一份等价的字段翻译，§3 ~ §9
+schema 不动。
+
+字段映射表：
+
+| PostHog 字段 | 来源 | 解锁能力 |
+|---|---|---|
+| `$device_id` | `analytics_device_id` | Person ↔ Device 关联，控制台按设备维度切片 |
+| `$session_id` | `session_id` | Session funnel、未来接 Session Replay |
+| `$lib` | 固定 `"uniclipboard-rust"` | 控制台按客户端来源过滤流量 |
+| `$lib_version` | `app_version` | 同上，按版本过滤 |
+| `$geoip_disable` | 固定 `true` | 见下方"`disable_geoip` 等价语义" |
+| `$set` | EventContext 中 9 个"可变当前状态"字段 | Person Properties 当前快照 |
+| `$set_once` | 4 个"安装期不变量" → `initial_*` 前缀 | Person 首次出现时写入，捕获迁移信号 |
+
+**`$set` 与 `$set_once` 的拆分理由**：PostHog 控制台"按 person 切片"
+（如"macOS 用户的留存"）读的是 Person Property，**不是** event property。
+若所有字段都平铺在 event property，按 person 维度查询要在每个事件
+property 上做 distinct/聚合，慢且贵。
+
+- `$set`：每事件覆盖，PostHog 端 person profile 永远反映最近一条事件
+  的快照。放可变字段：`app_version` / `app_channel` / `os` / `os_version`
+  / `arch` / `locale` / `timezone` / `active_device_count` / `space_id_hash`。
+- `$set_once`：仅 person 首次出现时写入，后续被服务端忽略。放安装期
+  不变量：`initial_app_version` / `initial_app_channel` / `initial_os` /
+  `initial_install_source`。
+
+dashboard 上可同时看到 `$set.os` vs `$set_once.initial_os`，捕获跨平台
+迁移信号。
+
+**`$set` 不接受 `null`**：PostHog 把 property `null` 当显式清空指令，
+会把已有 person property 抹掉。`space_id_hash` 等 optional 字段在源头为
+`None` 时，`build_set_snapshot` 直接跳过该 key 而非写入 `null`。
+
+**Flat-name 字段同时保留**：`anonymous_user_id` / `analytics_device_id` /
+`session_id` / `app_version` 等仍在 properties 顶层。理由——
+(1) §4 已是 wire 契约，删字段破坏向后兼容；
+(2) StdoutSink 输出复用同一个 payload，flat 形态人类更易读；
+(3) `$`-prefix 字段是非破坏性扩展，wire 膨胀 ~200 字节，schema doc §10
+免费额度内可忽略。
+
+后续迁移决策（>1k 用户后）：若 ingestion 量成为问题，可在 PosthogSink
+内单独优化，仍不动 §4。
 
 #### HTTP client 选择
 
@@ -560,12 +663,19 @@ v1 **不挂** 进程退出 flush 钩子。理由：
 #### `disable_geoip` 等价语义（IP 字段处理）
 
 §6.1 明确"客户端原始 IP 永不上传"。posthog-rs SDK 提供 `disable_geoip`
-配置项；自写 client 通过更直接的方式实现等价契约——**永不主动 inject
-IP-derived 字段**。PostHog 服务端的 geoip 是基于请求 IP 推断的，request
-本身从客户端发出时不会附带 user IP（reqwest 默认行为），服务端推断的
-geoip 字段会以 `$geoip_*` property 形式出现。若后续控制台发现这些字段
-仍按请求 IP 落地理位置，可在 `properties` 显式置 `"$geoip_disable": true`
-兜底。
+配置项；自写 client 通过两道防线实现等价契约：
+
+1. **不主动 inject IP-derived 字段**——request 从客户端发出时不附带
+   user IP（reqwest 默认行为），客户端代码也从未读取或上报本机 IP。
+2. **每条事件 `properties` 默认置 `"$geoip_disable": true`**——
+   `inject_posthog_standard_fields` 无条件写入。PostHog 服务端的
+   GeoIP 推断基于请求 TCP 源 IP，若不显式关闭会反推
+   `$geoip_country` / `$geoip_city` 并落到 person property，与
+   §6.1 契约直接冲突。
+
+两道防线缺一不可：第 1 道防止"客户端主动泄露 IP 衍生字段"，第 2 道
+防止"服务端按请求 IP 反推地理位置"。`build_capture_body_disables_geoip_by_default`
+单测守住第 2 道防线在所有事件上生效。
 
 #### CI secret 注入（待 7b-4 落地）
 
@@ -591,5 +701,135 @@ build 时间注入的 secret 列表。CI 注入位置（计划）：
 - [x] `AnalyticsPort` trait 定义，入参用本文件的事件类型。
 - [x] `analytics_gate` 模块实现（与 `telemetry_gate` 对称）。
 - [x] 配置目录中 `installation_id` / `analytics_device_id` 持久化逻辑落地（纯模块层，bootstrap 拼装在后续 slice）。
-- [ ] settings UI 拆分两个开关并补齐文案。
-- [ ] dev 构建下事件 stdout 打印通路。
+- [x] settings UI 拆分两个开关并补齐文案（`src/components/setting/GeneralSection.tsx` 两个独立 toggle）。
+- [x] dev 构建下事件 stdout 打印通路（`uc-bootstrap/src/analytics.rs`：`cfg!(debug_assertions)` 下接 `Gated(StdoutSink)`）。
+
+## 12. 未来事件 roadmap（post-v1 实施计划）
+
+本节列出 **已识别但尚未实施** 的事件埋点。每项按"业务价值 × 实施成本 × 漏斗 anchor 缺口"分级。每个事件标注：触发位置（use case 文件 path）、properties schema、对应漏斗/可回答的产品问题、实施备注（是否需要新增 analytics 依赖 / 新 failure enum）。
+
+§5.3 命名不可变约束在本节同样生效——一旦列入下方表格并落到代码里，事件名 / properties 取值后续不得重命名。
+
+§7.3 末尾的 domain-specific failure enum 原则：每个 domain 的 failure 枚举独立定义（如 `UnlockFailureReason`、`BlobFetchFailureReason`），**禁止** 复用 `FailureReason`（sync 专用）或 `PairingFailureReason`。
+
+### 12.1 P0 — Activation 漏斗 anchor 缺口 + 高频可靠性 ✅ 已落地
+
+**status**: 2026-05-15 落地。事件 schema 已迁入 §7.1，`UnlockFailureReason` 已迁入 §7.5。下表保留作历史与设计回溯，事件本体不再在此节维护。
+
+| 事件名 | 触发位置 | properties | 解决的产品问题 |
+|---|---|---|---|
+| ~~`setup_completed`~~ ✅ | `setup/initialize_space.rs` 第 7 步 `SetupStatus.has_completed = true` 落地之后 | `{ has_paired_in_same_flow: bool, duration_ms_since_setup_started: Option<u32> }` | Activation 漏斗目前缺这个 anchor，无法区分"启动了引导但没走完"vs"走完引导但没配对"两类流失 |
+| ~~`space_unlocked`~~ ✅ | `setup/unlock_space.rs::execute` 成功分支 | （仅 EventContext） | 每次 daemon 重启的可靠性 anchor，对应"用户能不能继续用产品" |
+| ~~`space_unlock_failed`~~ ✅ | `setup/unlock_space.rs::execute` 失败分支（pre-condition `SetupNotCompleted` 不上报） | `{ failure_reason: UnlockFailureReason }` | passphrase 错误率 / keyring 解锁失败率定量化；当前完全黑盒 |
+| ~~`clipboard_entry_captured`~~ ✅ | `clipboard_capture::execute_with_origin` 成功路径，按 `ClipboardChangeOrigin` 严格过滤 `RemotePush` | `{ origin: system_watcher\|manual_restore, payload_type, payload_size_bucket }` | outbound 同步链路的源头流量；回答"每 DAU 平均产生多少条目"+"捕获了 X 条，dispatch 了多少"漏斗 |
+
+落地备注（保留以便回溯）：
+
+- `setup_completed`：`duration_ms_since_setup_started` 用 monotonic `Instant` 测，溢出 u32 时 fallback `None`；A1 路径 `has_paired_in_same_flow` 恒 false。`setup_status.set_status(has_completed=true)` 失败前 **不** emit（测试 `setup_completed_not_emitted_on_failure_before_status_persist` 守住）。
+- `space_unlocked` / `_failed`：`UnlockSpaceUseCase::new` 加 `analytics: Arc<dyn AnalyticsPort>` 入参，bootstrap wiring 在 `facade/space_setup/facade.rs` 补一行 `Arc::clone(&analytics)`。pre-condition `SetupNotCompleted` 短路 **不** emit。
+- `clipboard_entry_captured`：`telemetry_capture_origin` 把 `RemotePush` 映射成 `None`、调用方据此跳过 emit（schema doc §12.1 红线）。`payload_type` 按 file > image > text 优先级推断；`payload_size_bucket` 用 `PayloadSizeBucket::from_bytes(snapshot.total_size_bytes())`。
+
+### 12.2 P1 — 新功能线 + 已埋点二段流程的二段验证
+
+| 事件名 | 触发位置 | properties | 解决的产品问题 |
+|---|---|---|---|
+| `blob_fetch_attempted` | `blob_transfer/fetch_blob.rs::execute` 入口 | `{ payload_size_bucket: PayloadSizeBucket }` | 文件传输实际拉取的 attempted 锚点 |
+| `blob_fetch_succeeded` | `fetch_blob::execute` 成功路径 | `{ payload_size_bucket, fetch_latency_ms: u32 }` | 当前 `sync_succeeded.payload_type=file` 只代表 envelope 投递成功，对端实际把字节拉下来的 P95 / 成功率完全不可见 |
+| `blob_fetch_failed` | `fetch_blob::execute` 失败路径 | `{ payload_size_bucket, failure_reason: BlobFetchFailureReason }` | 同上，区分 iroh 拨号 / 磁盘满 / 完整性校验 |
+| `space_switched` | `setup/switch_space/mod.rs` Phase 4 commit 完成 | `{ duration_ms: u32 }` | 高粘性用户行为信号——只有真在用产品的人才会换空间 |
+| `space_switch_failed` | `switch_space` 任一阶段失败 | `{ failure_phase: MigrationPhase, failure_reason: SwitchSpaceFailureReason }` | 4 阶段迁移的失败分布；诊断价值高 |
+| `mobile_device_registered` | `mobile_sync/register_device.rs::execute` 成功 | （仅 EventContext） | iPhone Shortcut 集成的启用计数；当前 0 信号 |
+| `mobile_clipboard_synced` | `mobile_sync/apply_incoming.rs::execute`（入站 PUT）+ `get_latest_doc::execute`（出站 GET）成功路径 | `{ direction: outbound\|inbound, payload_size_bucket }` | mobile sync 实际使用频率 |
+| `mobile_auth_failed` | `mobile_sync/authenticate_basic.rs::execute` 失败 | `{ failure_kind: MobileAuthFailureKind }` | iPhone 端密码错误率 |
+
+新增枚举：
+
+```rust
+pub enum BlobFetchFailureReason {
+    PeerUnreachable,
+    NetworkError,
+    DigestMismatch,
+    DiskFull,
+    Timeout,
+    Internal,
+    Unknown,
+}
+
+pub enum SwitchSpaceFailureReason {
+    PreparePhase,        // backup 表写入失败
+    HandshakeFailed,     // 与目标 sponsor 握手失败
+    SwapDecryptError,    // 用 migration_key 解密 backup 行失败
+    CommitPersistError,
+    Internal,
+}
+
+pub enum MobileAuthFailureKind {
+    UnknownUser,
+    PasswordMismatch,
+    RateLimited,
+    Internal,
+}
+```
+
+实施备注：
+
+- blob_transfer use case 不持有 analytics，需新加构造参数 + bootstrap wiring。
+- `space_switched` 的 `target_space_id_hash` **不传**，避免与 `EventContext.space_id_hash` 重复。
+- mobile_sync 三件套埋点是独立 PR，避免与桌面同步路径混在一起评审。
+
+### 12.3 P2 — Engagement 与 Retention 信号
+
+| 事件名 | 触发位置 | properties | 解决的产品问题 |
+|---|---|---|---|
+| `clipboard_entry_restored` | `clipboard_restore/restore_selection.rs::execute` 与 `restore_as_plain_text.rs::execute` 成功路径 | `{ mode: full\|plain_text, age_bucket: lt_1h\|1h_to_1d\|1d_to_7d\|gt_7d, payload_type: PayloadType }` | 衡量"历史"功能价值的核心信号——用户会回头翻历史吗、翻多老的 |
+| `search_executed` | `search/search_clipboard_entries.rs::execute` 成功路径 | `{ query_length_bucket, has_filter: bool, result_count_bucket: zero\|1_to_10\|gt_10 }` | 用户找东西的频率 = 是否信任历史的代理指标 |
+| `clipboard_history_cleared` | `clipboard_history/clear_history.rs::execute` 成功 | `{ entry_count_bucket: PayloadSizeBucket 形态的条目数桶 }` | 用户主动清空 = 信任 / 隐私 / 性能担忧的负面信号；接近卸载的相关性高 |
+| `entry_favorited` | `clipboard_history/toggle_favorite.rs::execute` favoriting 分支 | `{ payload_type }` | 互动信号，区分重度用户 vs 浏览者 |
+| `entry_deleted` | `clipboard_history/delete_entry.rs::execute` | `{ payload_type, age_bucket }` | 同上 |
+
+新增 bucket 类型（schema doc §6.3 模式）：
+
+```rust
+pub enum QueryLengthBucket { Lt8, Range8To16, Gt16 }   // 复用 NameLengthBucket 形态
+pub enum ResultCountBucket { Zero, OneTo10, Gt10 }
+pub enum AgeBucket { Lt1H, H1To1D, D1To7D, Gt7D }
+```
+
+**隐私红线（必读）**：
+
+- `search_executed` **绝不** 传 query 字面值——仅长度桶 + 是否有 filter + 结果数量桶
+- `clipboard_entry_restored.age_bucket` 用桶而非精确时间，避免侧信道还原条目时间戳
+- `entry_favorited` / `_deleted` 不传 `entry_id` 也不传 hash——这两个动作单独看就有产品意义，不需要关联到具体条目
+
+### 12.4 P3 — 可观测性 / 运维（视容量决定是否做）
+
+| 事件名 | 触发位置 | properties | 备注 |
+|---|---|---|---|
+| `app_upgrade_detected` | bootstrap 调 `upgrade/detect.rs` 返回 `UpgradeStatus::{Upgraded, Downgraded}` 时 | `{ from_version: Option<String>, to_version: String, kind: upgrade\|downgrade\|fresh }` | `$set/$set_once` 的 `initial_app_version` vs `app_version` 已能近似推断，本事件是锦上添花 |
+| `presence_recovery_completed` | `presence/ensure_reachable_all.rs::execute` 完成 | `{ paired_count, online_count, dial_failure_count, duration_ms }` | 与 `sync_failed.peer_offline` 占比有相关性，不是必须 |
+| `daemon_started` / `daemon_stopped` | bootstrap 起点 / `tauri::App::on_exit` | （仅 EventContext） | 精确 DAU / session 时长；但 fire-and-forget HTTP 在 exit 时丢事件率高（§10.1 已说明），收益不稳 |
+
+### 12.5 明确不做的事件（避免噪音）
+
+下列动作即便有埋点能力也不该做，列在此处避免重复讨论：
+
+- `list_entry_projections` / `get_entry_detail` / `get_entry_resource` —— UI 每次刷新都触发，会淹没信号
+- `clipboard_history/cleanup` —— 后台 GC，无产品意义
+- `mobile_sync/list_devices` / `get_settings` / `update_settings` —— UI 拉取查询，非用户行为
+- `mobile_sync/rotate_password` —— 极低频且产品意义已被 `mobile_device_registered` 覆盖
+- `blob_publish_*` —— 发布端的失败已在 `sync_failed.failure_stage=immediate_send` 覆盖（dispatch 路径上游就拒了），单独埋点会与 sync 漏斗重复计数
+
+### 12.6 实施节奏建议
+
+- **一次 PR 完成 P0 全部 4 项**：都在 `uc-application` 内部，影响面集中。
+- **P1 拆 3 个 PR**：blob_transfer / switch_space / mobile_sync，三个 domain 各自独立 review。
+- **P2 视产品侧需求驱动**：哪个漏斗先被产品问到就先实施哪个；不要打包。
+- **每个新事件都同步更新本文件 §7 对应分类**：把表格从本节迁出去落到 §7（v1 catalog 的扩展），并把本节对应行 strikethrough 或删除。
+
+跨 PR 共用的隐私契约自查（每次新增事件必过）：
+
+1. 任何 `_id` 字段是否需要 hash？ —— 参照 §6.2。
+2. 任何精确数值（size / latency / age / count）是否应桶化？ —— 参照 §6.3。
+3. failure_reason 是否复用了别的 domain 的 enum？ —— 违反 §7.3 末尾原则，必须独立定义。
+4. 命名是否落到 `{domain}_{action}_{state}`？ —— 参照 §5.1。
+5. 是否会与已有事件双计？ —— 参照 §12.1 的 `clipboard_entry_captured` 入站过滤注意事项。
