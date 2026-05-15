@@ -31,6 +31,7 @@ use uc_core::ports::{
     ClockPort, LanInterfaceProbeError, LanInterfaceProbePort, MobileCredentialsMinterPort,
     MobileDeviceRepositoryPort, PasswordHasherError, PasswordHasherPort, SettingsPort,
 };
+use uc_observability::analytics::{AnalyticsPort, Event};
 
 // ─── public-shaped (input / output / error) ─────────────────────────────
 
@@ -171,6 +172,11 @@ pub(crate) struct RegisterMobileShortcutDeviceUseCase {
     settings: Arc<dyn SettingsPort>,
     clock: Arc<dyn ClockPort>,
     lan_interface_probe: Arc<dyn LanInterfaceProbePort>,
+    /// schema doc §7.6 / §12.2 P1：iPhone Shortcut 集成的启用计数 anchor。
+    /// happy path 在 repository.save 成功之后 emit `MobileDeviceRegistered`;
+    /// 任何前置校验失败 / 持久化失败都不上报——doc §12.5 已明确撤销 /
+    /// rotate 等高频但低产品意义的事件不埋。
+    analytics: Arc<dyn AnalyticsPort>,
 }
 
 impl RegisterMobileShortcutDeviceUseCase {
@@ -181,6 +187,7 @@ impl RegisterMobileShortcutDeviceUseCase {
         settings: Arc<dyn SettingsPort>,
         clock: Arc<dyn ClockPort>,
         lan_interface_probe: Arc<dyn LanInterfaceProbePort>,
+        analytics: Arc<dyn AnalyticsPort>,
     ) -> Self {
         Self {
             credentials_minter,
@@ -189,6 +196,7 @@ impl RegisterMobileShortcutDeviceUseCase {
             settings,
             clock,
             lan_interface_probe,
+            analytics,
         }
     }
 
@@ -342,6 +350,12 @@ impl RegisterMobileShortcutDeviceUseCase {
             .save(&device)
             .await
             .map_err(translate_device_error)?;
+
+        // schema doc §7.6 / §12.2 P1：registration anchor 落在 save 之后。
+        // 后续 QR 渲染失败仍保留事件——doc 模块注释已说明该路径下会留下
+        // "已登记但用户拿不到 install URL"的孤儿记录，但设备 IS registered,
+        // telemetry 反映这一事实，与 UI 报错语义不冲突。
+        self.analytics.capture(Event::MobileDeviceRegistered);
 
         // 4. 渲染 install URL 的二维码(PNG + ASCII 双形态)。install_url 是
         //    常量(SyncClipboard 公开 iCloud 链接), 不取决于 device, 二维码
@@ -541,55 +555,12 @@ mod tests {
     use uc_core::mobile_sync::MobileDeviceId;
     use uc_core::settings::model::Settings;
 
-    // ── port mocks ─────────────────────────────────────────────────────
-
-    mockall::mock! {
-        DeviceRepo {}
-        #[async_trait]
-        impl MobileDeviceRepositoryPort for DeviceRepo {
-            async fn save(&self, device: &MobileDevice) -> Result<(), MobileDeviceError>;
-            async fn find_by_username(
-                &self,
-                username: &str,
-            ) -> Result<Option<MobileDevice>, MobileDeviceError>;
-            async fn find_by_device_id(
-                &self,
-                device_id: &MobileDeviceId,
-            ) -> Result<Option<MobileDevice>, MobileDeviceError>;
-            async fn list_all(&self) -> Result<Vec<MobileDevice>, MobileDeviceError>;
-            async fn delete(&self, device_id: &MobileDeviceId) -> Result<bool, MobileDeviceError>;
-            async fn record_activity(
-                &self,
-                device_id: &MobileDeviceId,
-                last_seen_at_ms: i64,
-                last_seen_ip: Option<String>,
-                reported_name: Option<String>,
-                reported_os: Option<String>,
-            ) -> Result<(), MobileDeviceError>;
-            async fn update_password_hash(
-                &self,
-                device_id: &MobileDeviceId,
-                new_password_hash: String,
-            ) -> Result<bool, MobileDeviceError>;
-        }
-    }
-
-    mockall::mock! {
-        Hasher {}
-        #[async_trait]
-        impl PasswordHasherPort for Hasher {
-            async fn hash(&self, password: &str) -> Result<String, PasswordHasherError>;
-            async fn verify(&self, password: &str, phc: &str)
-                -> Result<bool, PasswordHasherError>;
-        }
-    }
-
-    mockall::mock! {
-        Minter {}
-        impl MobileCredentialsMinterPort for Minter {
-            fn mint_credentials(&self) -> MintedCredentials;
-        }
-    }
+    // 多个 use case 测试共用的 mock(DeviceRepo / Hasher / Minter)+
+    // CapturingAnalyticsSink 集中在 test_support;register 独占的
+    // SettingsPort / Clock / Probe 仍就近 mockall::mock! 定义。
+    use super::super::test_support::{
+        CapturingAnalyticsSink, MockDeviceRepo, MockHasher, MockMinter,
+    };
 
     mockall::mock! {
         SettingsPortImpl {}
@@ -756,7 +727,29 @@ mod tests {
             Arc::new(settings_port_lan_advertise(lan_listen_enabled)),
             Arc::new(clock_at(1_000)),
             Arc::new(probe_returning(vec![])),
+            Arc::new(CapturingAnalyticsSink::default()),
         )
+    }
+
+    /// build_uc 的 capture-asserting 版本：返回 use case + sink，调用方可在
+    /// happy path 上断言 emit，或在失败路径上断言"未 emit"。
+    fn build_uc_with_sink(
+        lan_listen_enabled: bool,
+    ) -> (
+        RegisterMobileShortcutDeviceUseCase,
+        Arc<CapturingAnalyticsSink>,
+    ) {
+        let analytics = Arc::new(CapturingAnalyticsSink::default());
+        let uc = RegisterMobileShortcutDeviceUseCase::new(
+            Arc::new(deterministic_minter()),
+            Arc::new(recording_hasher()),
+            Arc::new(empty_device_repo()),
+            Arc::new(settings_port_lan_advertise(lan_listen_enabled)),
+            Arc::new(clock_at(1_000)),
+            Arc::new(probe_returning(vec![])),
+            analytics.clone(),
+        );
+        (uc, analytics)
     }
 
     fn label_only(label: &str) -> RegisterMobileShortcutDeviceInput {
@@ -933,6 +926,7 @@ mod tests {
             Arc::new(settings_port_lan_advertise(true)),
             Arc::new(clock_at(1_000)),
             Arc::new(probe_returning(vec![])),
+            Arc::new(CapturingAnalyticsSink::default()),
         );
         let err = uc
             .execute(RegisterMobileShortcutDeviceInput {
@@ -968,6 +962,7 @@ mod tests {
             Arc::new(settings_port_lan_advertise(true)),
             Arc::new(clock_at(1_000)),
             Arc::new(probe_returning(vec![])),
+            Arc::new(CapturingAnalyticsSink::default()),
         );
         let out = uc
             .execute(RegisterMobileShortcutDeviceInput {
@@ -1035,6 +1030,7 @@ mod tests {
             Arc::new(settings_port_lan_advertise(true)),
             Arc::new(clock_at(1_000)),
             Arc::new(probe_returning(vec![])),
+            Arc::new(CapturingAnalyticsSink::default()),
         );
         let err = uc
             .execute(RegisterMobileShortcutDeviceInput {
@@ -1081,6 +1077,7 @@ mod tests {
             Arc::new(settings_port_auto()),
             Arc::new(clock_at(1_000)),
             Arc::new(probe),
+            Arc::new(CapturingAnalyticsSink::default()),
         )
     }
 
@@ -1128,5 +1125,28 @@ mod tests {
             err,
             RegisterMobileShortcutDeviceError::LanInterfaceProbeFailed(ref s) if s.contains("ifaddr crashed")
         ));
+    }
+
+    // ── tests: analytics emit (schema doc §7.6 / §12.2 P1) ────────────
+
+    #[tokio::test]
+    async fn happy_path_emits_mobile_device_registered() {
+        let (uc, analytics) = build_uc_with_sink(true);
+        uc.execute(label_only("iPhone"))
+            .await
+            .expect("happy path must succeed");
+        assert_eq!(analytics.events(), vec![Event::MobileDeviceRegistered]);
+    }
+
+    #[tokio::test]
+    async fn lan_listener_disabled_does_not_emit_registration() {
+        // 任何"还没真正落地一台设备"的失败路径都不应 emit registration anchor。
+        let (uc, analytics) = build_uc_with_sink(false);
+        let err = uc.execute(label_only("iPhone")).await.unwrap_err();
+        assert!(matches!(
+            err,
+            RegisterMobileShortcutDeviceError::LanListenerDisabled
+        ));
+        assert!(analytics.events().is_empty(), "{:?}", analytics.events());
     }
 }
