@@ -365,9 +365,12 @@ pub async fn build_space_setup_assembly(
         key_migration: Arc::clone(&wired.key_migration),
         blob_migration_repo: Arc::clone(&wired.blob_migration_repo),
         blob_cipher: Arc::clone(&deps.security.blob_cipher),
-        // Slice 8b · joiner 端 pairing 三事件埋点 sink。从 AppDeps 横切字段
-        // (Slice 8a 已注入)透传;sink 装一次永不替换,gate 由 wrapper 守卫。
-        analytics: Arc::clone(&deps.analytics),
+        // Single facade covering both capture and identity transitions.
+        // The capture sink + identity store are composed inside the
+        // bootstrap so the application layer never wires them
+        // separately. Sink is installed once; the gate inside the
+        // wrapper handles enable/disable transitions.
+        analytics: Arc::clone(&wired.analytics_facade),
     }));
 
     // Slice 2 Phase 1 · T9:roster 门面和 space_setup facade 共享同一组

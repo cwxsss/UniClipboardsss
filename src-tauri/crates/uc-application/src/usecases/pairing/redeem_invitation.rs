@@ -52,7 +52,7 @@ use uc_core::ports::{ClockPort, PeerAddressRecord, PeerAddressRepositoryPort, Se
 use uc_core::setup::SetupStatus;
 use uc_core::{MemberRepositoryPort, MemberSyncPreferences, TrustedPeerRepositoryPort};
 use uc_observability::analytics::events::{Event, PairingFailureReason, PairingMethod};
-use uc_observability::analytics::AnalyticsPort;
+use uc_observability::analytics::AnalyticsFacade;
 
 use crate::facade::space_setup::commands::RedeemPairingInvitationCommand;
 use crate::facade::space_setup::{RedeemPairingInvitationError, RedeemPairingInvitationResult};
@@ -76,10 +76,13 @@ pub(crate) struct RedeemPairingInvitationUseCase {
     /// blob 写入仓库。写失败不 fail join（presence 下轮会再拉）。
     peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
     clock: Arc<dyn ClockPort>,
-    /// Slice 8b · joiner 端 pairing 三事件埋点。`execute` 入口 fire
-    /// `pairing_started`,Result match 后 fire `pairing_succeeded`/`pairing_failed`。
-    /// fire-and-forget,gate 由 `GatedAnalyticsSink` wrapper 守卫,不阻塞主路径。
-    analytics: Arc<dyn AnalyticsPort>,
+    /// Joiner-side analytics: fires `pairing_started` on entry,
+    /// `pairing_succeeded` / `pairing_failed` on result. The identity
+    /// switch from anonymous to the sponsor-issued `space_person_id`
+    /// also goes through this facade after setup status is persisted.
+    /// All calls are fire-and-forget; the gate inside the facade
+    /// implementation keeps them off the hot path.
+    analytics: Arc<dyn AnalyticsFacade>,
 }
 
 impl RedeemPairingInvitationUseCase {
@@ -90,7 +93,7 @@ impl RedeemPairingInvitationUseCase {
         setup_status: Arc<dyn SetupStatusPort>,
         peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
         clock: Arc<dyn ClockPort>,
-        analytics: Arc<dyn AnalyticsPort>,
+        analytics: Arc<dyn AnalyticsFacade>,
     ) -> Self {
         Self {
             handshake,
@@ -191,6 +194,19 @@ impl RedeemPairingInvitationUseCase {
         // 跳过；写失败仅 warn，presence `ensure_reachable_all` 下一轮
         // 兜底。
         self.persist_sponsor_address(&outcome, now).await;
+
+        // Identity switch runs after setup_status is persisted but
+        // before the outer `execute` emits `pairing_succeeded`, so
+        // pairing_succeeded already reports under the new person.
+        // `None` means the sponsor has no `space_person_id` yet
+        // (v1→v2 first-pair case); joiner stays Solo and waits for
+        // a future sponsor-initiated re-pair to converge.
+        // Adopt failures are warn-logged by the facade and never
+        // block pairing — the ground truth of "paired" is
+        // setup_status=true, not the analytics side effect.
+        if let Some(space_person_id) = outcome.sponsor_space_person_id {
+            self.analytics.adopt_from_sponsor(space_person_id);
+        }
 
         info!(
             sponsor_device_id = %outcome.sponsor_device_id.as_str(),
@@ -319,6 +335,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use async_trait::async_trait;
+    use uuid::Uuid;
 
     use uc_core::crypto::domain::{ActiveSpace, Passphrase};
     use uc_core::ids::{DeviceId, SessionId, SpaceId};
@@ -367,6 +384,7 @@ mod tests {
                     sender_device_name: "sponsor's laptop".into(),
                     sender_identity_fingerprint: sponsor_fp(),
                     transport_address_blob: Vec::new(),
+                    sponsor_space_person_id: None,
                 }));
             me
         }
@@ -690,20 +708,54 @@ mod tests {
     /// "把所有 capture 收进 Vec 给断言用"是测试基础设施职责。
     /// 用 `StdMutex` 而非 `parking_lot`,与 module 内既有 fake repo
     /// (`RecordingMemberRepo` / `RecordingTrustRepo`) 同款。
+    ///
+    /// PR 6 起在同一 timeline 上记录 capture 与 identify，便于断言"identify
+    /// 必须在 pairing_succeeded 之前发出"。
     #[derive(Default)]
     struct CapturingAnalyticsSink {
         events: StdMutex<Vec<Event>>,
+        ordered: StdMutex<Vec<CapturedAnalytics>>,
+    }
+
+    #[derive(Debug, Clone)]
+    enum CapturedAnalytics {
+        Capture(Event),
+        Identify(uc_observability::analytics::IdentifyPayload),
     }
 
     impl CapturingAnalyticsSink {
         fn snapshot(&self) -> Vec<Event> {
             self.events.lock().unwrap().clone()
         }
+        fn ordered(&self) -> Vec<CapturedAnalytics> {
+            self.ordered.lock().unwrap().clone()
+        }
+        fn identify_calls(&self) -> Vec<uc_observability::analytics::IdentifyPayload> {
+            self.ordered
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|c| match c {
+                    CapturedAnalytics::Identify(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
     }
 
-    impl AnalyticsPort for CapturingAnalyticsSink {
+    impl uc_observability::analytics::AnalyticsPort for CapturingAnalyticsSink {
         fn capture(&self, event: Event) {
-            self.events.lock().unwrap().push(event);
+            self.events.lock().unwrap().push(event.clone());
+            self.ordered
+                .lock()
+                .unwrap()
+                .push(CapturedAnalytics::Capture(event));
+        }
+        fn identify(&self, payload: uc_observability::analytics::IdentifyPayload) {
+            self.ordered
+                .lock()
+                .unwrap()
+                .push(CapturedAnalytics::Identify(payload));
         }
     }
 
@@ -795,6 +847,14 @@ mod tests {
                 trust_repo.clone() as Arc<dyn TrustedPeerRepositoryPort>
             ));
             let analytics = Arc::new(CapturingAnalyticsSink::default());
+            // Default harness uses a noop identity since most A2 tests
+            // run with `sponsor_space_person_id = None`; the tests that
+            // exercise the adopt path build their own facade locally.
+            let facade: Arc<dyn AnalyticsFacade> =
+                Arc::new(uc_observability::analytics::DefaultAnalyticsFacade::new(
+                    Arc::clone(&analytics) as Arc<dyn uc_observability::analytics::AnalyticsPort>,
+                    Arc::new(uc_observability::analytics::NoopAnalyticsIdentity),
+                ));
             let uc = RedeemPairingInvitationUseCase::new(
                 handshake,
                 admit_uc,
@@ -802,7 +862,7 @@ mod tests {
                 setup_status.clone(),
                 peer_addr_repo.clone() as Arc<dyn PeerAddressRepositoryPort>,
                 Arc::new(FixedClock(fixed_now_ms())),
-                Arc::clone(&analytics) as Arc<dyn AnalyticsPort>,
+                facade,
             );
             (
                 uc,
@@ -890,6 +950,7 @@ mod tests {
                 sender_device_name: "sponsor's laptop".into(),
                 sender_identity_fingerprint: sponsor_fp(),
                 transport_address_blob: blob,
+                sponsor_space_person_id: None,
             }));
         me
     }
@@ -921,6 +982,235 @@ mod tests {
         );
         uc.execute(cmd("CODE-ADDR")).await.expect("ok");
         // drop-time mockall 校验：少调 / 多调 / 参数不匹配 都会 panic。
+    }
+
+    // —— Phase 098 / PR 6 · v2 跨设备 person 聚合 joiner 端 ——————————
+
+    /// 携带 sponsor_space_person_id=Some 的 sponsor confirm。
+    fn session_with_sponsor_person(space_person_id: Uuid) -> Arc<HappySession> {
+        let me = Arc::new(HappySession::default());
+        me.recv
+            .lock()
+            .unwrap()
+            .push_back(PairingSessionMessage::KeyslotOffer(SponsorKeyslotOffer {
+                space_id: SpaceId::from_str("space-xyz"),
+                keyslot_blob: vec![0xAA; 16],
+                challenge: vec![0x42; 32],
+                pairing_session_id: PairingSessionId::new("session-1"),
+            }));
+        me.recv
+            .lock()
+            .unwrap()
+            .push_back(PairingSessionMessage::Confirm(SponsorConfirm {
+                space_id: SpaceId::from_str("space-xyz"),
+                sender_device_id: DeviceId::new("sponsor-device"),
+                sender_device_name: "sponsor's laptop".into(),
+                sender_identity_fingerprint: sponsor_fp(),
+                transport_address_blob: Vec::new(),
+                sponsor_space_person_id: Some(space_person_id),
+            }));
+        me
+    }
+
+    /// Test-only `AnalyticsIdentityPort` 跟踪 adopt 调用 + 允许注入失败。
+    /// `previous_anon` 模拟本机原 anonymous_user_id，A2 会作为
+    /// IdentifyPayload.old_distinct_id 发出。
+    struct FakeJoinerAnalyticsIdentity {
+        previous_anon: Uuid,
+        adopted: StdMutex<Vec<Uuid>>,
+        adopt_err: StdMutex<Option<String>>,
+    }
+    impl FakeJoinerAnalyticsIdentity {
+        fn new(previous_anon: Uuid) -> Self {
+            Self {
+                previous_anon,
+                adopted: StdMutex::new(Vec::new()),
+                adopt_err: StdMutex::new(None),
+            }
+        }
+    }
+    impl uc_observability::analytics::AnalyticsIdentityPort for FakeJoinerAnalyticsIdentity {
+        fn adopt_space_person(
+            &self,
+            space_person_id: Uuid,
+        ) -> Result<
+            uc_observability::analytics::AdoptOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            if let Some(msg) = self.adopt_err.lock().unwrap().take() {
+                return Err(
+                    uc_observability::analytics::AnalyticsIdentityError::PersistFailed(
+                        anyhow::anyhow!(msg),
+                    ),
+                );
+            }
+            self.adopted.lock().unwrap().push(space_person_id);
+            Ok(uc_observability::analytics::AdoptOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: space_person_id,
+            })
+        }
+        fn release_space_person(
+            &self,
+        ) -> Result<
+            uc_observability::analytics::ReleaseOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            Ok(uc_observability::analytics::ReleaseOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: self.previous_anon,
+            })
+        }
+        fn current_space_person_id(&self) -> Option<Uuid> {
+            self.adopted.lock().unwrap().last().copied()
+        }
+        fn reset_telemetry_identity(
+            &self,
+        ) -> Result<
+            uc_observability::analytics::ReleaseOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            Ok(uc_observability::analytics::ReleaseOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: self.previous_anon,
+            })
+        }
+    }
+
+    fn build_uc_with_identity(
+        session: Arc<HappySession>,
+        identity: Arc<FakeJoinerAnalyticsIdentity>,
+    ) -> (RedeemPairingInvitationUseCase, Arc<CapturingAnalyticsSink>) {
+        let handshake = JoinerHandshakeCoordinator::new(
+            session.clone() as Arc<dyn PairingSessionPort>,
+            Arc::new(HappySpaceAccess),
+            Arc::new(FixedProof),
+            Arc::new(FixedLocal(joiner_fp())),
+            Arc::new(FixedDevice(DeviceId::new("joiner-device"))),
+            Arc::new(NamedSettings("joiner-laptop".into())),
+            Duration::from_secs(30),
+        );
+        let admit_uc = Arc::new(AdmitMemberUseCase::new(
+            Arc::new(RecordingMemberRepo::default()) as Arc<dyn MemberRepositoryPort>,
+        ));
+        let trust_uc = Arc::new(TrustPeerUseCase::new(
+            Arc::new(RecordingTrustRepo::default()) as Arc<dyn TrustedPeerRepositoryPort>,
+        ));
+        let analytics = Arc::new(CapturingAnalyticsSink::default());
+        let setup_status: Arc<dyn SetupStatusPort> = Arc::new(RecordingSetupStatus::ok());
+        let peer_addr_repo: Arc<dyn PeerAddressRepositoryPort> = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert().times(0);
+            Arc::new(m)
+        };
+        let facade: Arc<dyn AnalyticsFacade> =
+            Arc::new(uc_observability::analytics::DefaultAnalyticsFacade::new(
+                Arc::clone(&analytics) as Arc<dyn uc_observability::analytics::AnalyticsPort>,
+                identity as Arc<dyn uc_observability::analytics::AnalyticsIdentityPort>,
+            ));
+        let uc = RedeemPairingInvitationUseCase::new(
+            handshake,
+            admit_uc,
+            trust_uc,
+            setup_status,
+            peer_addr_repo,
+            Arc::new(FixedClock(fixed_now_ms())),
+            facade,
+        );
+        (uc, analytics)
+    }
+
+    /// Happy path：sponsor 派发了 space_person_id → joiner 必须先 adopt、再
+    /// 发 `$identify`、最后 emit pairing_succeeded。三步顺序是 dashboard 的
+    /// person 合并归属是否生效的硬约束。
+    #[tokio::test]
+    async fn a2_emits_identify_before_pairing_succeeded() {
+        let space_person = Uuid::parse_str("018f0000-0000-7000-8000-00000000000a").unwrap();
+        let session = session_with_sponsor_person(space_person);
+        let identity = Arc::new(FakeJoinerAnalyticsIdentity::new(Uuid::now_v7()));
+        let (uc, analytics) = build_uc_with_identity(session, identity.clone());
+
+        uc.execute(cmd("CODE-1")).await.unwrap();
+
+        // adopt 必须正好一次，参数等于 sponsor 派发的 ID。
+        let adopted = identity.adopted.lock().unwrap().clone();
+        assert_eq!(
+            adopted,
+            vec![space_person],
+            "adopt 必须正好一次且参数等于 sponsor 派发"
+        );
+
+        // identify 必须出现在 pairing_succeeded 之前。
+        let ordered = analytics.ordered();
+        let identify_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::Identify(_)))
+            .expect("expected $identify");
+        let succeeded_pos = ordered
+            .iter()
+            .position(|c| {
+                matches!(
+                    c,
+                    CapturedAnalytics::Capture(Event::PairingSucceeded { .. })
+                )
+            })
+            .expect("expected pairing_succeeded");
+        assert!(
+            identify_pos < succeeded_pos,
+            "identify 必须在 pairing_succeeded 之前：{ordered:?}"
+        );
+
+        // identify payload 端点：old=本机 anon, new=sponsor 派发。
+        let calls = analytics.identify_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].old_distinct_id, identity.previous_anon);
+        assert_eq!(calls[0].new_distinct_id, space_person);
+    }
+
+    /// sponsor 派发 None（v1→v2 升级 sponsor 未持久化场景）→ joiner 端不
+    /// adopt、不发 identify，但仍 emit pairing_succeeded（pairing 真的成功
+    /// 了）。task_plan §开放问题 2 决策 A 的退化路径。
+    #[tokio::test]
+    async fn a2_skips_identify_when_sponsor_did_not_dispatch_person_id() {
+        let session = Arc::new(HappySession::primed()); // confirm.sponsor_space_person_id = None
+        let identity = Arc::new(FakeJoinerAnalyticsIdentity::new(Uuid::now_v7()));
+        let (uc, analytics) = build_uc_with_identity(session, identity.clone());
+
+        uc.execute(cmd("CODE-1")).await.unwrap();
+
+        assert!(
+            identity.adopted.lock().unwrap().is_empty(),
+            "sponsor 派发 None 时 joiner 不应 adopt"
+        );
+        assert!(
+            analytics.identify_calls().is_empty(),
+            "sponsor 派发 None 时 joiner 不应发 identify"
+        );
+        // pairing_succeeded 仍 emit。
+        assert_started_then_succeeded(&analytics.snapshot());
+    }
+
+    /// adopt 失败时 identify 不发出，但 pairing_succeeded 仍 emit ——
+    /// 与 A1 sponsor 端对称。本机 telemetry 维持 Solo 等下次 pairing。
+    #[tokio::test]
+    async fn a2_skips_identify_when_adopt_space_person_fails() {
+        let space_person = Uuid::now_v7();
+        let session = session_with_sponsor_person(space_person);
+        let identity = Arc::new(FakeJoinerAnalyticsIdentity::new(Uuid::now_v7()));
+        *identity.adopt_err.lock().unwrap() = Some("simulated persist failure".into());
+        let (uc, analytics) = build_uc_with_identity(session, identity.clone());
+
+        uc.execute(cmd("CODE-1")).await.unwrap();
+
+        assert!(
+            identity.adopted.lock().unwrap().is_empty(),
+            "adopt 失败时不记录成功 adopt"
+        );
+        assert!(
+            analytics.identify_calls().is_empty(),
+            "adopt 失败时不应发 identify"
+        );
+        assert_started_then_succeeded(&analytics.snapshot());
     }
 
     #[tokio::test]

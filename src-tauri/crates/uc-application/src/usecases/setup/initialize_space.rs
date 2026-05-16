@@ -36,7 +36,9 @@ use uc_core::ports::{
     SetupStatusPort,
 };
 use uc_core::setup::SetupStatus;
-use uc_observability::analytics::{AnalyticsPort, Event, NameLengthBucket, SetupEntry};
+use uc_observability::analytics::{
+    AnalyticsFacade, Event, NameLengthBucket, SelfMintedAdoptRequest, SetupEntry,
+};
 
 use crate::facade::space_setup::commands::InitializeSpaceCommand;
 use crate::facade::space_setup::{InitializeSpaceError, InitializeSpaceResult};
@@ -49,11 +51,12 @@ pub(crate) struct InitializeSpaceUseCase {
     setup_status: Arc<dyn SetupStatusPort>,
     settings: Arc<dyn SettingsPort>,
     clock: Arc<dyn ClockPort>,
-    /// Slice 8d · setup funnel anchor (`setup_started`) at execute() entry +
-    /// `device_name_set` after the device-name resolution succeeds. The
-    /// device name itself never reaches the sink — only the bucketed
-    /// character-count region per `NameLengthBucket`.
-    analytics: Arc<dyn AnalyticsPort>,
+    /// Setup-funnel anchor (`setup_started` on entry, `device_name_set`
+    /// after the device-name resolution, `setup_completed` at the end)
+    /// plus the identity transition that runs between persisting setup
+    /// status and emitting `setup_completed`. The device name itself
+    /// never reaches the sink — only the bucketed character-count.
+    analytics: Arc<dyn AnalyticsFacade>,
 }
 
 impl InitializeSpaceUseCase {
@@ -65,7 +68,7 @@ impl InitializeSpaceUseCase {
         setup_status: Arc<dyn SetupStatusPort>,
         settings: Arc<dyn SettingsPort>,
         clock: Arc<dyn ClockPort>,
-        analytics: Arc<dyn AnalyticsPort>,
+        analytics: Arc<dyn AnalyticsFacade>,
     ) -> Self {
         Self {
             space_access,
@@ -176,11 +179,24 @@ impl InitializeSpaceUseCase {
             .map_err(|e| InitializeSpaceError::StorageFailed(e.to_string()))?;
         info!(%space_id, %device_id, "space initialisation completed");
 
-        // schema doc §12.1 · Activation 漏斗 anchor。A1 是 fresh-device
-        // 「新建空间」路径——本流程内不发生配对，`has_paired_in_same_flow`
-        // 固定为 false；后续若 joiner 路径也 emit setup_completed，再按真实
-        // 状态填 true。`duration_ms_since_setup_started` 用 u32 上限 49 天，
-        // 实际不可能溢出；超界时 fallback None（属架构债务而非数据点）。
+        // Identity switches before `setup_completed` fires so that event
+        // already reports under the new person — keeps the activation
+        // funnel terminal aggregated to the right id from the start.
+        // Adopt failures are warn-logged inside the facade and skip the
+        // identify; `setup_completed` still goes out under the Solo id
+        // and aggregation retries on the next pairing.
+        self.analytics.adopt_self_minted(SelfMintedAdoptRequest {
+            space_id: space_id.to_string(),
+            now_ms: self.clock.now_ms(),
+        });
+
+        // Activation funnel anchor. A1 is the fresh-device "create new
+        // space" path — no pairing happens here, so
+        // `has_paired_in_same_flow` is always false. The joiner path may
+        // later emit its own `setup_completed` with the real value.
+        // `duration_ms_since_setup_started` is `u32` (≤ 49 days);
+        // overflow is structurally impossible, so we fall back to None
+        // on the unreachable error path rather than widening the type.
         let duration_ms_since_setup_started =
             u32::try_from(setup_started_at.elapsed().as_millis()).ok();
         self.analytics.capture(Event::SetupCompleted {
@@ -270,6 +286,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use uuid::Uuid;
 
     use uc_core::crypto::domain::{ActiveSpace, Passphrase};
     use uc_core::ids::{DeviceId, SpaceId};
@@ -477,18 +494,151 @@ mod tests {
     /// Test-only `AnalyticsPort` that records every captured event for
     /// later inspection. Mirrors the joiner-side / sponsor-side fakes
     /// used by other Slice 8 tests.
+    ///
+    /// PR 4 起也记录 `$identify` 调用——sponsor A1 完成 setup 后会触发一次
+    /// person 切换；测试需要断言它出现在 setup_completed *之前*。
     #[derive(Default)]
     struct CapturingAnalyticsSink {
-        captured: Mutex<Vec<Event>>,
+        captured: Mutex<Vec<CapturedAnalytics>>,
+    }
+    #[derive(Debug, Clone)]
+    enum CapturedAnalytics {
+        Capture(Event),
+        Identify(uc_observability::analytics::IdentifyPayload),
+        GroupIdentify(uc_observability::analytics::GroupIdentifyPayload),
     }
     impl CapturingAnalyticsSink {
         fn events(&self) -> Vec<Event> {
+            self.captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|c| match c {
+                    CapturedAnalytics::Capture(e) => Some(e.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        fn ordered(&self) -> Vec<CapturedAnalytics> {
             self.captured.lock().unwrap().clone()
         }
+        fn identify_calls(&self) -> Vec<uc_observability::analytics::IdentifyPayload> {
+            self.captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|c| match c {
+                    CapturedAnalytics::Identify(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        fn group_identify_calls(&self) -> Vec<uc_observability::analytics::GroupIdentifyPayload> {
+            self.captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|c| match c {
+                    CapturedAnalytics::GroupIdentify(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
     }
-    impl AnalyticsPort for CapturingAnalyticsSink {
+    impl uc_observability::analytics::AnalyticsPort for CapturingAnalyticsSink {
         fn capture(&self, event: Event) {
-            self.captured.lock().unwrap().push(event);
+            self.captured
+                .lock()
+                .unwrap()
+                .push(CapturedAnalytics::Capture(event));
+        }
+        fn identify(&self, payload: uc_observability::analytics::IdentifyPayload) {
+            self.captured
+                .lock()
+                .unwrap()
+                .push(CapturedAnalytics::Identify(payload));
+        }
+        fn group_identify(&self, payload: uc_observability::analytics::GroupIdentifyPayload) {
+            self.captured
+                .lock()
+                .unwrap()
+                .push(CapturedAnalytics::GroupIdentify(payload));
+        }
+    }
+
+    /// Test-only `AnalyticsIdentityPort` 跟踪 adopt/release 调用次数，
+    /// 并允许测试注入失败。返回的 `previous_distinct_id` 来自 fixture，
+    /// 不依赖 `global_event_context`——避免测试间相互污染。
+    struct FakeAnalyticsIdentity {
+        previous_anon: Uuid,
+        adopted: Mutex<Vec<Uuid>>,
+        released_count: Mutex<u32>,
+        adopt_err: Mutex<Option<String>>,
+    }
+    impl FakeAnalyticsIdentity {
+        fn new(previous_anon: Uuid) -> Self {
+            Self {
+                previous_anon,
+                adopted: Mutex::new(Vec::new()),
+                released_count: Mutex::new(0),
+                adopt_err: Mutex::new(None),
+            }
+        }
+        fn adopted(&self) -> Vec<Uuid> {
+            self.adopted.lock().unwrap().clone()
+        }
+    }
+    impl uc_observability::analytics::AnalyticsIdentityPort for FakeAnalyticsIdentity {
+        fn adopt_space_person(
+            &self,
+            space_person_id: Uuid,
+        ) -> Result<
+            uc_observability::analytics::AdoptOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            if let Some(msg) = self.adopt_err.lock().unwrap().take() {
+                return Err(
+                    uc_observability::analytics::AnalyticsIdentityError::PersistFailed(
+                        anyhow::anyhow!(msg),
+                    ),
+                );
+            }
+            self.adopted.lock().unwrap().push(space_person_id);
+            Ok(uc_observability::analytics::AdoptOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: space_person_id,
+            })
+        }
+        fn release_space_person(
+            &self,
+        ) -> Result<
+            uc_observability::analytics::ReleaseOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            *self.released_count.lock().unwrap() += 1;
+            Ok(uc_observability::analytics::ReleaseOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: self.previous_anon,
+            })
+        }
+
+        fn current_space_person_id(&self) -> Option<Uuid> {
+            // Fake：返回最近 adopt 的 ID（取最后一个），让 sponsor pairing
+            // 测试在 A1 之后的场景能通过本 fake 的 SponsorHandshake 路径。
+            self.adopted.lock().unwrap().last().copied()
+        }
+        fn reset_telemetry_identity(
+            &self,
+        ) -> Result<
+            uc_observability::analytics::ReleaseOutcome,
+            uc_observability::analytics::AnalyticsIdentityError,
+        > {
+            *self.released_count.lock().unwrap() += 1;
+            // Fake：模拟 reset 后切回新 anonymous（这里复用 previous_anon 占位）。
+            Ok(uc_observability::analytics::ReleaseOutcome {
+                previous_distinct_id: self.previous_anon,
+                new_distinct_id: self.previous_anon,
+            })
         }
     }
 
@@ -500,6 +650,7 @@ mod tests {
         setup_status: Arc<InMemorySetupStatus>,
         settings: Arc<InMemorySettings>,
         analytics: Arc<CapturingAnalyticsSink>,
+        analytics_identity: Arc<FakeAnalyticsIdentity>,
     }
 
     fn build_harness() -> Harness {
@@ -513,6 +664,16 @@ mod tests {
         let settings = Arc::new(InMemorySettings::default());
         let clock: Arc<dyn ClockPort> = Arc::new(FixedClock(1_700_000_000_000));
         let analytics = Arc::new(CapturingAnalyticsSink::default());
+        // Fixed UUID stands in for the sponsor device's anonymous_user_id
+        // so tests can assert identify.previous_distinct_id equals it.
+        let analytics_identity = Arc::new(FakeAnalyticsIdentity::new(Uuid::now_v7()));
+        // The production code only sees `AnalyticsFacade`; the recording
+        // sink + identity are stashed on the harness for assertions.
+        let facade: Arc<dyn AnalyticsFacade> =
+            Arc::new(uc_observability::analytics::DefaultAnalyticsFacade::new(
+                analytics.clone(),
+                analytics_identity.clone(),
+            ));
 
         let uc = InitializeSpaceUseCase::new(
             space_access.clone(),
@@ -522,7 +683,7 @@ mod tests {
             setup_status.clone(),
             settings.clone(),
             clock,
-            analytics.clone(),
+            facade,
         );
         Harness {
             uc,
@@ -532,6 +693,7 @@ mod tests {
             setup_status,
             settings,
             analytics,
+            analytics_identity,
         }
     }
 
@@ -781,5 +943,168 @@ mod tests {
         h.uc.execute(ok_cmd(Some("New Name"))).await.unwrap();
         let settings = h.settings.load().await.unwrap();
         assert_eq!(settings.general.device_name.as_deref(), Some("New Name"));
+    }
+
+    // —— Phase 098 / PR 4 · v2 跨设备 person 聚合 sponsor 端 ——————————
+
+    /// happy path：A1 完成 setup 后必须先调一次 adopt_space_person，再发
+    /// 一次 `$identify`，最后才 emit setup_completed —— 顺序不能颠倒。
+    #[tokio::test]
+    async fn a1_emits_identify_before_setup_completed() {
+        let h = build_harness();
+        h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap();
+
+        // adopt_space_person 必须正好被调一次，且参数是新 UUIDv7（与持久化文件
+        // 的 set 行为一致）。
+        let adopted = h.analytics_identity.adopted();
+        assert_eq!(adopted.len(), 1, "adopt_space_person 应正好一次");
+        assert_eq!(
+            adopted[0].get_version_num(),
+            7,
+            "新生成的 space_person_id 应是 UUIDv7"
+        );
+
+        // analytics 流水：setup_started → device_name_set → $identify → setup_completed。
+        // identify 必须在 setup_completed 之前出现，否则 setup_completed 会停在
+        // 老 distinct_id 名下，破坏 dashboard 的 Activation funnel 归属。
+        let ordered = h.analytics.ordered();
+        let identify_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::Identify(_)))
+            .expect("expected one $identify call");
+        let setup_completed_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::Capture(Event::SetupCompleted { .. })))
+            .expect("expected setup_completed event");
+        assert!(
+            identify_pos < setup_completed_pos,
+            "identify 必须在 setup_completed 之前：{ordered:?}"
+        );
+
+        // identify payload 端点：old_distinct_id 应等于 sponsor 设备的原
+        // anonymous_user_id（fixture 注入）；new_distinct_id 应等于刚 adopt
+        // 的 space_person_id。
+        let identify_calls = h.analytics.identify_calls();
+        assert_eq!(identify_calls.len(), 1, "identify 应正好一次");
+        assert_eq!(
+            identify_calls[0].old_distinct_id, h.analytics_identity.previous_anon,
+            "identify.old_distinct_id 必须是 sponsor anonymous_user_id"
+        );
+        assert_eq!(
+            identify_calls[0].new_distinct_id, adopted[0],
+            "identify.new_distinct_id 必须等于刚 adopt 的 space_person_id"
+        );
+    }
+
+    /// adopt 失败时 identify 不发出，但 setup_completed 仍发出 ——
+    /// task_plan §PR 4 / 开放问题 3 决策 A：person 聚合可推迟（fire-and-forget），
+    /// 但 setup 的"完成"事实必须如实上报。
+    #[tokio::test]
+    async fn a1_skips_identify_when_adopt_space_person_fails() {
+        let h = build_harness();
+        *h.analytics_identity.adopt_err.lock().unwrap() = Some("simulated persist failure".into());
+
+        h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap();
+
+        assert!(
+            h.analytics_identity.adopted().is_empty(),
+            "adopt 失败时不应记录任何成功 adopt"
+        );
+        assert!(
+            h.analytics.identify_calls().is_empty(),
+            "adopt 失败必须跳过 identify（避免服务端误合并）"
+        );
+        // setup_completed 仍 emit，distinct_id 沿用 Solo 状态的 anonymous_user_id。
+        let events = h.analytics.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::SetupCompleted { .. })),
+            "adopt 失败不应阻止 setup_completed：events={events:?}"
+        );
+    }
+
+    /// setup 在第 6 步失败（member_repo.save）时既不 adopt，也不 identify ——
+    /// 整个身份切换流程都应在 setup_completed 路径里，setup 还没成功就不该发。
+    #[tokio::test]
+    async fn a1_skips_identify_when_setup_fails_before_status_persist() {
+        let h = build_harness();
+        *h.member_repo.save_err.lock().unwrap() = Some(MembershipError::Repository("boom".into()));
+
+        let _ = h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap_err();
+
+        assert!(
+            h.analytics_identity.adopted().is_empty(),
+            "setup 失败时不应触发 adopt"
+        );
+        assert!(
+            h.analytics.identify_calls().is_empty(),
+            "setup 失败时不应触发 identify"
+        );
+    }
+
+    /// PR 7：A1 完成 setup 后必须 fire 一次 `$groupidentify`，把 Space group
+    /// 维度的 created_at + device_count=1 写入。dashboard 据此识别 group 出现。
+    #[tokio::test]
+    async fn a1_emits_group_identify_after_identify() {
+        let h = build_harness();
+        h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap();
+
+        let group_calls = h.analytics.group_identify_calls();
+        assert_eq!(group_calls.len(), 1, "group_identify 必须正好一次");
+        assert_eq!(
+            group_calls[0].group_type, "space",
+            "group_type 必须固定为 space"
+        );
+        // group_key 是 16-hex 的 space_id_hash。
+        assert_eq!(
+            group_calls[0].group_key.len(),
+            16,
+            "group_key 应为 16 字符 hex"
+        );
+        // group set 至少包含 created_at 与 device_count=1。
+        assert!(
+            group_calls[0].set.contains_key("created_at"),
+            "group set 应携带 created_at"
+        );
+        assert_eq!(
+            group_calls[0].set["device_count"],
+            serde_json::Value::Number(1.into()),
+            "首台设备 device_count 必须为 1"
+        );
+
+        // 时序：group_identify 必须出现在 identify 之后、setup_completed 之前。
+        let ordered = h.analytics.ordered();
+        let identify_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::Identify(_)))
+            .unwrap();
+        let group_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::GroupIdentify(_)))
+            .unwrap();
+        let setup_pos = ordered
+            .iter()
+            .position(|c| matches!(c, CapturedAnalytics::Capture(Event::SetupCompleted { .. })))
+            .unwrap();
+        assert!(
+            identify_pos < group_pos && group_pos < setup_pos,
+            "时序应为 identify → group_identify → setup_completed：{ordered:?}"
+        );
+    }
+
+    /// adopt 失败时连 group_identify 都不应发——group 没有 person 锚点，
+    /// 提前 group_identify 会让 PostHog 端拿到一个无 person 的 group。
+    #[tokio::test]
+    async fn a1_skips_group_identify_when_adopt_fails() {
+        let h = build_harness();
+        *h.analytics_identity.adopt_err.lock().unwrap() = Some("simulated".into());
+
+        h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap();
+
+        assert!(
+            h.analytics.group_identify_calls().is_empty(),
+            "adopt 失败时不应 group_identify"
+        );
     }
 }

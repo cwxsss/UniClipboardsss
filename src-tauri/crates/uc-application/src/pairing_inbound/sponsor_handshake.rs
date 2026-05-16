@@ -56,6 +56,7 @@ use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{DeviceIdentityPort, LocalIdentityPort, SettingsPort, SetupStatusPort};
 use uc_core::security::IdentityFingerprint;
 use uc_core::space_access::domain::SpaceAccessProofArtifact;
+use uc_observability::analytics::AnalyticsFacade;
 
 /// Facts about the verified joiner, handed to the orchestrator so it can
 /// drive admit + trust use cases without re-parsing the `JoinerRequest`.
@@ -107,10 +108,18 @@ pub(crate) struct SponsorHandshakeCoordinator {
     /// to adopt an id unrelated to the sponsor's original space — this
     /// port fixes that by giving `begin` access to the canonical value.
     setup_status: Arc<dyn SetupStatusPort>,
+    /// Read-side use of the analytics facade: when building
+    /// `SponsorConfirm` we look up the locally-persisted
+    /// `space_person_id` so we can issue it to the joiner. `None`
+    /// means this device hasn't minted or accepted one yet (v1→v2
+    /// upgrade case where the sponsor was never paired), in which
+    /// case the joiner stays Solo until a future re-pair converges.
+    analytics: Arc<dyn AnalyticsFacade>,
     sessions: Mutex<HashMap<PairingSessionId, SessionCtx>>,
-    /// handshake TTL（begin 到 confirm/reject 的最大等待时间）。
+    /// handshake TTL (max wait between begin and confirm/reject).
     handshake_ttl: Duration,
-    /// 自引用 Weak，给 TTL 看门狗 task 回调用；避免 Arc 循环。
+    /// Self-referential Weak so the TTL watchdog task can call back
+    /// without forming an Arc cycle.
     self_weak: Weak<Self>,
 }
 
@@ -124,6 +133,7 @@ impl SponsorHandshakeCoordinator {
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         setup_status: Arc<dyn SetupStatusPort>,
+        analytics: Arc<dyn AnalyticsFacade>,
         handshake_ttl: Duration,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
@@ -134,6 +144,7 @@ impl SponsorHandshakeCoordinator {
             device_identity,
             settings,
             setup_status,
+            analytics,
             sessions: Mutex::new(HashMap::new()),
             handshake_ttl,
             self_weak: weak.clone(),
@@ -400,12 +411,17 @@ impl SponsorHandshakeCoordinator {
             .await
             .unwrap_or_default();
         let transport_address_blob_len = transport_address_blob.len();
+        // Ship the local telemetry person id so the joiner can adopt
+        // it. `None` is a valid value (this device hasn't minted or
+        // accepted one yet); the joiner falls back to Solo.
+        let sponsor_space_person_id = self.analytics.current_space_person_id();
         let confirm = PairingSessionMessage::Confirm(SponsorConfirm {
             space_id: ctx.space_id,
             sender_device_id: self.device_identity.current_device_id(),
             sender_device_name,
             sender_identity_fingerprint,
             transport_address_blob,
+            sponsor_space_person_id,
         });
         self.pairing_session
             .send(session, confirm)
@@ -738,6 +754,10 @@ mod tests {
             // exercises the fallback branch, which is fine because
             // assertions compare against what the coordinator emits.
             Arc::new(StubSetupStatus),
+            // Sponsor handshake unit tests don't assert on the
+            // `sponsor_space_person_id` field; tests that exercise the
+            // populated path construct a facade with a real identity.
+            Arc::new(uc_observability::analytics::NoopAnalyticsFacade),
             ttl,
         )
     }

@@ -71,6 +71,9 @@ use uc_infra::{
     FileAppVersionStateRepository, FileFirstSyncStateRepository, FileMigrationStateRepository,
     FileSetupStatusRepository, SystemClock,
 };
+use uc_observability::analytics::{
+    AnalyticsFacade, AnalyticsIdentityPort, DefaultAnalyticsFacade, LocalAnalyticsIdentity,
+};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
 use uc_platform::ports::AppDirsPort;
@@ -216,6 +219,13 @@ pub struct WiredDependencies {
     /// receivers — the facade itself is shared by GUI shell, daemon-lifecycle
     /// `MobileSyncFacade` 装配, and `build_space_setup_assembly` (iroh path).
     pub file_transfer_facade: Arc<uc_application::facade::FileTransferFacade>,
+    /// Application-facing analytics entry point. Composes the underlying
+    /// capture sink with the local identity persistence, so every consumer
+    /// in `uc-application` sees one trait instead of two ports plus the
+    /// sequencing rules between them. `LocalAnalyticsIdentity` lives under
+    /// `<app_data>/analytics/`, sharing storage with the global
+    /// EventContext set up by `compose_event_context`.
+    pub analytics_facade: Arc<dyn AnalyticsFacade>,
 }
 
 /// Infrastructure layer implementations
@@ -1028,6 +1038,20 @@ pub fn wire_dependencies(
         deps.clipboard.clipboard_change_origin.clone(),
     );
 
+    // Compose the analytics facade over (a) the gated sink already on
+    // `deps.analytics` and (b) a local identity store that shares the
+    // `<app_data>/analytics/` directory with `compose_event_context`.
+    // SpaceSetupFacade consumes the composed facade; other facades that
+    // only need capture (`ClipboardFacade`, `MobileSyncFacade`) keep
+    // talking to the bare sink on `deps.analytics`.
+    let analytics_dir = app_data_root.join("analytics");
+    let analytics_identity: Arc<dyn AnalyticsIdentityPort> =
+        Arc::new(LocalAnalyticsIdentity::new(analytics_dir));
+    let analytics_facade: Arc<dyn AnalyticsFacade> = Arc::new(DefaultAnalyticsFacade::new(
+        Arc::clone(&deps.analytics),
+        analytics_identity,
+    ));
+
     let wired = WiredDependencies {
         deps,
         trusted_peer_repo: trusted_peer_repo_for_wiring,
@@ -1043,6 +1067,7 @@ pub fn wire_dependencies(
         clipboard_event_reader_repo: clipboard_event_reader_repo_for_wiring,
         emitter_cell,
         file_transfer_facade,
+        analytics_facade,
     };
     let background = BackgroundRuntimeDeps {
         representation_cache,

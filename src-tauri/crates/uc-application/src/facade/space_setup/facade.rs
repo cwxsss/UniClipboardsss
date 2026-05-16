@@ -31,6 +31,7 @@ use uc_core::ports::{
     SetupStatusPort,
 };
 use uc_core::setup::SetupStatus;
+use uc_observability::analytics::AnalyticsFacade;
 
 use crate::facade::space_setup::commands::{
     CurrentInvitation, InitializeSpaceCommand, InitializeSpaceInput, InitializeSpaceResult,
@@ -123,6 +124,11 @@ pub struct SpaceSetupFacade {
     /// `list_paired_peer_device_ids` can self-filter without grabbing the
     /// `DeviceIdentityPort` lock on every call.
     local_device_id: DeviceId,
+    /// Analytics entry point. Held directly on the facade so
+    /// `reset_telemetry_identity` (a cross-cutting operation that doesn't
+    /// belong to any single use case) can call `analytics.reset_identity()`
+    /// without routing through a use case wrapper.
+    analytics: Arc<dyn AnalyticsFacade>,
 }
 
 impl SpaceSetupFacade {
@@ -239,6 +245,7 @@ impl SpaceSetupFacade {
             Arc::clone(&device_identity),
             Arc::clone(&settings),
             Arc::clone(&setup_status),
+            Arc::clone(&analytics),
             handshake_ttl,
         );
         // Capacity 16 is more than enough: the outcome fires at most
@@ -289,7 +296,11 @@ impl SpaceSetupFacade {
             Arc::clone(&trust_peer_uc),
             Arc::clone(&peer_addr_repo),
             Arc::clone(&clock),
+            Arc::clone(&analytics),
         ));
+        // Facade-local handle for `reset_telemetry_identity`. Cloned
+        // before `analytics` is moved into the last use case below.
+        let analytics_for_facade = Arc::clone(&analytics);
         let redeem_pairing_invitation = Arc::new(RedeemPairingInvitationUseCase::new(
             joiner_handshake,
             admit_member_uc,
@@ -318,7 +329,27 @@ impl SpaceSetupFacade {
             peer_addr_repo: peer_addr_repo_for_facade,
             presence: presence_for_facade,
             local_device_id: local_device_id_for_facade,
+            analytics: analytics_for_facade,
         }
+    }
+
+    /// User-initiated telemetry identity reset.
+    ///
+    /// Clears the locally-persisted `space_person_id`, regenerates the
+    /// anonymous identifiers, rebuilds the global EventContext, and emits
+    /// `$identify` so PostHog merges recent events under the new
+    /// anonymous person.
+    ///
+    /// Only this device is affected; peers in the same Space keep their
+    /// `space_person_id` and the Space's PostHog group continues to exist
+    /// — this device just falls back to Solo.
+    #[instrument(skip(self))]
+    pub fn reset_telemetry_identity(
+        &self,
+    ) -> Result<(), crate::facade::space_setup::ResetTelemetryError> {
+        self.analytics
+            .reset_identity()
+            .map_err(|e| crate::facade::space_setup::ResetTelemetryError::Storage(e.to_string()))
     }
 
     /// Try to restore the in-memory space session silently, using the
@@ -1374,7 +1405,7 @@ mod tests {
             key_migration: Arc::new(FakeKeyMigration),
             blob_migration_repo: Arc::new(FakeBlobMigrationRepo),
             blob_cipher: Arc::new(FakeBlobCipher),
-            analytics: Arc::new(uc_observability::analytics::NoopAnalyticsSink),
+            analytics: Arc::new(uc_observability::analytics::NoopAnalyticsFacade),
         });
         (facade, pairing_invitation, peer_addr_repo)
     }
