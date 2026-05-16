@@ -134,8 +134,13 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
     let daemon_connection_state = DaemonConnectionState::default();
     let daemon_ownership = DaemonOwnership::default();
 
-    let event_emitter: std::sync::Arc<dyn uc_application::facade::HostEventEmitterPort> =
-        std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
+    // Issue #747 Phase 5:在 wired 被 move 进 process_handles 前先拿出
+    // host_event_bus 的 Arc(它就是 application 层各 use case 真正 fan-out
+    // 的 bus)。setup 阶段 AppHandle 准备好后,我们把 TauriHostEventEmitter
+    // 通过 `bus.register("tauri", ...)` 挂上去,让 `HostEvent::Delivery`
+    // 真正能推到前端。daemon 后续的 `register("daemon_ws", ...)` 是另一个
+    // 命名空间下的注册,不会覆盖此处的 Tauri emitter。
+    let host_event_bus_for_tauri = wired.host_event_bus.clone();
 
     // 在 background 被 spawn 消费前,clone 出 daemon-lifecycle 装配需要的
     // 两个 Arc 字段(进程级,跨 daemon reload 复用)。`file_transfer_facade`
@@ -145,10 +150,9 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
     let file_transfer_lifecycle = background.file_transfer_lifecycle.clone();
     let file_transfer_facade = wired.file_transfer_facade.clone();
 
-    let runtime = TauriAppRuntime::with_setup(
+    let runtime = TauriAppRuntime::new(
         wired.deps.clone(),
         storage_paths.clone(),
-        event_emitter,
         clipboard_write_coordinator.clone(),
         file_transfer_facade.clone(),
     );
@@ -244,6 +248,11 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
     // 这里只用 `invoke_handler` 接进 Tauri runtime；`builder.export(...)`
     // 走 `tests/specta_export.rs` 那条路径，CI 跑同一个 test 检查 schema drift。
     let specta_builder = crate::specta_builder::build();
+    // setup callback 内需要 `mount_events(app)` 把 collect_events! 里登记的
+    // typed event 注册到 Tauri event registry,否则 `Event::emit` 会 panic
+    // "EventRegistry not found"。builder 自身 `Clone`,所以这里拷贝一份给
+    // setup 闭包,原始 builder 仍用于 `invoke_handler`。
+    let specta_builder_for_setup = specta_builder.clone();
 
     builder
         .plugin(tauri_plugin_autostart::init(
@@ -256,6 +265,26 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
             runtime.set_app_handle(app.handle().clone());
             info!("AppHandle set on TauriAppRuntime for event emission");
             configure_main_window_for_platform(app.handle());
+
+            // Issue #747 Phase 5:把 specta 在 collect_events! 里登记的
+            // typed event 注册到 Tauri 的 EventRegistry。必须在
+            // `Event::emit` 第一次被调用前完成,否则 `get_event_name`
+            // 会 panic。
+            specta_builder_for_setup.mount_events(app);
+
+            // Issue #747 Phase 5:AppHandle 就绪后把 TauriHostEventEmitter
+            // 注册到共享 host_event_bus,让 `HostEvent::Delivery` 从
+            // dispatch_uc fan-out 到前端。`"tauri"` 名字是注销 handle ——
+            // 进程退出前可以反向 unregister,daemon 侧的 `"daemon_ws"`
+            // 注册是独立命名空间,不会相互覆盖。
+            host_event_bus_for_tauri.register(
+                "tauri",
+                std::sync::Arc::new(crate::host_event_emitter::TauriHostEventEmitter::new(
+                    app.handle().clone(),
+                ))
+                    as std::sync::Arc<dyn uc_application::facade::HostEventEmitterPort>,
+            );
+            info!("TauriHostEventEmitter registered on shared host_event_bus");
 
             // 进程级 blob/spool worker —— Tauri runtime 已在 Builder::run()
             // 内就绪,这里 tauri::async_runtime::spawn 才能拿到 reactor。

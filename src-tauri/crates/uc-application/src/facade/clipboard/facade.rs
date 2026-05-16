@@ -28,6 +28,7 @@ use uc_core::MemberRepositoryPort;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_observability::analytics::AnalyticsPort;
 
+use crate::facade::blob_transfer::SharedHostEventEmitter;
 use crate::usecases::clipboard_sync::get_entry_delivery_view::{
     EntryDeliveryView, GetEntryDeliveryViewError, GetEntryDeliveryViewUseCase,
 };
@@ -75,6 +76,11 @@ pub struct ClipboardSyncDeps {
     pub entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     pub event_repo: Arc<dyn ClipboardEventRepositoryPort>,
     pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
+    /// 共享 host-event bus。dispatch fan-out 完成、delivery 状态写入后追发
+    /// 一条 `HostEvent::Delivery::StatusChanged`,GUI 前端凭此实时刷新 badge。
+    /// 测试 / CLI 装配传一根空 bus(`Arc::new(HostEventBus::new())`)即可
+    /// —— 无下游 = noop,行为等价于原来的 `None`。
+    pub host_event_bus: SharedHostEventEmitter,
 }
 
 /// Public-facing input to a dispatch pass. Mirrors the use case's own
@@ -181,6 +187,7 @@ impl ClipboardSyncFacade {
             Arc::clone(&deps.analytics),
             Arc::clone(&deps.first_sync_state),
             Arc::clone(&deps.entry_delivery_repo),
+            Arc::clone(&deps.host_event_bus),
         ));
         let ingest_uc = Arc::new(IngestInboundClipboardUseCase::new(
             Arc::clone(&deps.clipboard_receiver),
@@ -776,6 +783,7 @@ mod tests {
             entry_repo: Arc::new(make_noop_entry_repo()),
             event_repo: Arc::new(make_noop_event_repo()),
             trusted_peer_repo: Arc::new(make_noop_trusted_peer_repo()),
+            host_event_bus: Arc::new(crate::facade::host_event::HostEventBus::new()),
         });
         (facade, receiver)
     }

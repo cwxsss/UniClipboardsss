@@ -54,11 +54,36 @@ pub enum TransferHostEvent {
     },
 }
 
+/// entry delivery 子系统发给宿主的语义事件。
+///
+/// 触发点:`DispatchClipboardEntryUseCase` 在每个 target 的投递结果落盘
+/// 之后逐条发出。
+///
+/// **payload 不携带 status**:订阅方(前端 detail badge)的消费模型是
+/// "看到事件 → 按 entry_id 匹配 → refetch view"。view 永远是 status 的
+/// 真相源,事件本身只是"该不该 refetch"的指针 —— 把 status 塞进 payload
+/// 会引入一份和 view 平行的 wire enum,新增 variant 必须双改且 drift
+/// 时编译器无感。需要乐观更新或减少 refetch 时再独立评估是否带 status。
+#[derive(Debug, Clone)]
+pub enum DeliveryHostEvent {
+    /// 某条 entry 对某个对端的投递状态发生变化。事件丢失/乱序由订阅
+    /// 方的幂等 refetch 吸收。
+    StatusChanged {
+        /// 触发投递的 entry。前端拿到事件后,与当前打开的 entry_id 对比,
+        /// 匹配才 refetch,避免无关 entry 的事件触发 view 抖动。
+        entry_id: String,
+        /// 投递目标对端。view 按对端聚合渲染,所以事件粒度也是按对端;
+        /// 前端目前未消费此字段,留作未来 per-peer 局部刷新的钩子。
+        target_device_id: String,
+    },
+}
+
 /// application 发给宿主环境的统一事件。
 #[derive(Debug, Clone)]
 pub enum HostEvent {
     Clipboard(ClipboardHostEvent),
     Transfer(TransferHostEvent),
+    Delivery(DeliveryHostEvent),
 }
 
 /// 宿主事件发送失败。

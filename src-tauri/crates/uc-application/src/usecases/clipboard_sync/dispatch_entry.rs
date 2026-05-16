@@ -49,6 +49,8 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, info_span, instrument, warn, Instrument};
 use uc_observability::FlowId;
 
+use crate::facade::blob_transfer::SharedHostEventEmitter;
+use crate::facade::host_event::{DeliveryHostEvent, HostEvent};
 use uc_core::clipboard::{
     ClipboardContentCategory, ClipboardContentCategorySet, DeliveryFailureReason,
     EntryDeliveryRecord, EntryDeliveryStatus,
@@ -234,6 +236,14 @@ pub(crate) struct DispatchClipboardEntryUseCase {
     /// `first_clipboard_sync_succeeded` / `first_file_sync_succeeded`。
     /// race 防护由 port impl 内部 `tokio::sync::Mutex` 守护，调用方零感知。
     first_sync_state: Arc<dyn FirstSyncStatePort>,
+    /// 共享 host-event bus。每条 delivery 记录写盘成功后追发一条
+    /// [`HostEvent::Delivery`],让前端 detail badge 在 dispatch 完成后自动
+    /// 刷新而无需手动切 entry。Issue #747 Phase 5。
+    ///
+    /// emit 走 [`HostEventBus::emit_or_warn`] —— 失败仅 warn,不阻塞
+    /// dispatch 主路径;事件丢失 / 乱序由前端 refetch 幂等吸收。CLI / 单元
+    /// 测试装配传一根空 bus 即可(无下游 = noop)。
+    host_event_bus: SharedHostEventEmitter,
 }
 
 impl DispatchClipboardEntryUseCase {
@@ -251,6 +261,7 @@ impl DispatchClipboardEntryUseCase {
         analytics: Arc<dyn AnalyticsPort>,
         first_sync_state: Arc<dyn FirstSyncStatePort>,
         entry_delivery_repo: Arc<dyn EntryDeliveryRepositoryPort>,
+        host_event_bus: SharedHostEventEmitter,
     ) -> Self {
         Self {
             peer_addr_repo,
@@ -265,6 +276,7 @@ impl DispatchClipboardEntryUseCase {
             analytics,
             first_sync_state,
             entry_delivery_repo,
+            host_event_bus,
         }
     }
 
@@ -602,6 +614,15 @@ impl DispatchClipboardEntryUseCase {
 
         // 串行落盘 delivery 记录。失败仅 log,不阻塞主流程的返回,这是
         // 一个可观测性副作用,不该影响 dispatch 自身的成败语义。
+        //
+        // Issue #747 Phase 5:成功写入一条 record 后,立即追发一条
+        // `HostEvent::Delivery::StatusChanged`,让 GUI detail 视图实时
+        // 刷新。先 record → 后 emit 的顺序很关键 —— 前端拿到事件后会
+        // refetch view,view 必须能读到最新写入,否则前端会得到一份与
+        // 事件不一致的旧快照(看似"再切一次 entry 才刷新"的旧问题原貌)。
+        // 事件 payload 不携带 status —— 前端按 entry_id 匹配后 refetch
+        // 拿真相,事件只是"该不该 refetch"的指针,见 `DeliveryHostEvent`
+        // 的注释。
         for record in &delivery_records {
             if let Err(err) = self.entry_delivery_repo.record_attempt(record).await {
                 warn!(
@@ -610,7 +631,14 @@ impl DispatchClipboardEntryUseCase {
                     target_device_id = %record.target_device_id,
                     "failed to record entry delivery"
                 );
+                continue;
             }
+            self.host_event_bus.emit_or_warn(HostEvent::Delivery(
+                DeliveryHostEvent::StatusChanged {
+                    entry_id: record.entry_id.to_string(),
+                    target_device_id: record.target_device_id.as_str().to_string(),
+                },
+            ));
         }
 
         Ok(DispatchOutcome {
@@ -1066,6 +1094,7 @@ mod tests {
             analytics,
             first_sync_state,
             Arc::new(NoopEntryDeliveryRepo),
+            Arc::new(crate::facade::host_event::HostEventBus::new()),
         )
     }
 
@@ -2209,6 +2238,7 @@ mod tests {
             Arc::new(uc_observability::analytics::NoopAnalyticsSink),
             Arc::new(AllMarkedFirstSyncState),
             Arc::clone(&spy) as Arc<dyn EntryDeliveryRepositoryPort>,
+            Arc::new(crate::facade::host_event::HostEventBus::new()),
         );
 
         let mut input = input();
@@ -2307,6 +2337,7 @@ mod tests {
             Arc::new(uc_observability::analytics::NoopAnalyticsSink),
             Arc::new(AllMarkedFirstSyncState),
             Arc::clone(&spy) as Arc<dyn EntryDeliveryRepositoryPort>,
+            Arc::new(crate::facade::host_event::HostEventBus::new()),
         );
 
         let _ = uc.execute(input()).await.expect("dispatch ok");
@@ -2342,5 +2373,226 @@ mod tests {
         ] {
             assert_eq!(dispatch_failure_stage(&err), expected);
         }
+    }
+
+    // ── Phase 5 (#747):delivery host event emit ─────────────────────────
+    //
+    // 写盘单元测试已覆盖"5 种 outcome → 5 种 record"映射;本组聚焦"record
+    // 写盘成功后 → bus.emit_or_warn 追发一条 HostEvent::Delivery"。在
+    // bus 上注册一个 RecordingEmitter 抓事件序列,断言顺序、payload、
+    // 与 `entry_id=None` 路径下不发事件。
+
+    use crate::facade::host_event::{
+        DeliveryHostEvent, EmitError as HostEmitError, HostEvent, HostEventBus,
+        HostEventEmitterPort,
+    };
+    use std::sync::Mutex as StdMutex;
+
+    /// 把 HostEvent 全部录到一个 Vec,测试结束后断言序列与 payload。
+    /// 与 apply_inbound::tests::RecordingEmitter 等价,但定义在本 mod 内,
+    /// 避免跨模块 visibility(uc-application AGENTS §11.4 — orchestrator /
+    /// publisher 等内部类型不出 crate)。
+    #[derive(Default)]
+    struct RecordingEmitter {
+        events: StdMutex<Vec<HostEvent>>,
+    }
+    impl RecordingEmitter {
+        fn snapshot(&self) -> Vec<HostEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(&self, event: HostEvent) -> Result<(), HostEmitError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    /// 把 spy delivery repo + recording emitter 都装进同一份 dispatch use
+    /// case。两个 3-target 测试共享构造,避免重复列 13 个 Arc::new。
+    fn build_uc_with_emitter(
+        repo: MockPeerAddrRepo,
+        cipher: MockCipher,
+        dispatch: MockDispatch,
+        spy: Arc<SpyEntryDeliveryRepo>,
+    ) -> (DispatchClipboardEntryUseCase, Arc<RecordingEmitter>) {
+        let recorder = Arc::new(RecordingEmitter::default());
+        let bus = Arc::new(HostEventBus::new());
+        bus.register(
+            "recorder",
+            Arc::clone(&recorder) as Arc<dyn HostEventEmitterPort>,
+        );
+        let uc = DispatchClipboardEntryUseCase::new(
+            Arc::new(repo),
+            Arc::new(make_member_repo_all_enabled()),
+            Arc::new(StaticPresence(ReachabilityState::Unknown)),
+            Arc::new(cipher),
+            Arc::new(dispatch),
+            Arc::new(make_device_identity("self-device")),
+            Arc::new(make_local_identity_stub()),
+            Arc::new(make_settings_stub()),
+            Arc::new(FixedClock(1_700_000_000_000)),
+            Arc::new(uc_observability::analytics::NoopAnalyticsSink),
+            Arc::new(AllMarkedFirstSyncState),
+            spy as Arc<dyn EntryDeliveryRepositoryPort>,
+            bus,
+        );
+        (uc, recorder)
+    }
+
+    /// 3 种成功/失败 outcome 都要 emit 一条对应的 Delivery 事件,且事件
+    /// 顺序与落盘顺序一致(record_attempt 串行 → emit 在同一循环中追加)。
+    /// 事件 payload 只携带 (entry_id, target_device_id);status 由前端
+    /// refetch view 拿到,事件本身不承载状态,所以本测试只断言事件出现
+    /// 与目标对端集合 1:1 对应。
+    #[tokio::test]
+    async fn dispatch_emits_delivery_event_for_each_persisted_outcome() {
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list().times(1).returning(|| {
+            Ok(vec![
+                record("peer-ok"),
+                record("peer-dup"),
+                record("peer-off"),
+            ])
+        });
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-ok")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-dup")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::DuplicateIgnored));
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-off")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Err(ClipboardDispatchError::Offline));
+
+        let spy = Arc::new(SpyEntryDeliveryRepo::default());
+        let (uc, recorder) = build_uc_with_emitter(repo, cipher, dispatch, Arc::clone(&spy));
+
+        let mut input = input();
+        input.entry_id = Some(EntryId::from("entry-events".to_string()));
+        uc.execute(input).await.expect("dispatch ok");
+
+        // 落盘 3 条 → 应发 3 条事件,1:1 对应。
+        let snapshot = recorder.snapshot();
+        assert_eq!(
+            snapshot.len(),
+            3,
+            "落盘 3 条 → 应发 3 条事件: {snapshot:#?}"
+        );
+
+        // 按 target_device_id 收集,断言三个对端都出现,entry_id 与输入一致。
+        let targets: std::collections::HashSet<String> = snapshot
+            .iter()
+            .map(|ev| match ev {
+                HostEvent::Delivery(DeliveryHostEvent::StatusChanged {
+                    entry_id,
+                    target_device_id,
+                }) => {
+                    assert_eq!(entry_id, "entry-events", "事件 entry_id 与输入一致");
+                    target_device_id.clone()
+                }
+                other => panic!("expected Delivery event, got {other:?}"),
+            })
+            .collect();
+
+        assert!(targets.contains("peer-ok"));
+        assert!(targets.contains("peer-dup"));
+        assert!(targets.contains("peer-off"));
+    }
+
+    /// entry_id=None(CLI raw-bytes / 测试)路径既不落盘,也不发事件 ——
+    /// "没有 entry 关联"是 dispatch 自身的语义,前端 view 根本不存在,事
+    /// 件也无人订阅。
+    #[tokio::test]
+    async fn dispatch_without_entry_id_emits_no_delivery_event() {
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a")]));
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+
+        let spy = Arc::new(SpyEntryDeliveryRepo::default());
+        let (uc, recorder) = build_uc_with_emitter(repo, cipher, dispatch, Arc::clone(&spy));
+
+        // input() 默认 entry_id = None。
+        uc.execute(input()).await.expect("dispatch ok");
+        assert!(
+            recorder.snapshot().is_empty(),
+            "entry_id=None 时不应有任何 delivery 事件"
+        );
+    }
+
+    /// 装一根没有任何下游注册的空 bus,emit_or_warn 走完空 fan-out 不抛错;
+    /// delivery 仍按规则落盘。验证"装配方不关心前端事件"的 CLI / 测试场景
+    /// 不需要任何 Option 包裹 —— 空 bus 就是 noop。
+    #[tokio::test]
+    async fn dispatch_with_empty_bus_still_persists_delivery() {
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a")]));
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+
+        let spy = Arc::new(SpyEntryDeliveryRepo::default());
+        let uc = DispatchClipboardEntryUseCase::new(
+            Arc::new(repo),
+            Arc::new(make_member_repo_all_enabled()),
+            Arc::new(StaticPresence(ReachabilityState::Unknown)),
+            Arc::new(cipher),
+            Arc::new(dispatch),
+            Arc::new(make_device_identity("self-device")),
+            Arc::new(make_local_identity_stub()),
+            Arc::new(make_settings_stub()),
+            Arc::new(FixedClock(1_700_000_000_000)),
+            Arc::new(uc_observability::analytics::NoopAnalyticsSink),
+            Arc::new(AllMarkedFirstSyncState),
+            Arc::clone(&spy) as Arc<dyn EntryDeliveryRepositoryPort>,
+            Arc::new(HostEventBus::new()),
+        );
+
+        let mut input = input();
+        input.entry_id = Some(EntryId::from("entry-no-emitter".to_string()));
+        uc.execute(input).await.expect("dispatch ok");
+
+        // 落盘行为不变 —— bus 即便空,record_attempt 仍触发。
+        let attempts = spy.snapshot().await;
+        assert_eq!(attempts.len(), 1);
+        assert!(matches!(attempts[0].status, EntryDeliveryStatus::Delivered));
     }
 }

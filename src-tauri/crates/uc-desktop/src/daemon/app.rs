@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
+use uc_application::facade::{AppFacade, AppPaths, HostEventBus, HostEventEmitterPort};
 use uc_core::ports::MobileLanLifecyclePort;
 
 use crate::daemon::peers::presence_monitor::PresenceMonitor;
@@ -97,10 +97,12 @@ pub struct DaemonApp {
     /// Process-level filesystem layout (token path, db path, cache dir, etc.)
     /// — NOT business state, lives on daemon.
     storage_paths: AppPaths,
-    /// Shared cell for the host event emitter. Bootstrap creates the cell
-    /// and shares it with downstream consumers; daemon writes the
-    /// concrete `DaemonApiEventEmitter` into it once `event_tx` is ready.
-    event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+    /// Shared host-event bus. Bootstrap creates the bus and shares it with
+    /// downstream consumers; daemon registers its `DaemonApiEventEmitter`
+    /// on the bus once `event_tx` is ready. Registration is additive —
+    /// emitters already attached by other call sites (Tauri webview,
+    /// logging) keep receiving events without coordination.
+    host_event_bus: Arc<HostEventBus>,
     state: Arc<RwLock<RuntimeState>>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
@@ -142,7 +144,7 @@ impl DaemonApp {
         services: Vec<Arc<dyn DaemonService>>,
         app_facade: Arc<AppFacade>,
         storage_paths: AppPaths,
-        event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+        host_event_bus: Arc<HostEventBus>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
@@ -150,7 +152,7 @@ impl DaemonApp {
             services,
             app_facade,
             storage_paths,
-            event_emitter_cell,
+            host_event_bus,
             state,
             event_tx,
             cancel: CancellationToken::new(),
@@ -174,7 +176,7 @@ impl DaemonApp {
         services: Vec<Arc<dyn DaemonService>>,
         app_facade: Arc<AppFacade>,
         storage_paths: AppPaths,
-        event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+        host_event_bus: Arc<HostEventBus>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         _encryption_unlocked: bool,
@@ -201,7 +203,7 @@ impl DaemonApp {
             services,
             app_facade,
             storage_paths,
-            event_emitter_cell,
+            host_event_bus,
             state,
             event_tx,
             cancel: CancellationToken::new(),
@@ -283,13 +285,20 @@ impl DaemonApp {
             Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
             None => api_state,
         };
-        // 4. Wire the event emitter into the shared cell so application
-        // use cases (which read through the cell) emit WS events.
-        *self
-            .event_emitter_cell
-            .write()
-            .unwrap_or_else(|p| p.into_inner()) =
-            Arc::new(DaemonApiEventEmitter::new(self.event_tx.clone()));
+        // 4. Register the daemon's WS emitter on the shared host-event bus
+        // so application use cases (which fan out through the bus) push WS
+        // events to LAN clients.
+        //
+        // `register` is additive — emitters registered earlier (logging,
+        // Tauri webview if running in-process) keep receiving events. The
+        // `"daemon_ws"` name is the unregistration handle: a future daemon
+        // reload can pull this exact emitter off the bus without disturbing
+        // the GUI side.
+        self.host_event_bus.register(
+            "daemon_ws",
+            Arc::new(DaemonApiEventEmitter::new(self.event_tx.clone()))
+                as Arc<dyn HostEventEmitterPort>,
+        );
 
         info!("uniclipboard-daemon running");
 
