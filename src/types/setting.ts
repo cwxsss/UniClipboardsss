@@ -159,6 +159,18 @@ export interface NetworkSettings {
 }
 
 /**
+ * 快捷面板（Spotlight 风格）功能开关 - 对应 Rust QuickPanelSettings
+ *
+ * 默认 `enabled = true`：快捷面板是产品核心交互入口，新装即应可用。
+ * 变更走 `set_quick_panel_enabled` Tauri command：开启即时注册全局快捷键
+ * 并预创建隐藏窗口；关闭即时反注册快捷键，但窗口与底层 WebContent 进程
+ * 留到 GUI 重启后才彻底释放（macOS 上销毁路径会崩溃）。
+ */
+export interface QuickPanelSettings {
+  enabled: boolean
+}
+
+/**
  * 应用设置 - 对应 Rust Settings
  */
 export interface Settings {
@@ -171,6 +183,7 @@ export interface Settings {
   keyboardShortcuts?: Record<string, string | string[]>
   fileSync?: FileSyncSettings
   network: NetworkSettings
+  quickPanel: QuickPanelSettings
 }
 
 // ============================================================================
@@ -232,6 +245,9 @@ export interface SettingContextType {
   updateFileSyncSetting: (newFileSyncSetting: Partial<FileSyncSettings>) => Promise<void>
   updateNetworkSetting: (
     newNetworkSetting: Partial<NetworkSettings>
+  ) => Promise<{ restartRequired: boolean }>
+  updateQuickPanelSetting: (
+    newQuickPanelSetting: Partial<QuickPanelSettings>
   ) => Promise<{ restartRequired: boolean }>
 }
 

@@ -309,6 +309,19 @@ pub struct NetworkSettings {
 ///
 /// 任意字段变更后都需要重启 daemon 才能生效(v1 不做配置热重载,详见
 /// `.context/mobile-sync/SPEC.md` §1.2.5)。
+/// 快捷面板（Spotlight 风格）功能开关。
+///
+/// 表达用户"是否启用快捷面板"这一偏好。具体如何落地（全局快捷键注册、
+/// 窗口生命周期等）由上层执行，与本模型无关。
+///
+/// 默认 `true`：快捷面板是产品的核心交互入口，新装即应可用；需要避开
+/// 全局快捷键的用户（与其他工具冲突 / 企业策略）可在设置页关闭。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct QuickPanelSettings {
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MobileSyncSettings {
@@ -363,6 +376,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub mobile_sync: MobileSyncSettings,
+
+    #[serde(default)]
+    pub quick_panel: QuickPanelSettings,
 }
 
 /// The current schema version used for settings persistence.

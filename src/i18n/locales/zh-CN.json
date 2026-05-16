@@ -63,6 +63,13 @@
   },
   "settings": {
     "title": "设置",
+    "restartBanner": {
+      "restartButton": "立即重启",
+      "restartingButton": "正在重启…",
+      "dismissAriaLabel": "收起重启提示",
+      "errorMessage": "自动重启失败，请手动退出并重新打开应用以使更改生效。",
+      "retryButton": "重试"
+    },
     "categories": {
       "general": "通用设置",
       "appearance": "外观设置",
@@ -71,7 +78,8 @@
       "network": "网络设置",
       "storage": "存储管理",
       "about": "关于",
-      "shortcuts": "快捷键"
+      "shortcuts": "快捷键",
+      "quickPanel": "快捷面板"
     },
     "sections": {
       "general": {
@@ -302,12 +310,7 @@
           }
         },
         "restartBanner": {
-          "message": "需要重启应用以使 LAN-only 模式更改生效。",
-          "restartButton": "立即重启",
-          "restartingButton": "正在重启…",
-          "dismissAriaLabel": "收起重启提示",
-          "errorMessage": "自动重启失败，请手动退出并重新打开应用以使更改生效。",
-          "retryButton": "重试"
+          "message": "需要重启应用以使 LAN-only 模式更改生效。"
         }
       },
       "storage": {
@@ -412,6 +415,16 @@
         "confirm": "确认",
         "cancel": "取消",
         "modified": "已修改"
+      },
+      "quickPanel": {
+        "title": "快捷面板",
+        "featureTitle": "功能",
+        "shortcutTitle": "快捷键",
+        "enable": {
+          "label": "启用快捷面板",
+          "description": "开启后会注册全局快捷键，并在后台创建快捷面板窗口；关闭即时反注册快捷键。"
+        },
+        "restartHint": "快捷面板已停用。建议重启应用以彻底释放后台进程。"
       },
       "about": {
         "title": "关于",

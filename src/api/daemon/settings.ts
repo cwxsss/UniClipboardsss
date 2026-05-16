@@ -124,6 +124,21 @@ export interface NetworkSettings {
 }
 
 /**
+ * Quick panel (Spotlight-style) feature toggle. / 快捷面板功能开关。
+ *
+ * Default `enabled = true`. GUI clients toggle this via the
+ * `set_quick_panel_enabled` Tauri command. Enabling registers the global
+ * shortcut and pre-creates the (hidden) panel window in-process. Disabling
+ * unregisters the shortcut immediately, but the hidden webview and its
+ * WebContent XPC remain alive until the GUI is restarted — destroying the
+ * NSPanel on macOS crashes the process. The daemon HTTP path only persists
+ * the flag (used by non-GUI consumers / cross-window sync).
+ */
+export interface QuickPanelSettings {
+  enabled: boolean
+}
+
+/**
  * Retention rule — discriminated union matching the Rust `RetentionRule` enum.
  *
  * 保留规则 — 与 Rust `RetentionRule` 枚举匹配的可区分联合类型。
@@ -169,6 +184,7 @@ export interface Settings {
   keyboardShortcuts: Record<string, ShortcutKey>
   fileSync: FileSyncSettings
   network: NetworkSettings
+  quickPanel: QuickPanelSettings
 }
 
 // ── API response wrappers ──────────────────────────────────────
@@ -212,6 +228,7 @@ interface SettingsPatchRequest {
   }
   fileSync?: Partial<FileSyncSettings>
   network?: Partial<NetworkSettings>
+  quickPanel?: Partial<QuickPanelSettings>
 }
 
 // ── Public API ─────────────────────────────────────────────────
@@ -366,6 +383,12 @@ function toSettingsPatchRequest(settings: Partial<Settings>): SettingsPatchReque
     // (e.g. just `{ allowRelayFallback: ... }`); we must not emit undefined
     // fields, since the wire patch interprets `null/undefined` as "no change".
     patch.network = { ...settings.network }
+  }
+
+  if (settings.quickPanel) {
+    // Same rule as `network`: only emit fields present on the partial input,
+    // so undefined-as-no-change wire semantics is preserved.
+    patch.quickPanel = { ...settings.quickPanel }
   }
 
   return patch

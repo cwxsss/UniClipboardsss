@@ -96,6 +96,9 @@ const baseSetting: Settings = {
     allowRelayFallback: true,
     allowOverlayNetworkAddrs: false,
   },
+  quickPanel: {
+    enabled: true,
+  },
 }
 
 describe('SettingProvider theme integration', () => {
