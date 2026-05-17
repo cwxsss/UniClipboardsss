@@ -9,9 +9,9 @@ use uc_core::ports::blob::BlobTransferPort;
 use uc_core::ports::clipboard::{ClipboardPayloadResolverPort, ThumbnailRepositoryPort};
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::{
-    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationRepositoryPort,
-    ClipboardSelectionRepositoryPort, ClockPort, DeviceIdentityPort, FileTransferRepositoryPort,
-    SettingsPort,
+    CacheFsPort, ClipboardEntryRepositoryPort, ClipboardEventWriterPort,
+    ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort, ClockPort,
+    DeviceIdentityPort, FileTransferRepositoryPort, SettingsPort,
 };
 use uc_core::{
     ClipboardEntry, ClipboardEvent, ClipboardSelection, ClipboardSelectionDecision, MimeType,
@@ -23,8 +23,8 @@ use crate::usecases::clipboard_history::{
     compute_clipboard_stats, CleanupExpiredFilesUseCase, CleanupResult,
     ClearClipboardHistoryUseCase, DeleteClipboardEntryUseCase, EntryDetailResult,
     EntryProjectionDto, EntryResourceResult, GetEntryDetailUseCase, GetEntryResourceUseCase,
-    ListClipboardEntryProjectionsUseCase, ListProjectionsError,
-    ToggleFavoriteClipboardEntryUseCase,
+    ListClipboardEntryProjectionsUseCase, ListProjectionsError, ReconcileMissingFilesUseCase,
+    ReconcileResult, ToggleFavoriteClipboardEntryUseCase,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +99,13 @@ pub struct CleanupResultView {
     pub errors: u32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReconcileResultView {
+    pub entries_scanned: u32,
+    pub entries_deleted: u32,
+    pub errors: u32,
+}
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ClipboardHistoryError {
     #[error("entry not found")]
@@ -137,6 +144,10 @@ pub struct ClipboardHistoryFacadeDeps {
     pub device_identity: Arc<dyn DeviceIdentityPort>,
     /// `seed_text_entry` 用：构造 `captured_at_ms` / `created_at_ms`。
     pub clock: Arc<dyn ClockPort>,
+    /// `reconcile_missing_files` / `cleanup_expired_files` 等用例需要查询
+    /// cache 目录及其下路径是否真实存在；走 port 而不是 `std::fs`，让 uc-app
+    /// 保持基础设施无关。
+    pub cache_fs: Arc<dyn CacheFsPort>,
 }
 
 pub struct ClipboardHistoryFacade {
@@ -147,6 +158,7 @@ pub struct ClipboardHistoryFacade {
     delete_uc: DeleteClipboardEntryUseCase,
     clear_uc: ClearClipboardHistoryUseCase,
     cleanup_uc: Option<CleanupExpiredFilesUseCase>,
+    reconcile_uc: Option<ReconcileMissingFilesUseCase>,
     /// debug seed 路径需要的额外 ports，常态业务不直接消费。
     seed_event_writer: Arc<dyn ClipboardEventWriterPort>,
     seed_entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
@@ -171,6 +183,7 @@ impl ClipboardHistoryFacade {
             settings,
             device_identity,
             clock,
+            cache_fs,
         } = deps;
         // seed 路径要在主 use case 装配之后单独留一份 Arc 引用——其它字段
         // 都被 move 进各 use case 内部，不能在外面继续 clone。
@@ -241,16 +254,36 @@ impl ClipboardHistoryFacade {
             clear_uc = clear_uc.with_blob_transfer(bt);
         }
 
-        // cleanup 只在装配方传入了 file_cache_dir 时有意义 —— 没有 cache
-        // 目录就没有需要扫描的文件，构造 use case 也没用。
-        let cleanup_uc = file_cache_dir.map(|dir| {
+        // cleanup 与 reconcile 都只在装配方传入了 file_cache_dir 时才有
+        // 意义：没有 cache 目录就没有可扫描的文件 / 可消解的漂移条目。两者
+        // 共享同一组底层 ports，所以这里把 Arc clone 一份给 cleanup，原始
+        // ownership 留给 reconcile（后写入字段）。
+        let cleanup_uc = file_cache_dir.clone().map(|dir| {
             let mut uc = CleanupExpiredFilesUseCase::new(
                 settings,
+                dir,
+                entry_repo.clone(),
+                selection_repo.clone(),
+                event_writer.clone(),
+                representation_repo.clone(),
+            );
+            if let Some(idx) = search_index.clone() {
+                uc = uc.with_search_index(idx);
+            }
+            if let Some(bt) = blob_transfer.clone() {
+                uc = uc.with_blob_transfer(bt);
+            }
+            uc
+        });
+
+        let reconcile_uc = file_cache_dir.map(|dir| {
+            let mut uc = ReconcileMissingFilesUseCase::new(
                 dir,
                 entry_repo,
                 selection_repo,
                 event_writer,
                 representation_repo,
+                cache_fs,
             );
             if let Some(idx) = search_index {
                 uc = uc.with_search_index(idx);
@@ -269,6 +302,7 @@ impl ClipboardHistoryFacade {
             delete_uc,
             clear_uc,
             cleanup_uc,
+            reconcile_uc,
             seed_event_writer,
             seed_entry_repo,
             seed_device_identity,
@@ -444,6 +478,27 @@ impl ClipboardHistoryFacade {
         Ok(cleanup_to_view(result))
     }
 
+    /// Drop every DB entry whose cache-managed `file://` path no longer
+    /// exists on disk. Companion to [`Self::cleanup_expired_files`] —
+    /// cleanup walks the cache dir, reconcile walks the entry list, so
+    /// together they close both directions of cache↔DB drift. Should be
+    /// invoked once on startup before any code path observes a hash.
+    ///
+    /// Returns `Ok(default())` when the facade was assembled without a
+    /// `file_cache_dir` (headless / test contexts have nothing to drift).
+    pub async fn reconcile_missing_files(
+        &self,
+    ) -> Result<ReconcileResultView, ClipboardHistoryError> {
+        let Some(uc) = self.reconcile_uc.as_ref() else {
+            return Ok(ReconcileResultView::default());
+        };
+        let result = uc
+            .execute()
+            .await
+            .map_err(|e| ClipboardHistoryError::Internal(e.to_string()))?;
+        Ok(reconcile_to_view(result))
+    }
+
     pub async fn clear_history(&self) -> Result<ClearHistoryResultView, ClipboardHistoryError> {
         let result = self
             .clear_uc
@@ -512,6 +567,14 @@ fn cleanup_to_view(result: CleanupResult) -> CleanupResultView {
         bytes_reclaimed: result.bytes_reclaimed,
         entries_deleted: result.entries_deleted,
         orphans_removed: result.orphans_removed,
+        errors: result.errors,
+    }
+}
+
+fn reconcile_to_view(result: ReconcileResult) -> ReconcileResultView {
+    ReconcileResultView {
+        entries_scanned: result.entries_scanned,
+        entries_deleted: result.entries_deleted,
         errors: result.errors,
     }
 }
