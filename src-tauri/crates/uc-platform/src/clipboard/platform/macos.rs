@@ -1,4 +1,5 @@
 use super::super::common::CommonClipboardImpl;
+use super::super::payload::rep_bytes;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use clipboard_rs::ClipboardContext;
@@ -93,7 +94,12 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
 
     match (rep.mime.as_deref(), format_default) {
         (Some(m), Some(default)) if default.starts_with("image/") && !m.starts_with("image/") => {
-            let recovered = crate::clipboard::common::sniff_image_magic(rep.expect_inline_bytes())
+            // sniff 路径罕见（要求 image-like format_id + 显式 mime 不是 image/*）；
+            // 即便 rep 是 LocalFile source 读盘失败，也只是退回 format_id 默认 mime,
+            // 不影响后续 setData 分支的实际写入决策。
+            let recovered = rep_bytes(rep)
+                .ok()
+                .and_then(|b| crate::clipboard::common::sniff_image_magic(&b))
                 .unwrap_or(default);
             tracing::warn!(
                 format_id = %rep.format_id,
@@ -258,7 +264,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             Some("text/plain") => {
                 // text/plain 的字节是 UTF-8，NSPasteboardTypeString 期望 UTF-8 字节，
                 // 直接写原始字节，不经 NSString 转换（避免对非法 UTF-8 误报）。
-                let data = make_nsdata(rep.expect_inline_bytes());
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile text/plain rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let data = make_nsdata(&bytes);
                 // NSPasteboardTypeString 是 extern "C" 静态变量，访问需要 unsafe 块。
                 // setData_forType 本身是 `pub fn`（安全方法）。
                 let ok = unsafe { text_item.setData_forType(&data, NSPasteboardTypeString) };
@@ -274,7 +293,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 }
             }
             Some("text/html") => {
-                let data = make_nsdata(rep.expect_inline_bytes());
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile text/html rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let data = make_nsdata(&bytes);
                 // NSPasteboardTypeHTML 是 extern "C" 静态变量，访问需要 unsafe 块。
                 let ok = unsafe { text_item.setData_forType(&data, NSPasteboardTypeHTML) };
                 if ok {
@@ -294,7 +326,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 // TextEdit 纯文本模式）继续用 NSPasteboardTypeString。原始 RTF 字节是
                 // ASCII 安全的（RTF 1.x 规范，非 ASCII 都做 \uN 转义），直接喂给 NSData。
                 // NSPasteboardTypeRTF 是 extern "C" 静态变量，访问需要 unsafe 块。
-                let data = make_nsdata(rep.expect_inline_bytes());
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile text/rtf rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let data = make_nsdata(&bytes);
                 let ok = unsafe { text_item.setData_forType(&data, NSPasteboardTypeRTF) };
                 if ok {
                     debug!(bytes = rep.size_bytes(), "写入 NSPasteboardTypeRTF 成功");
@@ -314,7 +359,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 // PNG 字节直接喂给 NSPasteboardTypePNG，AppKit 内部 lazy-decode，比
                 // 经 NSImage 中转更稳（避免 alpha / colorspace 翻译误差）。
                 let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
-                let data = make_nsdata(rep.expect_inline_bytes());
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile image/png rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let data = make_nsdata(&bytes);
                 // NSPasteboardTypePNG 是 extern "C" 静态变量，访问需要 unsafe 块。
                 let ok = unsafe { item.setData_forType(&data, NSPasteboardTypePNG) };
                 if ok {
@@ -332,7 +390,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             }
             Some("image/tiff") => {
                 let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
-                let data = make_nsdata(rep.expect_inline_bytes());
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile image/tiff rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let data = make_nsdata(&bytes);
                 // NSPasteboardTypeTIFF 是 extern "C" 静态变量，访问需要 unsafe 块。
                 let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeTIFF) };
                 if ok {
@@ -349,7 +420,20 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 }
             }
             Some("text/uri-list") => {
-                let uris = match parse_uri_list(rep.expect_inline_bytes()) {
+                let bytes = match rep_bytes(rep) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            format_id = %rep.format_id,
+                            bytes = rep.size_bytes(),
+                            "macOS 多 rep 写入：读取 LocalFile text/uri-list rep 字节失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                let uris = match parse_uri_list(&bytes) {
                     Ok(list) => list,
                     Err(e) => {
                         warn!(
@@ -537,4 +621,8 @@ mod tests {
         assert_eq!(resolve_multi_rep_mime(&rep("PixPinData", None)), None);
         assert_eq!(resolve_multi_rep_mime(&rep("Ole Private Data", None)), None);
     }
+
+    // `rep_bytes` 自身的回归测试在 `crate::clipboard::payload::tests` 里（与 helper
+    // 同文件，三平台都跑），本测试模块只覆盖 macOS 多 rep 写入相关的
+    // `resolve_multi_rep_mime` 分派表。
 }

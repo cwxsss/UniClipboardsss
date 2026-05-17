@@ -1,3 +1,4 @@
+use super::payload::rep_bytes;
 use anyhow::{anyhow, Result};
 use clipboard_rs::{common::RustImage, Clipboard, ContentFormat};
 use tracing::{debug, info, warn};
@@ -683,7 +684,11 @@ impl CommonClipboardImpl {
             (Some(m), Some(default))
                 if default.starts_with("image/") && !m.starts_with("image/") =>
             {
-                let recovered = sniff_image_magic(rep.expect_inline_bytes()).unwrap_or(default);
+                // sniff 路径罕见；rep 是 LocalFile source 读盘失败时退回 format_id 默认 mime。
+                let recovered = rep_bytes(rep)
+                    .ok()
+                    .and_then(|b| sniff_image_magic(&b))
+                    .unwrap_or(default);
                 warn!(
                     format_id = %rep.format_id,
                     wire_mime = m,
@@ -696,27 +701,27 @@ impl CommonClipboardImpl {
             (None, default) => default,
         };
 
+        // 把单 rep 的字节预读到 owned `Vec<u8>`（Inline 转 owned, LocalFile 同步读盘）。
+        // 后续各分支再从这份 owned 字节构造 String / RustImageData / set_buffer 输入,
+        // 保证 LocalFile rep 也能走完单 rep 快路径（避免 `expect_inline_bytes` panic,
+        // 见 `common::rep_bytes` 注释）。
+        let single_rep_bytes = rep_bytes(rep)?.into_owned();
+
         match effective_mime {
             Some("text/plain") => {
-                map_clipboard_err(
-                    ctx.set_text(String::from_utf8(rep.expect_inline_bytes().to_vec())?),
-                )?;
+                map_clipboard_err(ctx.set_text(String::from_utf8(single_rep_bytes)?))?;
             }
             Some("text/rtf") => {
-                map_clipboard_err(
-                    ctx.set_rich_text(String::from_utf8(rep.expect_inline_bytes().to_vec())?),
-                )?;
+                map_clipboard_err(ctx.set_rich_text(String::from_utf8(single_rep_bytes)?))?;
             }
             Some("text/html") => {
-                map_clipboard_err(
-                    ctx.set_html(String::from_utf8(rep.expect_inline_bytes().to_vec())?),
-                )?;
+                map_clipboard_err(ctx.set_html(String::from_utf8(single_rep_bytes)?))?;
             }
             Some("text/uri-list") | Some("file/uri-list") => {
                 // Convert file:// URIs back to raw OS paths for set_files(),
                 // which expects native paths. Also handle raw paths for compatibility
                 // with inbound cache paths that aren't URI-encoded.
-                let files: Vec<String> = String::from_utf8(rep.expect_inline_bytes().to_vec())?
+                let files: Vec<String> = String::from_utf8(single_rep_bytes)?
                     .lines()
                     .filter_map(|line| {
                         let line = line.trim();
@@ -752,29 +757,26 @@ impl CommonClipboardImpl {
                 #[cfg(target_os = "macos")]
                 {
                     if mime == "image/png" {
-                        map_clipboard_err(
-                            ctx.set_buffer("public.png", rep.expect_inline_bytes().to_vec()),
-                        )?;
+                        map_clipboard_err(ctx.set_buffer("public.png", single_rep_bytes))?;
                     } else {
                         // Non-PNG images still need format conversion via set_image
-                        let img =
-                            clipboard_rs::RustImageData::from_bytes(rep.expect_inline_bytes())
-                                .map_err(|e| {
-                                    warn!(
-                                        mime = mime,
-                                        data_size = rep.size_bytes(),
-                                        error = %e,
-                                        "write_snapshot: failed to decode image bytes"
-                                    );
-                                    anyhow!(e)
-                                })?;
+                        let img = clipboard_rs::RustImageData::from_bytes(&single_rep_bytes)
+                            .map_err(|e| {
+                                warn!(
+                                    mime = mime,
+                                    data_size = rep.size_bytes(),
+                                    error = %e,
+                                    "write_snapshot: failed to decode image bytes"
+                                );
+                                anyhow!(e)
+                            })?;
                         map_clipboard_err(ctx.set_image(img))?;
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let img = clipboard_rs::RustImageData::from_bytes(rep.expect_inline_bytes())
-                        .map_err(|e| {
+                    let img = clipboard_rs::RustImageData::from_bytes(&single_rep_bytes).map_err(
+                        |e| {
                             warn!(
                                 mime = mime,
                                 data_size = rep.size_bytes(),
@@ -782,7 +784,8 @@ impl CommonClipboardImpl {
                                 "write_snapshot: failed to decode image bytes"
                             );
                             anyhow!(e)
-                        })?;
+                        },
+                    )?;
                     map_clipboard_err(ctx.set_image(img))?;
                 }
                 debug!(
@@ -823,9 +826,7 @@ impl CommonClipboardImpl {
                     bytes = rep.size_bytes(),
                     "write_snapshot: writing rep via raw set_buffer fallback (no recognized mime mapping)"
                 );
-                map_clipboard_err(
-                    ctx.set_buffer(&rep.format_id, rep.expect_inline_bytes().to_vec()),
-                )?;
+                map_clipboard_err(ctx.set_buffer(&rep.format_id, single_rep_bytes))?;
             }
         }
 
