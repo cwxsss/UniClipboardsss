@@ -549,7 +549,8 @@ const DeviceTabs: React.FC = () => {
       />
       <MobileSyncCredentialModal
         payload={credentialPayload}
-        onClose={mobileActions.clearCredential}
+        onDiscard={mobileActions.discardCredential}
+        onComplete={mobileActions.completeCredential}
       />
       <RotateMobilePasswordDialog
         open={rotateTarget !== null}
@@ -877,7 +878,8 @@ interface UseMobileDevicesReturn {
     handleRevokeConfirm: () => Promise<void>
     requestRevoke: (device: MobileDeviceView) => void
     requestRotate: (device: MobileDeviceView) => void
-    clearCredential: () => void
+    discardCredential: (deviceId: string) => Promise<void>
+    completeCredential: () => void
     clearRotateTarget: () => void
     clearRotatedPayload: () => void
     clearRevokeTarget: () => void
@@ -963,6 +965,26 @@ const useMobileDevices = (): UseMobileDevicesReturn => {
     [reload]
   )
 
+  const discardCredential = useCallback(
+    async (deviceId: string) => {
+      // 乐观清空:modal 立即收起,避免用户连点 ✕ 触发第二次 revoke
+      // (第二次会以 DEVICE_NOT_FOUND 失败并弹出无意义错误 toast)。
+      setCredentialPayload(null)
+      try {
+        await revokeMobileDevice(deviceId)
+        await reload()
+      } catch (err) {
+        log.error({ err, deviceId }, 'failed to discard newly registered mobile device')
+        toast.error(translate(err))
+      }
+    },
+    [reload, translate]
+  )
+
+  const completeCredential = useCallback(() => {
+    setCredentialPayload(null)
+  }, [])
+
   const handleRotateSuccess = useCallback(
     (result: RotateMobilePasswordResult) => {
       setRotatedPayload(result)
@@ -1008,7 +1030,8 @@ const useMobileDevices = (): UseMobileDevicesReturn => {
       handleRevokeConfirm,
       requestRevoke: setRevokeTarget,
       requestRotate: setRotateTarget,
-      clearCredential: () => setCredentialPayload(null),
+      discardCredential,
+      completeCredential,
       clearRotateTarget: () => setRotateTarget(null),
       clearRotatedPayload: () => setRotatedPayload(null),
       clearRevokeTarget: () => setRevokeTarget(null),
