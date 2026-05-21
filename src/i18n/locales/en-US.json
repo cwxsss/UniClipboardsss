@@ -324,8 +324,35 @@
             }
           }
         },
+        "customRelays": {
+          "label": "Custom relay nodes",
+          "description": "Add one or more iroh relay URLs. Leave empty to use the default relays. LAN-only Mode preserves this list but does not use it. Takes effect after restart.",
+          "placeholder": "https://relay.example.com.",
+          "addButton": "Add relay node",
+          "itemAriaLabel": "Custom relay node {{index}}",
+          "removeAriaLabel": "Remove relay node {{index}}",
+          "saveError": "Failed to save custom relays: {{message}}. Reverted to the previous setting.",
+          "invalidUrl": "Invalid relay URL: {{url}}. Enter an http or https URL.",
+          "testAriaLabel": "Test relay node {{index}}",
+          "testing": "Testing relay node…",
+          "testSuccess": "Handshake succeeded ({{latencyMs}} ms)",
+          "testErrors": {
+            "invalidUrl": "Invalid relay URL: {{message}}",
+            "dns": "Cannot resolve relay host: {{message}}",
+            "tls": "TLS handshake failed: {{message}}",
+            "handshake": "iroh-relay handshake failed: {{message}}",
+            "timeout": "Probe timed out after 5 seconds",
+            "other": "Probe failed: {{message}}",
+            "unavailable": "Relay testing is not available in this runtime."
+          }
+        },
         "restartBanner": {
-          "message": "Restart the app to apply the LAN-only Mode change."
+          "message": "Restart the app to apply network changes.",
+          "restartButton": "Restart now",
+          "restartingButton": "Restarting…",
+          "dismissAriaLabel": "Dismiss restart notice",
+          "errorMessage": "Automatic restart failed. Please quit the app manually and reopen it to apply the change.",
+          "retryButton": "Retry"
         }
       },
       "storage": {
