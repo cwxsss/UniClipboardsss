@@ -3,6 +3,7 @@
 //! This module provides [`TrayState`] which manages the system tray icon,
 //! its context menu, and language-dependent menu item labels.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Mutex;
 
 use tauri::menu::{MenuBuilder, MenuItem};
@@ -123,7 +124,51 @@ impl TrayState {
             }
         }
 
-        let tray = builder.build(app)?;
+        // Linux 上 tauri 的 tray-icon → libappindicator-rs 在 dlopen 失败时
+        // 走 panic 而不是 Err —— 最常见的两种情况:
+        //   1. 用户系统缺 `libayatana-appindicator3-1`(deb)或 `libayatana-appindicator`
+        //      (rpm/pacman),Arch / CachyOS / 老 Ubuntu 上特别常见。
+        //   2. 系统有 libayatana-ido3 但版本太新,要的 glib 符号
+        //      (`g_once_init_leave_pointer`) 在用户的 libglib 里不存在 →
+        //      undefined symbol → 加载链断在 ido3 上。
+        //
+        // 这个 panic 沿 FFI/C 调用栈直接撂倒进程。原本想用 `catch_unwind`
+        // 兜底,但 release profile = "abort"(src-tauri/Cargo.toml),
+        // Rust 编译器在 abort 模式下根本不生成 unwind 表,catch_unwind 无法
+        // 接住任何 panic —— Sentry UNICLIPBOARD-RUST-G/-10 持续刷,0.10.1-alpha.2
+        // AppImage 在 Arch 上 `Aborted (core dumped)` 验证了这一点。
+        //
+        // 正确做法:在调用 TrayIconBuilder::build **之前**预探 4 个候选 .so,
+        // 全部失败就跳过 build,让 libappindicator-sys 的 Lazy::new closure
+        // 根本不被触发。`is_initialized()` 保持返回 false,所有依赖 tray 的
+        // 菜单更新路径已经 noop。
+        #[cfg(target_os = "linux")]
+        if !appindicator_lib_available() {
+            warn!(
+                "libayatana-appindicator3 / appindicator3 not loadable on this \
+                 system; skipping system tray init to avoid libappindicator-rs \
+                 dlopen panic. Install `libayatana-appindicator3-1` (apt) / \
+                 `libayatana-appindicator` (pacman/dnf) and restart to enable it."
+            );
+            return Ok(());
+        }
+
+        // `catch_unwind` 仅作为 panic = unwind profile 下的额外兜底(目前 release
+        // = abort,这里实际不生效,但 dev/test profile 下仍可挡住非 dlopen 类
+        // panic);Linux 主防线是上面的预探。
+        let tray = match catch_unwind(AssertUnwindSafe(|| builder.build(app))) {
+            Ok(Ok(tray)) => tray,
+            Ok(Err(e)) => return Err(e),
+            Err(payload) => {
+                let msg = panic_payload_to_string(payload);
+                warn!(
+                    error = %msg,
+                    "System tray init panicked during builder.build(); \
+                     continuing without tray."
+                );
+                return Ok(());
+            }
+        };
 
         info!(
             language = %language,
@@ -247,5 +292,50 @@ fn labels_for_language(language: &str) -> (&'static str, &'static str, &'static 
     match language {
         "zh-CN" => ("打开 UniClipboard", "设置", "退出"),
         _ => ("Open UniClipboard", "Settings", "Quit"),
+    }
+}
+
+/// 探测 libappindicator-sys 加载链上的 4 个候选 .so 是否能 dlopen 成功。
+///
+/// 与上游 `libappindicator-sys-0.9.0/src/lib.rs` 的 `Lazy<LIB>` 探测顺序完全
+/// 一致(`.so.1` 后缀两条 + backcompat feature 启用时不带后缀两条),只要任
+/// 一条能加载就视为可用 —— 这跟上游 closure 在 `Library::new(...).is_ok()`
+/// 处直接 return 的逻辑等价。全部失败再返回 false,这时调用方应当跳过
+/// `TrayIconBuilder::build` 以避免触发上游 panic。
+///
+/// 注意:dlopen 成功并不等于 indicator 上 GTK 一定能跑(比如 libayatana-ido3
+/// 在用户机器上是装了但 glib 符号缺失),那种情况依旧会在 build 内部 panic。
+/// 但 Sentry 现网数据表明 RUST-G/-10 几乎都是"so 文件本身不在"这一类,
+/// 优先解决主流场景。glib ABI skew 那条路径如果再次浮上来,届时再叠加
+/// `dlsym` 探测关键符号。
+#[cfg(target_os = "linux")]
+fn appindicator_lib_available() -> bool {
+    const CANDIDATES: &[&str] = &[
+        "libayatana-appindicator3.so.1",
+        "libappindicator3.so.1",
+        "libayatana-appindicator3.so",
+        "libappindicator3.so",
+    ];
+    for name in CANDIDATES {
+        // SAFETY: `Library::new` 加载共享库是天然 unsafe(初始化 ctors 可能
+        // 有副作用),这里仅用于探测可加载性,Library handle 离开作用域时
+        // 自动 dlclose。
+        if unsafe { libloading::Library::new(*name) }.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stringify a `catch_unwind` payload — panics carry either `&'static str`
+/// or `String`; anything else stays opaque to avoid re-panicking inside the
+/// formatter.
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
     }
 }
