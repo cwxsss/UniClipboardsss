@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import {
   cancelDownload as apiCancelDownload,
   checkForUpdate,
@@ -7,13 +6,13 @@ import {
   getDownloadProgress,
   getInstallKind,
   installUpdate as apiInstallUpdate,
+  subscribeUpdateAvailable,
   subscribeUpdateProgress,
   type DownloadEvent,
   type DownloadProgress,
   type InstallKind,
   type UpdateMetadata,
 } from '@/api/updater'
-import { toast } from '@/components/ui/toast'
 import { useSetting } from '@/hooks/useSetting'
 import { createLogger } from '@/lib/logger'
 import type { UpdateChannel } from '@/types/setting'
@@ -33,7 +32,6 @@ const initialState: UpdateState = {
 }
 
 export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
-  const { t } = useTranslation()
   const { setting } = useSetting()
   const [state, setState] = useState<UpdateState>(initialState)
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false)
@@ -42,13 +40,6 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
 
   const activeCheckRef = useRef<Promise<UpdateMetadata | null> | null>(null)
   const activeCheckChannelRef = useRef<UpdateChannel | null>(null)
-  const hasCheckedOnStartup = useRef(false)
-  /**
-   * Versions for which a background download has already been kicked off
-   * this session. Prevents the `auto-download` effect from looping when
-   * a download fails and the backend returns to `Available`.
-   */
-  const autoDownloadAttempted = useRef<Set<string>>(new Set())
   /** Latest `state` value visible to event-driven callbacks. */
   const stateRef = useRef<UpdateState>(initialState)
   useEffect(() => {
@@ -245,15 +236,15 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
         if (snapshot.phase === 'idle') return
         setState({
           phase: snapshot.phase,
-          // 启动期 sync 路径只拿得到 version 字符串，无法回填 release notes
-          // (`body`) 与发布日期 (`date`) —— 用 null 占位，等下一次主动
-          // checkForUpdate 再覆盖完整 metadata。
+          // Snapshot 现在带齐 currentVersion / body / date 四个字段
+          // （Phase 6A 后 startup 不再补 checkForUpdate，UI 必须靠 snapshot
+          // 直接渲染完整 metadata）。
           info: snapshot.version
             ? {
                 version: snapshot.version,
-                currentVersion: snapshot.version,
-                body: null,
-                date: null,
+                currentVersion: snapshot.currentVersion,
+                body: snapshot.body,
+                date: snapshot.date,
               }
             : null,
           downloaded: snapshot.downloaded,
@@ -286,51 +277,54 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
     }
   }, [handleDownloadEvent])
 
-  // Startup auto-check (gated by `autoCheckUpdate`).
+  // Listen for scheduler-driven (or manual) `do_check_for_update` results.
+  // Without this, a check that resolved AFTER mount would never reach the UI
+  // —— Phase 6A removed the frontend's startup check, so `getDownloadProgress`
+  // alone only catches state present at mount time. Mirrors the setState
+  // shape used by `runCheckForChannel` so manual and broadcast paths converge.
   useEffect(() => {
-    if (!setting?.general || hasCheckedOnStartup.current) {
-      return
-    }
+    let cancelled = false
+    let unlisten: (() => void) | undefined
 
-    hasCheckedOnStartup.current = true
-
-    if (!setting.general.autoCheckUpdate) {
-      return
-    }
-
-    checkForUpdates().catch(error => {
-      log.error({ err: error }, '检查更新失败')
-      toast.error(t('update.checkFailed'))
+    void subscribeUpdateAvailable(update => {
+      setState(prev => {
+        if (!update) {
+          return prev.phase === 'downloading' || prev.phase === 'installing'
+            ? prev
+            : { phase: 'idle', info: null, downloaded: 0, total: null }
+        }
+        if (prev.phase === 'ready' && prev.info?.version === update.version) {
+          return { ...prev, info: update }
+        }
+        if (prev.phase === 'downloading' && prev.info?.version === update.version) {
+          return { ...prev, info: update }
+        }
+        return {
+          phase: 'available',
+          info: update,
+          downloaded: 0,
+          total: null,
+        }
+      })
     })
-  }, [setting?.general, checkForUpdates, t])
+      .then(fn => {
+        if (cancelled) {
+          fn()
+          return
+        }
+        unlisten = fn
+      })
+      .catch(err => {
+        if (!cancelled) {
+          log.error({ err }, '订阅更新可用广播失败')
+        }
+      })
 
-  // Background auto-download: whenever state is `available` and the
-  // setting is on, kick off a silent download. Tracks attempted versions
-  // to avoid retry loops if download fails.
-  //
-  // Skipped on deb/rpm — Tauri's updater payload can't be installed by the
-  // in-app flow there, so downloading it would just waste bandwidth before
-  // the package-manager dialog kicks in.
-  useEffect(() => {
-    if (!setting?.general?.autoDownloadUpdate) return
-    if (!setting?.general?.autoCheckUpdate) return
-    if (isSystemManaged) return
-    if (state.phase !== 'available') return
-    if (!state.info) return
-    if (autoDownloadAttempted.current.has(state.info.version)) return
-
-    autoDownloadAttempted.current.add(state.info.version)
-    void doDownloadUpdate().catch(err => {
-      log.error({ err }, '自动后台下载失败')
-    })
-  }, [
-    setting?.general?.autoDownloadUpdate,
-    setting?.general?.autoCheckUpdate,
-    isSystemManaged,
-    state.phase,
-    state.info,
-    doDownloadUpdate,
-  ])
+    return () => {
+      cancelled = true
+      if (unlisten) unlisten()
+    }
+  }, [])
 
   const downloadProgress = useMemo<DownloadProgress>(
     () => ({

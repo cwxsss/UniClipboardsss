@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useEffect } from 'react'
 import type React from 'react'
 import {
   checkForUpdate,
@@ -23,9 +24,13 @@ vi.mock('@/api/updater', () => ({
     downloaded: 0,
     total: null,
     version: null,
+    currentVersion: '0.0.0-test',
+    body: null,
+    date: null,
   }),
   getInstallKind: vi.fn().mockResolvedValue('macos'),
   subscribeUpdateProgress: vi.fn(),
+  subscribeUpdateAvailable: vi.fn().mockResolvedValue(() => {}),
 }))
 
 vi.mock('react-i18next', () => ({
@@ -92,9 +97,24 @@ const baseSetting: Settings = {
   },
 }
 
-const UpdateConsumer = () => {
-  const { updateInfo } = useUpdate()
-  return <div>{updateInfo?.version ?? 'none'}</div>
+/**
+ * Auto-trigger a default `checkForUpdates()` on mount. Mirrors the typical
+ * call site (sidebar icon / "check for update" button) so we can exercise
+ * state transitions without relying on the now-removed startup auto-check.
+ */
+const AutoCheckOnMountConsumer = () => {
+  const { checkForUpdates, state } = useUpdate()
+  useEffect(() => {
+    void checkForUpdates()
+  }, [checkForUpdates])
+  return (
+    <div>
+      <span data-testid="phase">{state.phase}</span>
+      <span data-testid="downloaded">{state.downloaded}</span>
+      <span data-testid="total">{state.total ?? 'null'}</span>
+      <span data-testid="version">{state.info?.version ?? 'none'}</span>
+    </div>
+  )
 }
 
 const StateConsumer = () => {
@@ -158,12 +178,15 @@ describe('UpdateProvider', () => {
       downloaded: 0,
       total: null,
       version: null,
+      currentVersion: '0.0.0-test',
+      body: null,
+      date: null,
     })
     subscribeUpdateProgressMock.mockReset()
     subscribeUpdateProgressMock.mockImplementation(async () => () => {})
   })
 
-  it('checks for updates once on startup when enabled', async () => {
+  it('does not auto-check on startup (backend scheduler owns this)', async () => {
     checkForUpdateMock.mockResolvedValue({
       version: '0.1.1',
       currentVersion: '0.1.0',
@@ -171,101 +194,14 @@ describe('UpdateProvider', () => {
       body: 'Bug fixes',
     })
 
-    const { rerender } = render(
-      <SettingContext.Provider
-        value={{
-          setting: baseSetting,
-          loading: false,
-          error: null,
-          updateSetting: vi.fn(),
-          updateGeneralSetting: vi.fn(),
-          updateSyncSetting: vi.fn(),
-          updateSecuritySetting: vi.fn(),
-          updateRetentionPolicy: vi.fn(),
-          updateKeyboardShortcuts: vi.fn(),
-          updateFileSyncSetting: vi.fn(),
-          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-          updateQuickPanelSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-        }}
-      >
-        <UpdateProvider>
-          <UpdateConsumer />
-        </UpdateProvider>
-      </SettingContext.Provider>
-    )
+    renderWithSetting(baseSetting, <StateConsumer />)
 
-    await waitFor(() => {
-      expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
-    })
-
-    expect(screen.getByText('0.1.1')).toBeInTheDocument()
-
-    rerender(
-      <SettingContext.Provider
-        value={{
-          setting: baseSetting,
-          loading: false,
-          error: null,
-          updateSetting: vi.fn(),
-          updateGeneralSetting: vi.fn(),
-          updateSyncSetting: vi.fn(),
-          updateSecuritySetting: vi.fn(),
-          updateRetentionPolicy: vi.fn(),
-          updateKeyboardShortcuts: vi.fn(),
-          updateFileSyncSetting: vi.fn(),
-          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-          updateQuickPanelSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-        }}
-      >
-        <UpdateProvider>
-          <UpdateConsumer />
-        </UpdateProvider>
-      </SettingContext.Provider>
-    )
-
-    await waitFor(() => {
-      expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
-    })
+    // Give effects a chance to run.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(checkForUpdateMock).not.toHaveBeenCalled()
   })
 
-  it('skips auto check when disabled', async () => {
-    const disabledSetting: Settings = {
-      ...baseSetting,
-      general: {
-        ...baseSetting.general,
-        autoCheckUpdate: false,
-      },
-    }
-
-    render(
-      <SettingContext.Provider
-        value={{
-          setting: disabledSetting,
-          loading: false,
-          error: null,
-          updateSetting: vi.fn(),
-          updateGeneralSetting: vi.fn(),
-          updateSyncSetting: vi.fn(),
-          updateSecuritySetting: vi.fn(),
-          updateRetentionPolicy: vi.fn(),
-          updateKeyboardShortcuts: vi.fn(),
-          updateFileSyncSetting: vi.fn(),
-          updateNetworkSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-          updateQuickPanelSetting: vi.fn().mockResolvedValue({ restartRequired: false }),
-        }}
-      >
-        <UpdateProvider>
-          <UpdateConsumer />
-        </UpdateProvider>
-      </SettingContext.Provider>
-    )
-
-    await waitFor(() => {
-      expect(checkForUpdateMock).not.toHaveBeenCalled()
-    })
-  })
-
-  it('transitions to "available" after a successful check', async () => {
+  it('transitions to "available" after a successful manual check', async () => {
     checkForUpdateMock.mockResolvedValue({
       version: '0.2.0',
       currentVersion: '0.1.0',
@@ -273,7 +209,7 @@ describe('UpdateProvider', () => {
       date: null,
     })
 
-    renderWithSetting(baseSetting, <StateConsumer />)
+    renderWithSetting(baseSetting, <AutoCheckOnMountConsumer />)
 
     await waitFor(() => {
       expect(screen.getByTestId('phase').textContent).toBe('available')
@@ -287,14 +223,12 @@ describe('UpdateProvider', () => {
       downloaded: 512,
       total: 2048,
       version: '0.2.0',
+      currentVersion: '0.1.0',
+      body: null,
+      date: null,
     })
-    checkForUpdateMock.mockResolvedValue(null)
-    const disabledCheck: Settings = {
-      ...baseSetting,
-      general: { ...baseSetting.general, autoCheckUpdate: false },
-    }
 
-    renderWithSetting(disabledCheck, <StateConsumer />)
+    renderWithSetting(baseSetting, <StateConsumer />)
 
     await waitFor(() => {
       expect(screen.getByTestId('phase').textContent).toBe('downloading')
@@ -316,7 +250,7 @@ describe('UpdateProvider', () => {
       date: null,
     })
 
-    renderWithSetting(baseSetting, <StateConsumer />)
+    renderWithSetting(baseSetting, <AutoCheckOnMountConsumer />)
 
     await waitFor(() => {
       expect(screen.getByTestId('phase').textContent).toBe('available')
@@ -352,7 +286,7 @@ describe('UpdateProvider', () => {
       date: null,
     })
 
-    renderWithSetting(baseSetting, <StateConsumer />)
+    renderWithSetting(baseSetting, <AutoCheckOnMountConsumer />)
 
     await waitFor(() => {
       expect(screen.getByTestId('phase').textContent).toBe('available')
@@ -370,7 +304,7 @@ describe('UpdateProvider', () => {
     expect(screen.getByTestId('downloaded').textContent).toBe('0')
   })
 
-  it('auto-downloads when autoDownloadUpdate is enabled and check returns available', async () => {
+  it('does not auto-download even when autoDownloadUpdate is on (backend scheduler owns this)', async () => {
     checkForUpdateMock.mockResolvedValue({
       version: '0.2.0',
       currentVersion: '0.1.0',
@@ -382,41 +316,12 @@ describe('UpdateProvider', () => {
       general: { ...baseSetting.general, autoDownloadUpdate: true },
     }
 
-    renderWithSetting(autoDownloadOn, <StateConsumer />)
-
-    await waitFor(() => {
-      expect(downloadUpdateMock).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  it('does not auto-download when autoDownloadUpdate is off', async () => {
-    checkForUpdateMock.mockResolvedValue({
-      version: '0.2.0',
-      currentVersion: '0.1.0',
-      body: null,
-      date: null,
-    })
-
-    renderWithSetting(baseSetting, <StateConsumer />)
+    renderWithSetting(autoDownloadOn, <AutoCheckOnMountConsumer />)
 
     await waitFor(() => {
       expect(screen.getByTestId('phase').textContent).toBe('available')
     })
     expect(downloadUpdateMock).not.toHaveBeenCalled()
-  })
-
-  it('does not auto-download when autoCheckUpdate is off (even if autoDownload is on)', async () => {
-    const offCheck: Settings = {
-      ...baseSetting,
-      general: { ...baseSetting.general, autoCheckUpdate: false, autoDownloadUpdate: true },
-    }
-
-    renderWithSetting(offCheck, <StateConsumer />)
-
-    // Give the effect a chance to run.
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(downloadUpdateMock).not.toHaveBeenCalled()
-    expect(checkForUpdateMock).not.toHaveBeenCalled()
   })
 
   it('uses explicit channel override for manual checks', async () => {

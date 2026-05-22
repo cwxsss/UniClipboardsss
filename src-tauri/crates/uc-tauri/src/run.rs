@@ -457,6 +457,11 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
             app.manage(PendingUpdate::new());
+            // Phase 5B: `LastCheckAt` 跟踪上次任意 source 的 check 完成时间，
+            // 给 `show_main_window` 顺手检查阈值用。初始化为当前 epoch 而非 0
+            // ——避免 silent_start=false 下首次 show_main_window 与 scheduler
+            // 首次 check 双发 update_check_performed（详见 last_check_at.rs）。
+            app.manage(crate::update_scheduler::LastCheckAt::initialized_now());
 
             // Start file cache cleanup task (runs once at startup).
             // The starter is `async fn`; drive it on Tauri's managed tokio
@@ -575,6 +580,40 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                         info!("[Startup] Daemon lifecycle boot completed");
                     }
                 });
+
+                // 2. Update scheduler (Phase 3C).
+                //
+                // `update_scheduler::run` 内部先 poll `setup_status.has_completed`，
+                // 所以这里可以立即 spawn，无需 gate 在 device-name / auto-unlock
+                // 之后。挂在 `task_registry` 上，`ExitRequested` 路径
+                // (`task_registry_for_run.token().cancel()`) 会级联取消 child token，
+                // scheduler 的 `tokio::select!` 立即返回。
+                //
+                // `LastNotifiedUpdateStore` 一次性 load 到 Mutex —— Phase 4B 通知
+                // 去重时通过 `deps.last_notified` 写入并 persist。
+                let last_notified_path =
+                    runtime.storage_paths().last_notified_update_path();
+                let store = crate::update_scheduler::LastNotifiedUpdateStore::load(
+                    &last_notified_path,
+                )
+                .await;
+                let scheduler_deps = crate::update_scheduler::SchedulerDeps {
+                    app_handle: app_handle_for_startup.clone(),
+                    settings_port: runtime.settings_port(),
+                    setup_status_port: runtime.setup_status_port(),
+                    analytics: runtime.analytics(),
+                    last_notified: Arc::new(tokio::sync::Mutex::new(store)),
+                    last_notified_path,
+                };
+                runtime
+                    .task_registry()
+                    .spawn("update_scheduler", move |token| async move {
+                        use tracing::Instrument;
+                        crate::update_scheduler::run(scheduler_deps, token)
+                            .instrument(tracing::info_span!("update_scheduler"))
+                            .await;
+                    })
+                    .await;
             });
 
             info!("App runtime initialized, backend initialization started");

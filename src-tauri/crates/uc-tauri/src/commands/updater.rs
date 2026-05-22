@@ -13,17 +13,22 @@
 //! (legacy `download_and_install` fallback so the dialog still works without
 //! a prior `download_update`).
 
+use crate::bootstrap::TauriAppRuntime;
 use crate::commands::record_trace_fields;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt as _;
 use tokio::sync::Notify;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 use uc_core::settings::channel::detect_channel;
 use uc_core::settings::model::UpdateChannel;
+use uc_observability::analytics::{
+    Event, InstallKind as AnalyticsInstallKind, UpdateAction, UpdateActionOutcome,
+    UpdateCheckOutcome, UpdateCheckSource, UpdateFailureKind,
+};
 use uc_platform::ports::observability::TraceMetadata;
 
 /// Tauri event channel name for broadcast download progress.
@@ -31,6 +36,20 @@ use uc_platform::ports::observability::TraceMetadata;
 /// reflect background download state, unlike the per-invocation
 /// `tauri::ipc::Channel` which only delivers to its single creator.
 pub const UPDATE_PROGRESS_EVENT: &str = "update-download-progress";
+
+/// Broadcast Tauri event name carrying the result of a check_for_update call.
+///
+/// Payload: `Option<UpdateMetadata>` —— `Some(meta)` when the backend just
+/// transitioned `PendingUpdate` to `Available` (or preserved a same-version
+/// `Ready` snapshot), `None` when the check returned UpToDate and the backend
+/// transitioned to `None`.
+///
+/// Subscribed by the frontend `UpdateContext` so the Sidebar/AboutSection
+/// indicator can light up the moment a scheduler-driven (or manual) check
+/// resolves —— Phase 6A removed the frontend's own startup check, so without
+/// this broadcast the UI would never learn about scheduler-detected updates
+/// until the next mount.
+pub const UPDATE_AVAILABLE_EVENT: &str = "update-available";
 
 /// Events emitted during update download.
 ///
@@ -82,7 +101,19 @@ pub struct DownloadProgressSnapshot {
     pub downloaded: u64,
     #[specta(type = Option<specta_typescript::Number<u64>>)]
     pub total: Option<u64>,
+    /// Newly-available (latest) version. `None` when phase is `Idle`.
     pub version: Option<String>,
+    /// Currently-installed app version, lifted directly from
+    /// `app.package_info().version`. Always populated even when phase is
+    /// `Idle`, so a mid-mount frontend can render "current vs. latest"
+    /// without waiting for a fresh `check_for_update` round-trip.
+    pub current_version: String,
+    /// Release notes for the available version, if any. `None` when phase
+    /// is `Idle` or the release ships no notes.
+    pub body: Option<String>,
+    /// Release date for the available version, if any. `None` when phase
+    /// is `Idle`.
+    pub date: Option<String>,
 }
 
 /// Metadata returned to the frontend when an update is available.
@@ -174,6 +205,12 @@ fn parse_channel(s: &str) -> UpdateChannel {
 
 /// Check for an available update on the specified (or auto-detected) channel.
 ///
+/// Crate-internal entry shared by the `check_for_update` Tauri command and
+/// the background update scheduler. **Does not** emit any telemetry —
+/// callers decide the `update_check_performed.source` field (`manual` /
+/// `startup` / `scheduled` / `window_show`) and emit the event themselves
+/// (schema doc §7.8 红线：两类 source 绝不混用同一调用路径)。
+///
 /// Side-effects on `PendingUpdate`:
 /// - `Some(metadata)` returned & version matches an existing `Ready`: keep
 ///   cached bytes (refresh `Update` handle, preserve `downloaded_at`).
@@ -182,12 +219,175 @@ fn parse_channel(s: &str) -> UpdateChannel {
 /// - `None` returned: transition to `None` (clear any prior cached bytes).
 /// - State is `Downloading`: refuse to re-check (v1 simplification — wait
 ///   for the in-flight download to finish or be cancelled first).
+pub(crate) async fn do_check_for_update(
+    app: &AppHandle,
+    channel: Option<UpdateChannel>,
+    pending: &PendingUpdate,
+) -> Result<Option<UpdateMetadata>, String> {
+    {
+        let guard = lock_state(&pending.0)?;
+        if matches!(*guard, PendingUpdateState::Downloading { .. }) {
+            return Err("updater: download in progress, cannot re-check".to_string());
+        }
+    }
+
+    let resolved_channel = channel.unwrap_or_else(|| {
+        let version = app.package_info().version.to_string();
+        detect_channel(&version)
+    });
+    let channel_str = channel_as_str(&resolved_channel);
+
+    info!(channel = %channel_str, "checking for update");
+
+    let primary_url: url::Url = format!("https://release.uniclipboard.app/{}.json", channel_str)
+        .parse()
+        .map_err(|e| format!("Invalid primary updater URL: {}", e))?;
+    let fallback_url: url::Url = format!(
+        "https://uniclipboard.github.io/UniClipboard/{}.json",
+        channel_str
+    )
+    .parse()
+    .map_err(|e| format!("Invalid fallback updater URL: {}", e))?;
+
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![primary_url, fallback_url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+
+    let broadcast: Option<UpdateMetadata>;
+    {
+        let mut guard = lock_state(&pending.0)?;
+        if matches!(*guard, PendingUpdateState::Downloading { .. }) {
+            // A concurrent download started after our initial pre-check but
+            // before we reacquired the lock. Leave the in-flight state alone
+            // and surface the snapshot we observed without mutating it.
+            info!(
+                channel = %channel_str,
+                "download started concurrently; preserving Downloading state"
+            );
+            broadcast = update.as_ref().map(metadata_of);
+        } else {
+            broadcast = match update {
+                Some(update) => {
+                    let metadata = metadata_of(&update);
+                    info!(
+                        channel = %channel_str,
+                        new_version = %metadata.version,
+                        "update available"
+                    );
+
+                    let prev = std::mem::take(&mut *guard);
+                    *guard = match prev {
+                        PendingUpdateState::Ready {
+                            update: prev_update,
+                            bytes,
+                            downloaded_at,
+                        } if prev_update.version == update.version => {
+                            info!(
+                                version = %metadata.version,
+                                "preserving cached download bytes for same version"
+                            );
+                            PendingUpdateState::Ready {
+                                update,
+                                bytes,
+                                downloaded_at,
+                            }
+                        }
+                        _ => PendingUpdateState::Available(update),
+                    };
+                    Some(metadata)
+                }
+                None => {
+                    info!(channel = %channel_str, "no update available");
+                    *guard = PendingUpdateState::None;
+                    None
+                }
+            };
+        }
+    }
+
+    // Broadcast the transition so frontend listeners (e.g. `UpdateContext`)
+    // can refresh the indicator without a re-mount. Mirrors the public
+    // return value: `Some(meta)` for Available / preserved-Ready, `None`
+    // for UpToDate. Emit failures are non-fatal —— the next mount snapshot
+    // will reconcile.
+    if let Err(err) = app.emit(UPDATE_AVAILABLE_EVENT, &broadcast) {
+        warn!(
+            target: "updater",
+            error = %err,
+            "failed to broadcast update-available event"
+        );
+    }
+
+    Ok(broadcast)
+}
+
+/// Convert the running binary's [`InstallKind`] (Tauri command wire form) to
+/// the telemetry [`AnalyticsInstallKind`]. Both enums must stay wire-equivalent
+/// (schema doc §7.9)；这里只是把同形态值在两个 crate 的类型之间搬运一次。
+pub(crate) fn install_kind_for_telemetry(kind: InstallKind) -> AnalyticsInstallKind {
+    match kind {
+        InstallKind::Macos => AnalyticsInstallKind::Macos,
+        InstallKind::Windows => AnalyticsInstallKind::Windows,
+        InstallKind::AppImage => AnalyticsInstallKind::AppImage,
+        InstallKind::Deb => AnalyticsInstallKind::Deb,
+        InstallKind::Rpm => AnalyticsInstallKind::Rpm,
+        InstallKind::Unknown => AnalyticsInstallKind::Unknown,
+    }
+}
+
+/// Heuristic classifier for `updater.check()` failure strings. The Tauri
+/// updater plugin folds transport / HTTP / signature failures into a single
+/// `Display` string，所以这里按子串匹配把它归类。优先级：parse > http >
+/// network > other —— 签名 / JSON 错误信号最强，先扣下；HTTP 状态码次之；
+/// 兜底归 `Network`（含 DNS / TLS / connect 类失败）或 `Other`。
+///
+/// 重命名禁止（schema doc §8），值仅四个：`network` / `http_error` /
+/// `parse_error` / `other`。
+pub(crate) fn classify_check_failure(err: &str) -> UpdateFailureKind {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("signature")
+        || lower.contains("minisign")
+        || lower.contains("parse")
+        || lower.contains("json")
+        || lower.contains("decode")
+    {
+        UpdateFailureKind::ParseError
+    } else if lower.contains("http")
+        || lower.contains("status code")
+        || lower.contains(" 4")
+        || lower.contains(" 5")
+    {
+        UpdateFailureKind::HttpError
+    } else if lower.contains("connect")
+        || lower.contains("dns")
+        || lower.contains("tls")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("network")
+        || lower.contains("transport")
+    {
+        UpdateFailureKind::Network
+    } else {
+        UpdateFailureKind::Other
+    }
+}
+
+/// Tauri command — thin shell over [`do_check_for_update`] that emits
+/// `update_check_performed { source: "manual", ... }` after the inner
+/// resolves. scheduler-driven checks emit the same event with a different
+/// `source`（schema doc §7.8）；inner 函数本身不 emit。
 #[tauri::command]
 #[specta::specta]
 pub async fn check_for_update(
     app: AppHandle,
     channel: Option<String>,
     pending: State<'_, PendingUpdate>,
+    runtime: State<'_, Arc<TauriAppRuntime>>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Option<UpdateMetadata>, String> {
     let span = info_span!(
@@ -197,90 +397,252 @@ pub async fn check_for_update(
     );
     record_trace_fields(&span, &_trace);
 
+    let analytics = runtime.analytics();
+    let resolved_channel = channel.as_deref().map(parse_channel);
+
     async move {
-        {
-            let guard = lock_state(&pending.0)?;
-            if matches!(*guard, PendingUpdateState::Downloading { .. }) {
-                return Err("updater: download in progress, cannot re-check".to_string());
-            }
-        }
+        let result = do_check_for_update(&app, resolved_channel, pending.inner()).await;
 
-        let resolved_channel = match channel {
-            Some(ref s) => parse_channel(s),
-            None => {
-                let version = app.package_info().version.to_string();
-                detect_channel(&version)
-            }
+        // Phase 5B: 任何 source 的 check 完成（成功或失败）都更新 LastCheckAt，
+        // 让 `show_main_window` 顺手检查阈值不会在用户刚手动检查完后又触发。
+        app.state::<crate::update_scheduler::LastCheckAt>()
+            .record_now();
+
+        let install_kind = install_kind_for_telemetry(detect_install_kind());
+        let (outcome, failure_kind) = match &result {
+            Ok(Some(_)) => (UpdateCheckOutcome::Available, None),
+            Ok(None) => (UpdateCheckOutcome::UpToDate, None),
+            Err(err) => (
+                UpdateCheckOutcome::Failed,
+                Some(classify_check_failure(err)),
+            ),
         };
-        let channel_str = channel_as_str(&resolved_channel);
+        analytics.capture(Event::UpdateCheckPerformed {
+            source: UpdateCheckSource::Manual,
+            outcome,
+            failure_kind,
+            install_kind,
+        });
 
-        info!(channel = %channel_str, "checking for update");
-
-        let primary_url: url::Url =
-            format!("https://release.uniclipboard.app/{}.json", channel_str)
-                .parse()
-                .map_err(|e| format!("Invalid primary updater URL: {}", e))?;
-        let fallback_url: url::Url = format!(
-            "https://uniclipboard.github.io/UniClipboard/{}.json",
-            channel_str
-        )
-        .parse()
-        .map_err(|e| format!("Invalid fallback updater URL: {}", e))?;
-
-        let updater = app
-            .updater_builder()
-            .endpoints(vec![primary_url, fallback_url])
-            .map_err(|e| e.to_string())?
-            .build()
-            .map_err(|e| e.to_string())?;
-
-        let update = updater.check().await.map_err(|e| e.to_string())?;
-
-        let mut guard = lock_state(&pending.0)?;
-        match update {
-            Some(update) => {
-                let metadata = metadata_of(&update);
-                info!(
-                    channel = %channel_str,
-                    new_version = %metadata.version,
-                    "update available"
-                );
-
-                let prev = std::mem::take(&mut *guard);
-                *guard = match prev {
-                    PendingUpdateState::Ready {
-                        update: _prev_update,
-                        bytes,
-                        downloaded_at,
-                    } if metadata.version == update.version => {
-                        info!(
-                            version = %metadata.version,
-                            "preserving cached download bytes for same version"
-                        );
-                        PendingUpdateState::Ready {
-                            update,
-                            bytes,
-                            downloaded_at,
-                        }
-                    }
-                    _ => PendingUpdateState::Available(update),
-                };
-                Ok(Some(metadata))
-            }
-            None => {
-                info!(channel = %channel_str, "no update available");
-                *guard = PendingUpdateState::None;
-                Ok(None)
-            }
-        }
+        result
     }
     .instrument(span)
     .await
 }
 
+/// Download the pending update in the background.
+///
+/// Crate-internal entry shared by the `download_update` Tauri command and
+/// the background update scheduler (Phase 4B auto-download branch).
+/// **Does not** emit any telemetry —— caller decides
+/// `update_action_invoked` framing (typically a `Started` event at the
+/// command entry and a terminal `Succeeded` / `Failed` / `Cancelled`
+/// after this returns).
+///
+/// Broadcasts download progress via `UPDATE_PROGRESS_EVENT` so the
+/// frontend's `UpdateContext` listener can render a progress bar
+/// regardless of which caller invoked the download.
+///
+/// Returns [`DownloadError`] so callers can distinguish precondition
+/// rejections (state machine misuse) from in-flight cancellation /
+/// failure. The Tauri command flattens that back into the historical
+/// `Result<(), String>` wire shape; the scheduler can map terminal
+/// states directly to `UpdateActionOutcome` without string heuristics.
+///
+/// Pre-condition: state must be `Available`. `Downloading` /
+/// `Ready` / `None` return `DownloadError::Precondition`.
+pub(crate) async fn do_download_update(
+    app: &AppHandle,
+    pending: &PendingUpdate,
+) -> Result<(), DownloadError> {
+    let cancel = Arc::new(Notify::new());
+
+    let (update, info) = {
+        let mut guard = lock_state(&pending.0).map_err(DownloadError::Precondition)?;
+        match std::mem::take(&mut *guard) {
+            PendingUpdateState::None => {
+                return Err(DownloadError::Precondition(
+                    "updater: no pending update to download".to_string(),
+                ));
+            }
+            PendingUpdateState::Available(update) => {
+                let info = metadata_of(&update);
+                let progress = DownloadProgressSnapshot {
+                    phase: DownloadPhase::Downloading,
+                    downloaded: 0,
+                    total: None,
+                    version: Some(info.version.clone()),
+                    current_version: info.current_version.clone(),
+                    body: info.body.clone(),
+                    date: info.date.clone(),
+                };
+                *guard = PendingUpdateState::Downloading {
+                    info: info.clone(),
+                    progress,
+                    cancel: cancel.clone(),
+                };
+                (update, info)
+            }
+            other @ PendingUpdateState::Downloading { .. } => {
+                *guard = other;
+                return Err(DownloadError::Precondition(
+                    "updater: already downloading".to_string(),
+                ));
+            }
+            other @ PendingUpdateState::Ready { .. } => {
+                *guard = other;
+                return Err(DownloadError::Precondition(
+                    "updater: already downloaded, ready to install".to_string(),
+                ));
+            }
+        }
+    };
+
+    info!(version = %info.version, "background download starting");
+
+    let mut started_emitted = false;
+    let app_for_chunk = app.clone();
+
+    let on_chunk = |chunk_length: usize, content_length: Option<u64>| {
+        if !started_emitted {
+            started_emitted = true;
+            let _ = app_for_chunk.emit(
+                UPDATE_PROGRESS_EVENT,
+                DownloadEvent::Started { content_length },
+            );
+        }
+        if let Ok(mut guard) = pending.0.lock() {
+            if let PendingUpdateState::Downloading { progress, .. } = &mut *guard {
+                progress.downloaded = progress.downloaded.saturating_add(chunk_length as u64);
+                if progress.total.is_none() {
+                    progress.total = content_length;
+                }
+            }
+        }
+        let _ = app_for_chunk.emit(
+            UPDATE_PROGRESS_EVENT,
+            DownloadEvent::Progress { chunk_length },
+        );
+    };
+
+    let app_for_finish = app.clone();
+    let on_finish = move || {
+        let _ = app_for_finish.emit(UPDATE_PROGRESS_EVENT, DownloadEvent::Finished);
+    };
+
+    let cancel_for_select = cancel.clone();
+    let download_result: Result<Vec<u8>, DownloadOutcome> = tokio::select! {
+        biased;
+        _ = cancel_for_select.notified() => Err(DownloadOutcome::Cancelled),
+        res = update.download(on_chunk, on_finish) => {
+            res.map_err(|e| DownloadOutcome::Failed(e.to_string()))
+        }
+    };
+
+    match download_result {
+        Ok(bytes) => {
+            info!(
+                version = %info.version,
+                size = bytes.len(),
+                "background download complete"
+            );
+            let mut guard = lock_state(&pending.0).map_err(DownloadError::Failed)?;
+            *guard = PendingUpdateState::Ready {
+                update,
+                bytes,
+                downloaded_at: SystemTime::now(),
+            };
+            Ok(())
+        }
+        Err(DownloadOutcome::Cancelled) => {
+            info!(version = %info.version, "background download cancelled");
+            let _ = app.emit(
+                UPDATE_PROGRESS_EVENT,
+                DownloadEvent::Failed {
+                    error: "cancelled".to_string(),
+                },
+            );
+            let mut guard = lock_state(&pending.0).map_err(DownloadError::Cancelled)?;
+            *guard = PendingUpdateState::Available(update);
+            Err(DownloadError::Cancelled(
+                "updater: download cancelled".to_string(),
+            ))
+        }
+        Err(DownloadOutcome::Failed(err)) => {
+            error!(version = %info.version, error = %err, "background download failed");
+            let _ = app.emit(
+                UPDATE_PROGRESS_EVENT,
+                DownloadEvent::Failed { error: err.clone() },
+            );
+            let mut guard = lock_state(&pending.0).map_err(DownloadError::Failed)?;
+            *guard = PendingUpdateState::Available(update);
+            Err(DownloadError::Failed(err))
+        }
+    }
+}
+
+/// Failure modes of [`do_download_update`].
+///
+/// Distinguishes precondition rejections (state-machine misuse, e.g.
+/// "already downloading") from in-flight cancellation / failure so the
+/// Tauri command can map them onto `UpdateActionOutcome` without string
+/// heuristics. The inner `String` is the legacy wire error message
+/// returned to the frontend.
+pub(crate) enum DownloadError {
+    /// Wrong state for download (no pending update / already downloading /
+    /// already ready). The action never began —— callers typically should
+    /// not emit `Started` for this branch (the user did not actually start
+    /// a download attempt).
+    Precondition(String),
+    /// `cancel_download` was signalled mid-stream. Maps to
+    /// `UpdateActionOutcome::Cancelled`.
+    Cancelled(String),
+    /// `Update::download` returned an error or a downstream lock acquire
+    /// failed. Maps to `UpdateActionOutcome::Failed`.
+    Failed(String),
+}
+
+impl DownloadError {
+    fn into_wire(self) -> String {
+        match self {
+            Self::Precondition(s) | Self::Cancelled(s) | Self::Failed(s) => s,
+        }
+    }
+
+    /// Short telemetry identifier (< 32 chars，无 URL / 路径 / IP，schema
+    /// doc §6.1). 仅 `Cancelled` 路径返回 `None`——cancel 有专属 outcome 槽位，
+    /// 不需要 `error_kind` 再重述。
+    ///
+    /// `pub(crate)` 因为 `update_scheduler::scheduler` 的 auto-download 分支
+    /// 也要把 `DownloadError` 映射到 `update_action_invoked.error_kind`。
+    pub(crate) fn error_kind(&self) -> Option<&'static str> {
+        match self {
+            Self::Precondition(s) => Some(if s.contains("no pending update") {
+                "no_pending_update"
+            } else if s.contains("already downloading") {
+                "already_downloading"
+            } else if s.contains("already downloaded") {
+                "already_ready"
+            } else {
+                "precondition"
+            }),
+            Self::Cancelled(_) => None,
+            Self::Failed(_) => Some("download_failed"),
+        }
+    }
+}
+
 /// Download the pending update in the background, broadcasting progress
 /// via `UPDATE_PROGRESS_EVENT`. Awaitable: the future resolves when the
 /// download completes, fails, or is cancelled.
+///
+/// Thin shell over [`do_download_update`] that emits
+/// `update_action_invoked { action = "download_bg", outcome = started }`
+/// at entry (once the action actually transitions to `Downloading`) and
+/// a terminal `Succeeded` / `Failed` / `Cancelled` after the inner
+/// returns. Precondition rejections are returned to the frontend without
+/// emitting any telemetry —— the user did not actually start a download,
+/// so we keep the funnel分母干净.
 ///
 /// Pre-condition: state must be `Available`. `Downloading` returns
 /// "already downloading"; `Ready` returns "already downloaded"; `None`
@@ -290,6 +652,7 @@ pub async fn check_for_update(
 pub async fn download_update(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
+    runtime: State<'_, Arc<TauriAppRuntime>>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), String> {
     let span = info_span!(
@@ -299,121 +662,42 @@ pub async fn download_update(
     );
     record_trace_fields(&span, &_trace);
 
+    let analytics = runtime.analytics();
+
     async move {
-        let cancel = Arc::new(Notify::new());
+        let result = do_download_update(&app, pending.inner()).await;
 
-        let (update, info) = {
-            let mut guard = lock_state(&pending.0)?;
-            match std::mem::take(&mut *guard) {
-                PendingUpdateState::None => {
-                    return Err("updater: no pending update to download".to_string());
-                }
-                PendingUpdateState::Available(update) => {
-                    let info = metadata_of(&update);
-                    let progress = DownloadProgressSnapshot {
-                        phase: DownloadPhase::Downloading,
-                        downloaded: 0,
-                        total: None,
-                        version: Some(info.version.clone()),
-                    };
-                    *guard = PendingUpdateState::Downloading {
-                        info: info.clone(),
-                        progress,
-                        cancel: cancel.clone(),
-                    };
-                    (update, info)
-                }
-                other @ PendingUpdateState::Downloading { .. } => {
-                    *guard = other;
-                    return Err("updater: already downloading".to_string());
-                }
-                other @ PendingUpdateState::Ready { .. } => {
-                    *guard = other;
-                    return Err("updater: already downloaded, ready to install".to_string());
-                }
-            }
-        };
-
-        info!(version = %info.version, "background download starting");
-
-        let mut started_emitted = false;
-        let app_for_chunk = app.clone();
-        let pending_inner = pending.inner();
-
-        let on_chunk = |chunk_length: usize, content_length: Option<u64>| {
-            if !started_emitted {
-                started_emitted = true;
-                let _ = app_for_chunk.emit(
-                    UPDATE_PROGRESS_EVENT,
-                    DownloadEvent::Started { content_length },
-                );
-            }
-            if let Ok(mut guard) = pending_inner.0.lock() {
-                if let PendingUpdateState::Downloading { progress, .. } = &mut *guard {
-                    progress.downloaded = progress.downloaded.saturating_add(chunk_length as u64);
-                    if progress.total.is_none() {
-                        progress.total = content_length;
-                    }
-                }
-            }
-            let _ = app_for_chunk.emit(
-                UPDATE_PROGRESS_EVENT,
-                DownloadEvent::Progress { chunk_length },
-            );
-        };
-
-        let app_for_finish = app.clone();
-        let on_finish = move || {
-            let _ = app_for_finish.emit(UPDATE_PROGRESS_EVENT, DownloadEvent::Finished);
-        };
-
-        let cancel_for_select = cancel.clone();
-        let download_result: Result<Vec<u8>, DownloadOutcome> = tokio::select! {
-            biased;
-            _ = cancel_for_select.notified() => Err(DownloadOutcome::Cancelled),
-            res = update.download(on_chunk, on_finish) => {
-                res.map_err(|e| DownloadOutcome::Failed(e.to_string()))
-            }
-        };
-
-        match download_result {
-            Ok(bytes) => {
-                info!(
-                    version = %info.version,
-                    size = bytes.len(),
-                    "background download complete"
-                );
-                let mut guard = lock_state(&pending.0)?;
-                *guard = PendingUpdateState::Ready {
-                    update,
-                    bytes,
-                    downloaded_at: SystemTime::now(),
-                };
-                Ok(())
-            }
-            Err(DownloadOutcome::Cancelled) => {
-                info!(version = %info.version, "background download cancelled");
-                let _ = app.emit(
-                    UPDATE_PROGRESS_EVENT,
-                    DownloadEvent::Failed {
-                        error: "cancelled".to_string(),
-                    },
-                );
-                let mut guard = lock_state(&pending.0)?;
-                *guard = PendingUpdateState::Available(update);
-                Err("updater: download cancelled".to_string())
-            }
-            Err(DownloadOutcome::Failed(err)) => {
-                error!(version = %info.version, error = %err, "background download failed");
-                let _ = app.emit(
-                    UPDATE_PROGRESS_EVENT,
-                    DownloadEvent::Failed { error: err.clone() },
-                );
-                let mut guard = lock_state(&pending.0)?;
-                *guard = PendingUpdateState::Available(update);
-                Err(err)
-            }
+        // Started + terminal pair: only emit when the action actually began
+        // (i.e., not a precondition rejection). schema doc §7.8 落地备注: a
+        // download lifecycle emits Started once + terminal once.
+        let did_start = !matches!(result, Err(DownloadError::Precondition(_)));
+        if did_start {
+            analytics.capture(Event::UpdateActionInvoked {
+                action: UpdateAction::DownloadBg,
+                outcome: UpdateActionOutcome::Started,
+                error_kind: None,
+            });
         }
+
+        let outcome = match &result {
+            Ok(()) => Some(UpdateActionOutcome::Succeeded),
+            Err(DownloadError::Cancelled(_)) => Some(UpdateActionOutcome::Cancelled),
+            Err(DownloadError::Failed(_)) => Some(UpdateActionOutcome::Failed),
+            Err(DownloadError::Precondition(_)) => None,
+        };
+        if let Some(outcome) = outcome {
+            analytics.capture(Event::UpdateActionInvoked {
+                action: UpdateAction::DownloadBg,
+                outcome,
+                error_kind: result
+                    .as_ref()
+                    .err()
+                    .and_then(|e| e.error_kind())
+                    .map(|s| s.to_string()),
+            });
+        }
+
+        result.map_err(DownloadError::into_wire)
     }
     .instrument(span)
     .await
@@ -462,18 +746,26 @@ pub async fn cancel_download(
 #[tauri::command]
 #[specta::specta]
 pub async fn get_download_progress(
+    app: AppHandle,
     pending: State<'_, PendingUpdate>,
     _trace: Option<TraceMetadata>,
 ) -> Result<DownloadProgressSnapshot, String> {
     let _ = _trace;
+    let current_version = app.package_info().version.to_string();
     let guard = lock_state(&pending.0)?;
     let snapshot = match &*guard {
-        PendingUpdateState::None => DownloadProgressSnapshot::default(),
+        PendingUpdateState::None => DownloadProgressSnapshot {
+            current_version: current_version.clone(),
+            ..Default::default()
+        },
         PendingUpdateState::Available(update) => DownloadProgressSnapshot {
             phase: DownloadPhase::Available,
             downloaded: 0,
             total: None,
             version: Some(update.version.clone()),
+            current_version: update.current_version.clone(),
+            body: update.body.clone(),
+            date: update.date.map(|d| d.to_string()),
         },
         PendingUpdateState::Downloading { progress, .. } => progress.clone(),
         PendingUpdateState::Ready { update, bytes, .. } => DownloadProgressSnapshot {
@@ -481,6 +773,9 @@ pub async fn get_download_progress(
             downloaded: bytes.len() as u64,
             total: Some(bytes.len() as u64),
             version: Some(update.version.clone()),
+            current_version: update.current_version.clone(),
+            body: update.body.clone(),
+            date: update.date.map(|d| d.to_string()),
         },
     };
     Ok(snapshot)
@@ -654,17 +949,17 @@ pub async fn get_install_kind(_trace: Option<TraceMetadata>) -> Result<InstallKi
 }
 
 #[cfg(target_os = "macos")]
-fn detect_install_kind() -> InstallKind {
+pub(crate) fn detect_install_kind() -> InstallKind {
     InstallKind::Macos
 }
 
 #[cfg(target_os = "windows")]
-fn detect_install_kind() -> InstallKind {
+pub(crate) fn detect_install_kind() -> InstallKind {
     InstallKind::Windows
 }
 
 #[cfg(target_os = "linux")]
-fn detect_install_kind() -> InstallKind {
+pub(crate) fn detect_install_kind() -> InstallKind {
     use std::sync::OnceLock;
     static CACHE: OnceLock<InstallKind> = OnceLock::new();
     *CACHE.get_or_init(detect_install_kind_linux)
@@ -827,10 +1122,110 @@ mod tests {
             downloaded: 4096,
             total: Some(1024 * 1024),
             version: Some("0.10.0".to_string()),
+            current_version: "0.9.0".to_string(),
+            body: Some("Bug fixes".to_string()),
+            date: Some("2026-05-22T00:00:00Z".to_string()),
         };
         assert_eq!(
             serde_json::to_string(&snap).unwrap(),
-            r#"{"phase":"downloading","downloaded":4096,"total":1048576,"version":"0.10.0"}"#
+            r#"{"phase":"downloading","downloaded":4096,"total":1048576,"version":"0.10.0","currentVersion":"0.9.0","body":"Bug fixes","date":"2026-05-22T00:00:00Z"}"#
         );
+    }
+
+    #[test]
+    fn install_kind_for_telemetry_round_trips_wire_form() {
+        // 两个 InstallKind（commands/updater.rs 与 uc-observability::analytics）必须
+        // wire-equivalent（schema doc §7.9）。锁住映射后任何一侧加变体都会编译报错。
+        for (src, expected_wire) in [
+            (InstallKind::Macos, r#""macos""#),
+            (InstallKind::Windows, r#""windows""#),
+            (InstallKind::AppImage, r#""appimage""#),
+            (InstallKind::Deb, r#""deb""#),
+            (InstallKind::Rpm, r#""rpm""#),
+            (InstallKind::Unknown, r#""unknown""#),
+        ] {
+            let mapped = install_kind_for_telemetry(src);
+            assert_eq!(
+                serde_json::to_string(&mapped).unwrap(),
+                expected_wire,
+                "install_kind_for_telemetry({:?}) wire form mismatch",
+                src
+            );
+        }
+    }
+
+    #[test]
+    fn download_error_kind_maps_to_short_identifiers() {
+        // 短标识符 < 32 字符，无 URL / 路径 / IP（schema doc §6.1）。
+        // Precondition 三个变体各自有专属 wire identifier，便于 dashboard
+        // slicing；`Cancelled` 因为 outcome 已经表达终态，error_kind 返回 None
+        // 避免双重信息。
+        let cases = [
+            (
+                DownloadError::Precondition("updater: no pending update to download".into()),
+                Some("no_pending_update"),
+            ),
+            (
+                DownloadError::Precondition("updater: already downloading".into()),
+                Some("already_downloading"),
+            ),
+            (
+                DownloadError::Precondition("updater: already downloaded, ready to install".into()),
+                Some("already_ready"),
+            ),
+            (
+                DownloadError::Precondition("updater: unknown precondition".into()),
+                Some("precondition"),
+            ),
+            (
+                DownloadError::Cancelled("updater: download cancelled".into()),
+                None,
+            ),
+            (
+                DownloadError::Failed("network blew up".into()),
+                Some("download_failed"),
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.error_kind(), expected);
+            // 所有 identifier 都 < 32 字符，保证 PostHog property 值不爆字段长度。
+            if let Some(kind) = expected {
+                assert!(kind.len() < 32, "error_kind too long: {kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn classify_check_failure_buckets_common_strings() {
+        // 优先级顺序：parse > http > network > other。覆盖 §7.9 四个枚举槽位。
+        for (input, expected) in [
+            (
+                "signature verification failed",
+                UpdateFailureKind::ParseError,
+            ),
+            ("minisign error", UpdateFailureKind::ParseError),
+            ("failed to parse manifest", UpdateFailureKind::ParseError),
+            ("invalid JSON in response", UpdateFailureKind::ParseError),
+            ("base64 decode failed", UpdateFailureKind::ParseError),
+            ("HTTP 404 Not Found", UpdateFailureKind::HttpError),
+            (
+                "server returned status code 500",
+                UpdateFailureKind::HttpError,
+            ),
+            ("connection refused", UpdateFailureKind::Network),
+            ("dns resolution failed", UpdateFailureKind::Network),
+            ("tls handshake error", UpdateFailureKind::Network),
+            ("operation timed out", UpdateFailureKind::Network),
+            ("transport error", UpdateFailureKind::Network),
+            ("something completely unexpected", UpdateFailureKind::Other),
+            ("", UpdateFailureKind::Other),
+        ] {
+            assert_eq!(
+                classify_check_failure(input),
+                expected,
+                "classify_check_failure({:?}) mismatch",
+                input
+            );
+        }
     }
 }
