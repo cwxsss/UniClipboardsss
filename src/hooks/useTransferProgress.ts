@@ -2,11 +2,14 @@ import { useEffect } from 'react'
 import { daemonWs } from '@/lib/daemon-ws'
 import { createLogger } from '@/lib/logger'
 import { useAppDispatch } from '@/store/hooks'
+import { removePendingEntry } from '@/store/slices/clipboardSlice'
 import {
+  markTransferCancelled,
   markTransferCompleted,
   markTransferFailed,
   cancelClipboardWrite,
   linkTransferToEntry,
+  normalizeCancelReason,
   setEntryTransferStatus,
   updateTransferProgress,
 } from '@/store/slices/fileTransferSlice'
@@ -75,7 +78,13 @@ export function useTransferProgress(): void {
           )
         }
         dispatch(linkTransferToEntry({ transferId: payload.transferId, entryId }))
-        const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
+        const validStatuses = [
+          'pending',
+          'transferring',
+          'completed',
+          'failed',
+          'cancelled',
+        ] as const
         if (validStatuses.includes(status as (typeof validStatuses)[number])) {
           dispatch(
             setEntryTransferStatus({
@@ -91,6 +100,20 @@ export function useTransferProgress(): void {
             markTransferFailed({
               transferId: payload.transferId,
               error: reason ?? undefined,
+            })
+          )
+        } else if (status === 'cancelled') {
+          // 兜底清 placeholder:apply_inbound 的 partial 路径正常会再发
+          // `clipboard.new_content` 触发 removePendingEntry,但 status_changed
+          // 帧通常先到(它是 cancel arm 在撕 connection 之前 await 推过来的,
+          // 而 NewContent 要等 capture 落库)。早一步清掉 pendingItems 能避
+          // 免"取消后 placeholder 仍然置顶几秒"的视觉残留。幂等:
+          // clipboard.new_content 到达时再 remove 一次没副作用。
+          dispatch(removePendingEntry(entryId))
+          dispatch(
+            markTransferCancelled({
+              transferId: payload.transferId,
+              reason: normalizeCancelReason(reason),
             })
           )
         } else if (status === 'completed') {

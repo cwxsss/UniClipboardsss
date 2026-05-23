@@ -37,14 +37,20 @@ pub use app_facade::{
 pub use app_paths::AppPaths;
 pub use blob_transfer::{
     BlobTransferDeps, BlobTransferError, BlobTransferFacade, FetchBlobCommand, FetchBlobResult,
-    FetchBlobToPathCommand, FetchBlobToPathResult, PublishBlobCommand, PublishBlobPathCommand,
-    PublishBlobResult,
+    FetchBlobToPathCommand, FetchBlobToPathResult, FetchTransferContext, InboundCancelOutcome,
+    PublishBlobCommand, PublishBlobPathCommand, PublishBlobResult,
 };
 pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, EntryDeliveryStatusView, EntryDeliveryTargetView,
     EntryDeliveryView, EntrySource, GetEntryDeliveryViewError, InboundAction, InboundNotice,
     IngestHandle,
+};
+// V3 envelope codec helpers — surfaced through the facade per §11.4.3 so
+// external CLI / test consumers don't reach into `crate::usecases::*`
+// directly. Implementations live in `usecases::clipboard_sync::payload_codec`.
+pub use crate::usecases::clipboard_sync::{
+    decode_v3_bytes_to_snapshot, decode_v3_bytes_to_snapshot_and_blob_refs, V3BlobRef,
 };
 pub use clipboard_capture::{
     CapturedClipboardEntryView, ClipboardCaptureFacade, ClipboardCaptureFacadeError,
