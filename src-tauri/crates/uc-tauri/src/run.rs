@@ -286,6 +286,15 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
             );
             info!("TauriHostEventEmitter registered on shared host_event_bus");
 
+            // 文件接收 HUD:挂到 host_event_bus 上,渲染 macOS 原生
+            // AppKit panel (AirDrop 风格)。装配细节(状态机 / emitter /
+            // actions / 平台 listener / 后台 sweep)全部收到 install()
+            // 内部;Windows 端将来加 `ui::windows` 实现时,这一行不需要改。
+            crate::activity_hud::install(crate::activity_hud::InstallDeps {
+                app_handle: app.handle().clone(),
+                host_event_bus: std::sync::Arc::clone(&host_event_bus_for_tauri),
+            });
+
             // 进程级 blob/spool worker —— Tauri runtime 已在 Builder::run()
             // 内就绪,这里 tauri::async_runtime::spawn 才能拿到 reactor。
             // 一次性 spawn,挂在进程级 task_registry 上,跨 daemon reload

@@ -5,6 +5,7 @@
 //! This crate contains Tauri-specific implementations of ports from uc-core,
 //! bootstrap logic for application initialization, and Tauri command handlers.
 
+pub mod activity_hud;
 pub mod adapters;
 pub mod bootstrap;
 pub mod commands;
