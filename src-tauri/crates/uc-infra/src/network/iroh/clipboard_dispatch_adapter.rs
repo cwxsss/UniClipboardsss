@@ -36,7 +36,7 @@ use tracing::{debug, instrument, warn};
 use uc_core::ids::DeviceId;
 use uc_core::ports::{
     ClipboardDispatchError, ClipboardDispatchPort, ClipboardHeader, DispatchAck,
-    PeerAddressRepositoryPort, SyncPayload,
+    PeerAddressRepositoryPort, PresencePort, SyncPayload,
 };
 
 use super::clipboard_wire::{self, AckCode, WireEncodeError};
@@ -50,16 +50,25 @@ pub const CLIPBOARD_ALPN: &[u8] = b"uniclipboard/clipboard/0";
 pub struct IrohClipboardDispatchAdapter {
     endpoint: Arc<Endpoint>,
     peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+    /// PresencePort handle the adapter notifies on dial failure. A dial
+    /// that we have to fall back to `Offline` is first-hand evidence the
+    /// peer is unreachable; feeding that signal back through
+    /// [`PresencePort::mark_offline`] lets every other consumer of presence
+    /// (roster view, fan-out skip logic) observe the truth without waiting
+    /// for the keepalive worker's next probe cycle.
+    presence: Arc<dyn PresencePort>,
 }
 
 impl IrohClipboardDispatchAdapter {
     pub fn new(
         endpoint: Arc<Endpoint>,
         peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+        presence: Arc<dyn PresencePort>,
     ) -> Self {
         Self {
             endpoint,
             peer_addr_repo,
+            presence,
         }
     }
 
@@ -131,17 +140,24 @@ impl ClipboardDispatchPort for IrohClipboardDispatchAdapter {
         };
 
         // 3. Dial. Dial failure = offline (no typed iroh error leaks up).
-        let connection = connect_with_staggered_retry(
+        //    On failure, feed the verdict back to PresencePort so the next
+        //    consumer of `current_state` / `ensure_reachable` doesn't pay
+        //    another 5-15s dial timeout on the same dead peer.
+        let connection = match connect_with_staggered_retry(
             Arc::clone(&self.endpoint),
             addr,
             CLIPBOARD_ALPN,
             "clipboard",
         )
         .await
-        .map_err(|err| {
-            debug!(error = %err, "clipboard dispatch: dial failed, treating as Offline");
-            ClipboardDispatchError::Offline
-        })?;
+        {
+            Ok(connection) => connection,
+            Err(err) => {
+                debug!(error = %err, "clipboard dispatch: dial failed, treating as Offline");
+                self.presence.mark_offline(target).await;
+                return Err(ClipboardDispatchError::Offline);
+            }
+        };
 
         // 4. Open one bi-stream for this message.
         let (mut send, mut recv) = connection
@@ -226,8 +242,40 @@ mod tests {
     use chrono::Utc;
     use iroh::protocol::{AcceptError, ProtocolHandler, Router};
     use iroh::{Endpoint, RelayMode};
+    use tokio::sync::broadcast;
 
-    use uc_core::ports::{PeerAddressError, PeerAddressRecord};
+    use uc_core::ports::{
+        PeerAddressError, PeerAddressRecord, PresenceError, PresenceEvent, ReachabilityState,
+    };
+
+    // PresencePort mock for the dispatch tests. None of the four tests in
+    // this module reach the dial-failure path (happy ack, duplicate ack,
+    // missing peer_addr short-circuit, oversized local reject), so the
+    // adapter never invokes `mark_offline`. The mock therefore needs no
+    // expectations — any accidental call surfaces as a mockall panic, which
+    // is exactly the regression guard we want for "dispatch tests shouldn't
+    // be touching presence state."
+    //
+    // `mark_offline` is omitted intentionally: it has a default impl on the
+    // trait (noop), so leaving it off the mock keeps that default in play
+    // without forcing every test to wire an empty expectation.
+    mockall::mock! {
+        Presence {}
+
+        #[async_trait]
+        impl PresencePort for Presence {
+            async fn ensure_reachable(
+                &self,
+                device: &DeviceId,
+            ) -> Result<ReachabilityState, PresenceError>;
+            async fn current_state(&self, device: &DeviceId) -> ReachabilityState;
+            fn subscribe(&self) -> broadcast::Receiver<PresenceEvent>;
+        }
+    }
+
+    fn presence_mock() -> Arc<dyn PresencePort> {
+        Arc::new(MockPresence::new())
+    }
 
     /// In-memory peer_addr_repo the tests use to inject an address blob
     /// for a target device. Mirrors the surface the adapter needs without
@@ -365,7 +413,7 @@ mod tests {
         let target = DeviceId::new("target-alpha");
         seed_addr(&repo, &target, &peer_addr).await;
 
-        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo);
+        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo, presence_mock());
         let payload = SyncPayload {
             ciphertext: Bytes::from(vec![0x11, 0x22, 0x33, 0x44]),
         };
@@ -394,7 +442,7 @@ mod tests {
         let target = DeviceId::new("target-beta");
         seed_addr(&repo, &target, &peer_addr).await;
 
-        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo);
+        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo, presence_mock());
         let payload = SyncPayload {
             ciphertext: Bytes::from(vec![0xAA; 16]),
         };
@@ -414,7 +462,7 @@ mod tests {
     async fn dispatch_returns_offline_when_peer_addr_missing() {
         let sender_endpoint = bind_endpoint().await;
         let repo = Arc::new(MemRepo::default());
-        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo);
+        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo, presence_mock());
 
         let result = adapter
             .dispatch(
@@ -443,7 +491,7 @@ mod tests {
         // we would hit Offline first.
         let sender_endpoint = bind_endpoint().await;
         let repo = Arc::new(MemRepo::default());
-        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo);
+        let adapter = IrohClipboardDispatchAdapter::new(sender_endpoint, repo, presence_mock());
 
         let oversized = vec![0u8; clipboard_wire::MAX_PAYLOAD_SIZE as usize + 1];
         let result = adapter

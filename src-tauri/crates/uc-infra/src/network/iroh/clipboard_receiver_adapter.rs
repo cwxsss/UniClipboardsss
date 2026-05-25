@@ -280,7 +280,10 @@ mod tests {
     use tokio::sync::Mutex;
 
     use uc_core::membership::{MembershipError, SpaceMember};
-    use uc_core::ports::{ClipboardDispatchPort, ClipboardHeader, SyncPayload};
+    use uc_core::ports::{
+        ClipboardDispatchPort, ClipboardHeader, PresenceError, PresenceEvent, PresencePort,
+        ReachabilityState, SyncPayload,
+    };
     use uc_core::MemberSyncPreferences;
 
     use crate::network::iroh::clipboard_dispatch_adapter::{
@@ -288,6 +291,34 @@ mod tests {
     };
     use crate::security::Sha256IdentityFingerprintFactory;
     use uc_core::ports::{PeerAddressError, PeerAddressRecord, PeerAddressRepositoryPort};
+
+    // PresencePort mock. Receiver-side tests use the dispatch adapter only
+    // as a wire-driver against the receiver under test; the dispatch path
+    // never hits dial failure in these scenarios, so `mark_offline` is
+    // never invoked. The mock therefore needs no expectations — any
+    // unexpected call surfaces as a mockall panic.
+    //
+    // `mark_offline` is intentionally omitted from the mock so the trait's
+    // default noop impl is in play; if a future test does exercise the
+    // dial-failure path, mockall will catch any accidental presence-side
+    // assumption it makes.
+    mockall::mock! {
+        Presence {}
+
+        #[async_trait]
+        impl PresencePort for Presence {
+            async fn ensure_reachable(
+                &self,
+                device: &DeviceId,
+            ) -> Result<ReachabilityState, PresenceError>;
+            async fn current_state(&self, device: &DeviceId) -> ReachabilityState;
+            fn subscribe(&self) -> broadcast::Receiver<PresenceEvent>;
+        }
+    }
+
+    fn presence_mock() -> Arc<dyn PresencePort> {
+        Arc::new(MockPresence::new())
+    }
 
     // ----- test doubles ------------------------------------------------------
 
@@ -457,7 +488,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let dispatch = IrohClipboardDispatchAdapter::new(sender_endpoint, peer_addr_repo);
+        let dispatch =
+            IrohClipboardDispatchAdapter::new(sender_endpoint, peer_addr_repo, presence_mock());
 
         let payload = Bytes::from(vec![0xAB; 128]);
         let ack = dispatch
@@ -508,7 +540,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let dispatch = IrohClipboardDispatchAdapter::new(sender_endpoint, peer_addr_repo);
+        let dispatch =
+            IrohClipboardDispatchAdapter::new(sender_endpoint, peer_addr_repo, presence_mock());
 
         let result = dispatch
             .dispatch(
@@ -621,7 +654,11 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                let dispatch = IrohClipboardDispatchAdapter::new(sender_endpoint, peer_addr_repo);
+                let dispatch = IrohClipboardDispatchAdapter::new(
+                    sender_endpoint,
+                    peer_addr_repo,
+                    presence_mock(),
+                );
 
                 let mut header = sample_header();
                 header.origin_device_id = format!("sender-{i}");
