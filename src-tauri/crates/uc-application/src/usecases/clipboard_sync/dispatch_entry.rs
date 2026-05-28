@@ -19,16 +19,27 @@
 //! Follows the `EnsureReachableAllUseCase` pattern (T6 / Phase 1):
 //! `peer_addr_repo.list()` is the authoritative roster of "members we
 //! have an address blob for" and avoids iterating ghost entries in
-//! `member_repo` that never completed pairing. We intentionally do **not**
-//! pre-filter by `PresencePort::current_state == Online`: presence's
-//! `last_state` is populated by our own outbound `ensure_reachable`
-//! probes, so when a peer dials us first (accept path only), our cache
-//! still reports `Unknown`/`Offline` and a pre-filter would drop a peer
-//! that's in fact reachable. Instead we let the dispatch port try every
-//! paired member and record `Err(Offline)` in `per_target` for whichever
-//! ones the wire can't reach. The iroh dispatch adapter returns quickly
-//! on unreachable peers, so this costs little even when many peers are
-//! down.
+//! `member_repo` that never completed pairing.
+//!
+//! Per-target preflight (#886) consults `PresencePort::current_state`
+//! once before spawning the dial: `Offline` short-circuits to a
+//! `SyncDeferred { peer_known_offline }` event without touching the
+//! wire, every other state (`Online`, `Unknown`) falls through to the
+//! dispatch port. The dispatch adapter is the only writer of the
+//! Offline verdict — it calls `PresencePort::mark_offline` on its own
+//! dial failures, which arms a sticky window inside the presence
+//! adapter that this preflight reads. Concentrating the "I just learned
+//! this peer is unreachable" signal on the presence port keeps every
+//! consumer (roster view, fan-out skip, future mobile-sync /
+//! file-transfer paths) reading the same truth source instead of each
+//! growing its own cache (the use case kept one before #886 and the
+//! split caused state divergence — see the issue for the post-mortem).
+//!
+//! `Unknown` is intentionally not pre-filtered: presence's outbound
+//! probes populate `last_state`, so a peer that always dials us first
+//! (accept-only) stays `Unknown` until the dispatch adapter actually
+//! reaches it. Dropping `Unknown` peers in the preflight would silently
+//! exclude that recovery path.
 //!
 //! ## Concurrency
 //!
@@ -41,12 +52,10 @@
 //! genuinely need them (broadcast `subscribe + emit`; see
 //! `ingest_inbound.rs::tests` and Phase 1 `roster/facade.rs::FakePresence`).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use tokio::sync::Mutex;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{debug, info, info_span, instrument, warn, Instrument};
 use uc_observability::FlowId;
@@ -56,45 +65,20 @@ use uc_observability::FlowId;
 /// (调用方 fire-and-forget,语义无损)。
 ///
 /// 之所以做这个截断:`connect_with_staggered_retry` 对不可达 peer 的最长耗
-/// 时是 `STAGGERED_DELAYS[2] (5s) + ATTEMPT_TIMEOUT (10s) = 15s`。在线 peer
-/// 几百 ms 就 ack,但一旦同一笔 dispatch 里有一个离线 peer,整个主流程会被
-/// 拖到 15s,直接影响:
+/// 时是 `STAGGERED_DELAYS[2] (1.5s) + ATTEMPT_TIMEOUT (3s) = 4.5s`(#886
+/// phase 4 之前是 15s)。在线 peer 几百 ms 就 ack,但一旦同一笔 dispatch
+/// 里有一个离线 peer,整个主流程仍会被拖到接近 5s,直接影响:
 ///   - `EntryDeliveryRepository::record_attempt` 写盘晚到 15s,前端 detail
 ///     badge 看到的"已同步到哪些设备"也跟着滞后;
-///   - tokio runtime 上同时挂 N 笔复制 = N 个 15s task,资源占用与可观测
+///   - tokio runtime 上同时挂 N 笔复制 = N 个 4.5s+ task,资源占用与可观测
 ///     性变差。
 /// 5s 取的是"在线 peer 在 LAN/直连下完成 connect + send + ack 的宽松上限"
 /// (实测 ~3s 内完成),既能让主流程在常见场景下等到所有 peer 的真实结果,
-/// 又避免被离线 peer 的 staggered retry 长尾拖死。详见 #785。
+/// 又避免被离线 peer 的 staggered retry 长尾拖死。#886 phase 4 把 staggered
+/// retry worst-case 从 15s 砍到 4.5s 之后,FAN_OUT_DEADLINE 仍保留作为
+/// 主流程的硬上限:phase 4 让"截断后还要等多久才能真正安静"从 ~10s 后台
+/// 长尾缩到 ~0,但主流程本身的截断契约不变。详见 #785。
 const FAN_OUT_DEADLINE: Duration = Duration::from_secs(5);
-
-/// In-process negative cache TTL for "most recent dial failure".
-///
-/// On the dial-failure path inside `clipboard_dispatch_adapter`,
-/// `mark_offline` writes presence `last_state = Offline`, which lets the
-/// next dispatch's spawn-time preflight short-circuit immediately. But that
-/// signal only arrives after `connect_with_staggered_retry` has exhausted
-/// all three attempts (~27s worst case) — and `FAN_OUT_DEADLINE = 5s` has
-/// already cut the main flow short, so the staggered retry continues in a
-/// background task.
-///
-/// When the user copies repeatedly (interval < 27s), the new dispatch's
-/// preflight still observes `Unknown` for the peer (the first dispatch
-/// hasn't reached `mark_offline` yet) and kicks off another full 27s dial
-/// loop. Background tasks accumulate like a snowball; the logs get flooded
-/// with `iroh connect` and `staggered retry failed` lines.
-///
-/// This TTL gives the use case its own "I just tried, it didn't get
-/// through" evidence, so subsequent dispatches can short-circuit *before*
-/// presence has officially flipped to Offline. `mark_offline` remains
-/// presence's authoritative update; the local stamp is just a "fires 25s
-/// earlier" suppression layer that gets out of the way (after TTL) and
-/// lets the normal presence + keepalive recovery path resume.
-///
-/// 30s is picked to slightly exceed the staggered retry's worst-case
-/// lifetime (~27s) without interfering with the keepalive worker's 25s
-/// cadence for state corrections.
-const RECENT_DIAL_FAILURE_TTL: Duration = Duration::from_secs(30);
 
 use crate::facade::blob_transfer::SharedHostEventEmitter;
 use crate::facade::host_event::{DeliveryHostEvent, HostEvent};
@@ -335,17 +319,6 @@ pub(crate) struct DispatchClipboardEntryUseCase {
     /// dispatch 主路径;事件丢失 / 乱序由前端 refetch 幂等吸收。CLI / 单元
     /// 测试装配传一根空 bus 即可(无下游 = noop)。
     host_event_bus: SharedHostEventEmitter,
-    /// In-process negative cache for "most recent dial failure". The
-    /// spawn-time preflight checks this map in addition to
-    /// `presence.current_state`: a stamp within TTL is treated as
-    /// known-offline and short-circuits the dial. Written on dispatch
-    /// failures classified as `Offline` / `Io`. See
-    /// [`RECENT_DIAL_FAILURE_TTL`] for the rationale.
-    ///
-    /// Not exposed via `new()` — this is purely internal state the use
-    /// case maintains for itself; callers stay unaware and tests +
-    /// wiring keep the original constructor signature.
-    recent_dial_failures: Arc<Mutex<HashMap<DeviceId, Instant>>>,
 }
 
 impl DispatchClipboardEntryUseCase {
@@ -379,7 +352,6 @@ impl DispatchClipboardEntryUseCase {
             first_sync_state,
             entry_delivery_repo,
             host_event_bus,
-            recent_dial_failures: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -513,7 +485,6 @@ impl DispatchClipboardEntryUseCase {
             let presence = Arc::clone(&self.presence);
             let analytics = Arc::clone(&self.analytics);
             let first_sync_state = Arc::clone(&self.first_sync_state);
-            let recent_dial_failures = Arc::clone(&self.recent_dial_failures);
             let header = header.clone();
             let device_id = device_id.clone();
             let payload = SyncPayload {
@@ -532,24 +503,7 @@ impl DispatchClipboardEntryUseCase {
                     //   用户感知尝试 = attempted - deferred
                     // 详见 docs/architecture/telemetry-events.md §7.3b。
                     let preflight_state = presence.current_state(&device_id).await;
-                    // Local negative cache — covers the window before
-                    // presence has had a chance to flip to Offline. See
-                    // `RECENT_DIAL_FAILURE_TTL` for rationale. The lock
-                    // is held across no awaits, and we opportunistically
-                    // evict expired stamps so the map can't grow unbounded.
-                    let recently_failed = {
-                        let mut map = recent_dial_failures.lock().await;
-                        match map.get(&device_id) {
-                            Some(t) if t.elapsed() < RECENT_DIAL_FAILURE_TTL => true,
-                            Some(_) => {
-                                map.remove(&device_id);
-                                false
-                            }
-                            None => false,
-                        }
-                    };
-                    let known_offline = matches!(preflight_state, ReachabilityState::Offline)
-                        || recently_failed;
+                    let known_offline = matches!(preflight_state, ReachabilityState::Offline);
                     capture_sync_attempted(
                         &analytics,
                         &first_sync_state,
@@ -560,10 +514,11 @@ impl DispatchClipboardEntryUseCase {
 
                     // Skip the dial entirely when presence already reports
                     // Offline. A dial against a silently-dead peer can run
-                    // up to STAGGERED_DELAYS[2] (5s) + ATTEMPT_TIMEOUT (10s)
-                    // = 15s before failing, which is well past the main
-                    // loop's FAN_OUT_DEADLINE (5s) and would otherwise stall
-                    // every clipboard copy on the deadline timeout. Since
+                    // up to STAGGERED_DELAYS[2] (1.5s) + ATTEMPT_TIMEOUT (3s)
+                    // = 4.5s before failing — short of the main loop's
+                    // FAN_OUT_DEADLINE (5s) on its own, but with multiple
+                    // peers piling on the same offline target it still
+                    // stalls every clipboard copy on the deadline. Since
                     // the dispatch adapter writes presence Offline on its
                     // own dial failures (PresencePort::mark_offline) and
                     // the presence fast-path enforces a TTL re-dial, by the
@@ -595,26 +550,15 @@ impl DispatchClipboardEntryUseCase {
                     let duration_ms =
                         started_at.elapsed().as_millis().min(u32::MAX as u128) as u32;
 
-                    // Stamp the local negative cache — but only for "dial-class"
-                    // failures. `Offline` is what the dispatch adapter
-                    // produces after its dial path fully fails; `Io` covers
-                    // wire-stage failures (open_bi / write / read errors)
-                    // which are typically network problems too.
-                    // `PeerRejected` means the peer is reachable but
-                    // refused (e.g. wire-version mismatch) — must not
-                    // suppress retries. `LocalPolicyExceeded` is a local
-                    // refusal (e.g. payload too big) unrelated to
-                    // reachability. `Internal` is a bug on our side;
-                    // stamping would mask it.
-                    if let Err(err) = &result {
-                        if matches!(
-                            err,
-                            ClipboardDispatchError::Offline | ClipboardDispatchError::Io(_)
-                        ) {
-                            let mut map = recent_dial_failures.lock().await;
-                            map.insert(device_id, Instant::now());
-                        }
-                    }
+                    // Pre-#886 the use case stamped a local negative
+                    // cache here on `Offline` / `Io` failures. The
+                    // dispatch adapter now calls
+                    // `PresencePort::mark_offline` itself when the dial
+                    // path fully fails, which arms a sticky window in
+                    // the presence adapter — the next dispatch's
+                    // preflight reads `Offline` from `current_state` and
+                    // short-circuits without us maintaining a parallel
+                    // cache here.
 
                     let event = match &result {
                         Ok(_) => Event::SyncSucceeded(SyncEventProps {
@@ -3063,119 +3007,73 @@ mod tests {
         );
     }
 
-    // ── recent-dial-failure local negative cache ────────────────────────
+    // ── presence-gated preflight (post-#886) ─────────────────────────────
     //
-    // These verdicts guard the use case's own short-term "most recent dial
-    // failure" negative cache: the dispatch adapter's `mark_offline` only
-    // takes effect after the staggered retry finishes (~27s), and the
-    // user's next copy spawns a new dispatch well before that — without
-    // this local layer, every copy would repeat the 27s dial tail and
-    // flood the logs.
+    // After #886 the use case has no local negative cache: the only
+    // short-circuit signal is `PresencePort::current_state == Offline`.
+    // The dispatch adapter owns the writer side — it calls
+    // `mark_offline` on its own dial failure, which arms a sticky
+    // window inside the presence adapter that this preflight reads.
     //
-    // Three invariants:
-    //   1. Offline failure → same peer is not re-dialed within 30s (local
-    //      short-circuit fires).
-    //   2. Io failure → also stamps, next dispatch is short-circuited.
-    //   3. PeerRejected does NOT stamp — peer is online but refused
-    //      (e.g. wire-version mismatch); retries must not be suppressed.
+    // "Offline short-circuits + fires SyncDeferred" is already covered
+    // by `known_offline_skips_dispatch_and_fires_deferred` above. The
+    // verdicts below guard the complementary invariants the dropped
+    // `recent_dial_failures` cache used to enforce.
 
-    /// 1. Offline failure → local stamp takes effect → second dispatch
-    /// does not hit the port. The mockall `.times(1)` is the contract:
-    /// if the negative cache fails to kick in, the second execution
-    /// triggers a second dispatch call and exceeds the expectation,
-    /// causing mockall to panic.
+    /// `Unknown` (the accept-only peer case documented in the
+    /// module-level doc) must fall through to the dispatch port —
+    /// silently filtering `Unknown` would exclude peers that only ever
+    /// dial us first.
     #[tokio::test]
-    async fn recent_offline_failure_short_circuits_next_dispatch() {
+    async fn presence_unknown_falls_through_to_dispatch_port() {
         let mut repo = MockPeerAddrRepo::new();
         repo.expect_list()
-            .times(2)
-            .returning(|| Ok(vec![record("peer-flaky")]));
+            .times(1)
+            .returning(|| Ok(vec![record("peer-accept-only")]));
 
         let mut cipher = MockCipher::new();
         cipher
             .expect_encrypt()
-            .times(2)
+            .times(1)
             .returning(|p| Ok(p.to_vec()));
 
         let mut dispatch = MockDispatch::new();
         dispatch
             .expect_dispatch()
-            .with(eq(DeviceId::new("peer-flaky")), always(), always())
+            .with(eq(DeviceId::new("peer-accept-only")), always(), always())
             .times(1)
-            .returning(|_, _, _| Err(ClipboardDispatchError::Offline));
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
 
-        let uc = build_uc(
+        let uc = build_uc_with_presence_and_first_sync_state(
             repo,
             make_member_repo_all_enabled(),
+            Arc::new(StaticPresence(ReachabilityState::Unknown)),
             cipher,
             dispatch,
             make_device_identity("self-device"),
             make_local_identity_stub(),
             make_settings_stub(),
+            Arc::new(uc_observability::analytics::NoopAnalyticsSink),
+            Arc::new(AllMarkedFirstSyncState),
         );
 
-        let first = uc.execute(input()).await.expect("first dispatch ok");
-        assert_eq!(first.total_offline, 1);
-        assert_eq!(first.total_accepted, 0);
-
-        let second = uc.execute(input()).await.expect("second dispatch ok");
-        assert_eq!(
-            second.total_offline, 1,
-            "second pass must short-circuit via local stamp",
-        );
-        assert_eq!(second.total_accepted, 0);
+        let outcome = uc.execute(input()).await.expect("dispatch ok");
+        assert_eq!(outcome.total_accepted, 1);
+        assert_eq!(outcome.total_offline, 0);
     }
 
-    /// 2. Io failures also stamp — treated the same as Offline because
-    /// wire-layer errors are usually network problems too.
+    /// `PeerRejected` is a wire-level refusal (version mismatch, locked
+    /// space, ...) on a peer that is fully reachable. It must NOT
+    /// short-circuit the next dispatch: the dispatch adapter does not
+    /// call `mark_offline` on a rejected ack (only on dial failure), so
+    /// `presence.current_state` stays `Unknown`/`Online` and the next
+    /// execute() must dial the port again. Pre-#886 the use-case-local
+    /// cache stamped only on `Offline`/`Io` to guarantee this; post-#886
+    /// the invariant falls out of "presence is the only short-circuit
+    /// source" — this test pins it in place against accidental
+    /// regression.
     #[tokio::test]
-    async fn recent_io_failure_short_circuits_next_dispatch() {
-        let mut repo = MockPeerAddrRepo::new();
-        repo.expect_list()
-            .times(2)
-            .returning(|| Ok(vec![record("peer-iowedged")]));
-
-        let mut cipher = MockCipher::new();
-        cipher
-            .expect_encrypt()
-            .times(2)
-            .returning(|p| Ok(p.to_vec()));
-
-        let mut dispatch = MockDispatch::new();
-        dispatch
-            .expect_dispatch()
-            .with(eq(DeviceId::new("peer-iowedged")), always(), always())
-            .times(1)
-            .returning(|_, _, _| Err(ClipboardDispatchError::Io("open_bi: reset".into())));
-
-        let uc = build_uc(
-            repo,
-            make_member_repo_all_enabled(),
-            cipher,
-            dispatch,
-            make_device_identity("self-device"),
-            make_local_identity_stub(),
-            make_settings_stub(),
-        );
-
-        let first = uc.execute(input()).await.expect("first dispatch ok");
-        assert_eq!(first.total_errored, 1);
-
-        // Second preflight observes the local stamp → treats as
-        // known-offline → counted as offline.
-        let second = uc.execute(input()).await.expect("second dispatch ok");
-        assert_eq!(
-            second.total_offline, 1,
-            "Io failure must also stamp the local cache",
-        );
-    }
-
-    /// 3. PeerRejected does NOT stamp — the peer is online but refused
-    /// (wire-version mismatch, space locked, etc.), which is unrelated
-    /// to reachability. The next dispatch must try again and must not be
-    /// incorrectly short-circuited.
-    #[tokio::test]
-    async fn peer_rejected_does_not_stamp_local_cache() {
+    async fn peer_rejected_does_not_short_circuit_next_dispatch() {
         let mut repo = MockPeerAddrRepo::new();
         repo.expect_list()
             .times(2)
@@ -3188,8 +3086,6 @@ mod tests {
             .returning(|p| Ok(p.to_vec()));
 
         let mut dispatch = MockDispatch::new();
-        // Expect 2 calls: first rejection does not stamp the cache, so
-        // the second dispatch must hit the port again.
         dispatch
             .expect_dispatch()
             .with(eq(DeviceId::new("peer-rejecty")), always(), always())
