@@ -48,7 +48,7 @@ import {
 } from '@/api/tauri-command/mobile_sync'
 import AddDeviceDialog from '@/components/device/AddDeviceDialog'
 import AddMobileSyncDeviceDialog from '@/components/device/AddMobileSyncDeviceDialog'
-import { deriveBadgeKind } from '@/components/device/ConnectionChannelBadge'
+import { deriveBadgeKind } from '@/components/device/connection-channel-utils'
 import { getDeviceIcon } from '@/components/device/device-utils'
 import DeviceSettingsDialog from '@/components/device/DeviceSettingsDialog'
 import EnableMobileSyncDialog from '@/components/device/EnableMobileSyncDialog'
