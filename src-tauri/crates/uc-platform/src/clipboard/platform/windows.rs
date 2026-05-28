@@ -1006,6 +1006,197 @@ fn write_text_windows_native(text: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to set Windows Unicode clipboard text: {}", e))
 }
 
+/// Windows-specific: read CF_HTML payload via `clipboard-win`, bypassing
+/// `clipboard_rs::ClipboardContext::get_html`.
+///
+/// **Why this exists.** Upstream `clipboard_rs::platform::win::extract_html_from_clipboard_data`
+/// parses the `StartHTML`/`EndHTML` byte offsets from the CF_HTML header and
+/// then does `data[start_idx..end_idx].to_string()` on a UTF-8 `&str`. Some
+/// source apps (observed: Chinese-language Office, certain chat clients)
+/// emit offsets that are off by 1-2 bytes when the payload contains
+/// multi-byte UTF-8 characters; when the bad offset lands inside such a
+/// character `std`'s string slicer aborts the process. See Sentry issue
+/// UNICLIPBOARD-RUST-1V and the regression tests in
+/// `crate::clipboard::cf_html::tests::cf_html_endhtml_panic_repro`.
+///
+/// We grab the raw CF_HTML bytes with `clipboard-win` (the lower-level crate
+/// already in our dependency tree for image writes) and hand them to
+/// [`super::super::cf_html::read_cf_html_payload_from_bytes`], which slices on
+/// bytes and uses `String::from_utf8_lossy` so a bad offset becomes a
+/// `U+FFFD` instead of a panic.
+///
+/// Returns `Ok(None)` when the clipboard does not carry CF_HTML (the caller
+/// only reaches this function after `ctx.has(ContentFormat::Html)` reported
+/// true, so this should be very rare — but is still a normal "no data"
+/// outcome rather than an error).
+pub(crate) fn read_html_windows_native() -> Result<Option<String>> {
+    use clipboard_win::{formats, get_clipboard};
+
+    // `Html::new()` registers (or fetches the existing) "HTML Format" code
+    // via `RegisterClipboardFormatW`. `ClipboardContext::new` already did
+    // this at startup, so the second registration is idempotent.
+    let html_fmt = clipboard_win::formats::Html::new()
+        .ok_or_else(|| anyhow::anyhow!("Failed to register CF_HTML clipboard format"))?;
+
+    let bytes: Vec<u8> = match get_clipboard(formats::RawData(html_fmt.code())) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "Failed to read CF_HTML raw bytes via clipboard-win: {}",
+                err
+            ));
+        }
+    };
+
+    debug!(
+        cf_html_size_bytes = bytes.len(),
+        "Read CF_HTML raw bytes from Windows clipboard (byte-safe path)"
+    );
+
+    Ok(super::super::cf_html::read_cf_html_payload_from_bytes(
+        &bytes,
+    ))
+}
+
+/// Windows-specific: capture an image rep from the clipboard using the
+/// fastest available path.
+///
+/// Layered strategy, in order of CPU cost:
+///
+/// 1. **Native `"PNG"` format** — zero decode, zero encode. Hits for every
+///    modern screenshot source (Chrome, Firefox, Edge, Office 2019+,
+///    Snipping Tool 11, Snipaste, 微信/QQ).
+/// 2. **CF_DIBV5 → PNG via `dib_to_png`** — one decode + one fast PNG
+///    encode (CompressionType::Fast + FilterType::NoFilter). Hits for
+///    Win+PrtScr, legacy apps, and the screenshots in the production
+///    Sentry trace that motivated this work.
+/// 3. **`clipboard-rs::ClipboardContext::get_image() + img.to_png()`** —
+///    one decode + RGBA round-trip + one default-deflate PNG encode.
+///    Last resort; the slowest path. Kept only as a defense against
+///    exotic image formats that neither (1) nor (2) recognize.
+///
+/// Mirrors the macOS fast path in `common.rs` (raw `public.png` →
+/// `tiff_to_png` → `get_image()+to_png()`), which has the same shape.
+///
+/// Returns:
+/// * `Ok(Some(png_bytes))` — one of the three tiers produced PNG bytes.
+/// * `Ok(None)` — every tier reported "no image data on clipboard". The
+///   caller normally won't observe this because they checked
+///   `ctx.has(ContentFormat::Image)` first; if they do, treat as a
+///   transient miss (lazy data provider).
+/// * `Err(_)` — all three tiers failed with non-"absent" errors.
+pub(crate) fn try_read_image_windows_optimized(
+    ctx: &mut clipboard_rs::ClipboardContext,
+) -> Result<Option<Vec<u8>>> {
+    // Tier 1: native PNG format — zero encoding work.
+    match read_image_windows_native_png() {
+        Ok(Some(bytes)) => return Ok(Some(bytes)),
+        Ok(None) => {
+            // No "PNG" format on clipboard, fall through to CF_DIB.
+        }
+        Err(err) => {
+            warn!(
+                error = %err,
+                "Native \"PNG\" fast-read failed; falling back to CF_DIB path"
+            );
+        }
+    }
+
+    // Tier 2: CF_DIB(V5) → fast PNG encode.
+    match read_image_windows_as_png() {
+        Ok(bytes) => return Ok(Some(bytes)),
+        Err(err) => {
+            // Common case: clipboard simply doesn't have CF_DIB (e.g. only a
+            // text rep but the high-level `has(Image)` flag was set by a
+            // stale or lazily-resolved format). Debug, not warn.
+            debug!(
+                error = %err,
+                "CF_DIB fast path unavailable; falling back to clipboard-rs slow path"
+            );
+        }
+    }
+
+    // Tier 3: clipboard-rs full decode + re-encode. Last resort.
+    use clipboard_rs::common::RustImage;
+    use clipboard_rs::Clipboard;
+    match ctx.get_image() {
+        Ok(img) => match img.to_png() {
+            Ok(png) => {
+                let bytes = png.get_bytes().to_vec();
+                debug!(
+                    size_bytes = bytes.len(),
+                    "Read image via clipboard-rs get_image()+to_png() (slow path)"
+                );
+                Ok(Some(bytes))
+            }
+            Err(err) => Err(anyhow::anyhow!(
+                "clipboard-rs: image available but to_png() failed: {}",
+                err
+            )),
+        },
+        Err(err) => Err(anyhow::anyhow!(
+            "clipboard-rs: ContentFormat::Image reported available but get_image() failed: {}",
+            err
+        )),
+    }
+}
+
+/// Windows-specific: read the modern `"PNG"` clipboard format raw, without
+/// decoding or re-encoding.
+///
+/// **Why this exists.** Most modern screenshot sources on Windows (Chrome,
+/// Firefox, Edge, Paint.NET, Office 2019+, Snipping Tool 11, Snipaste,
+/// 微信/QQ 截图工具, …) write **both** `CF_DIBV5` and a custom `"PNG"` format
+/// to the clipboard — the latter carrying ready-to-use PNG bytes. The
+/// existing `clipboard_rs::ClipboardContext::get_image()` path ignores this:
+/// it always goes through `clipboard-rs`'s internal `RustImageData::from_bytes`
+/// which decodes whatever it gets into a `DynamicImage`, after which we
+/// re-encode to PNG via `to_png()`. For a 4K screenshot that round-trip
+/// (PNG decode → RGBA buffer → PNG encode) costs ~3.3 s in dev profile and
+/// hundreds of ms in release — entirely avoidable when the source already
+/// handed us the PNG bytes.
+///
+/// This function mirrors the macOS fast path in `common.rs` that prefers
+/// `get_buffer("public.png")` before falling back to TIFF decoding.
+///
+/// Returns:
+/// * `Ok(Some(bytes))` — `"PNG"` format was present, raw PNG byte buffer copied.
+/// * `Ok(None)` — `"PNG"` format is not on the clipboard right now (e.g. Win+PrtScr,
+///   legacy app that only writes CF_DIB). The caller should fall back to the
+///   CF_DIB path.
+/// * `Err(_)` — registration succeeded but the format was reported available
+///   and reading still failed (genuine OS error).
+fn read_image_windows_native_png() -> Result<Option<Vec<u8>>> {
+    use clipboard_win::{formats, get_clipboard, is_format_avail, raw as cb_raw};
+
+    // `"PNG"` is the de-facto custom format Microsoft Office / Chrome /
+    // Firefox / Paint.NET / Snipaste / 微信 all use. `register_format` is
+    // idempotent — the same code is returned on every subsequent call.
+    let Some(png_fmt_nz) = cb_raw::register_format("PNG") else {
+        warn!("register_format(\"PNG\") returned None; native PNG fast path unavailable");
+        return Ok(None);
+    };
+    let png_fmt = png_fmt_nz.get();
+
+    if !is_format_avail(png_fmt) {
+        // Common case for CF_DIB-only sources (Win+PrtScr, legacy apps).
+        return Ok(None);
+    }
+
+    let bytes: Vec<u8> = get_clipboard(formats::RawData(png_fmt)).map_err(|e| {
+        anyhow::anyhow!(
+            "\"PNG\" clipboard format reported available but read failed: {}",
+            e
+        )
+    })?;
+
+    debug!(
+        size_bytes = bytes.len(),
+        "Read raw \"PNG\" format from Windows clipboard (zero-encode fast path)"
+    );
+    Ok(Some(bytes))
+}
+
 /// Windows-specific: Read image from clipboard as CF_DIB and convert to PNG bytes.
 ///
 /// Uses `clipboard-win` to read raw CF_DIB data (BITMAPINFOHEADER + pixel data,
