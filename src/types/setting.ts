@@ -241,7 +241,21 @@ export interface SettingContextType {
   loading: boolean
   error: string | null
   updateSetting: (newSetting: Settings) => Promise<void>
-  updateGeneralSetting: (newGeneralSetting: Partial<GeneralSettings>) => Promise<void>
+  /**
+   * Update general settings EXCEPT `autoStart`. Autostart is a desktop-host OS
+   * side effect and must go through the dedicated `updateAutostart` command;
+   * routing it through this generic patch would silently skip the OS launch
+   * registration (the daemon settings pipeline performs no OS side effects).
+   */
+  updateGeneralSetting: (
+    newGeneralSetting: Partial<Omit<GeneralSettings, 'autoStart'>>
+  ) => Promise<void>
+  /**
+   * Toggle "launch at login". Goes through the dedicated `update_autostart`
+   * Tauri command (persist + OS launch registration in one call) rather than
+   * the daemon settings patch, which performs no OS side effects.
+   */
+  updateAutostart: (enabled: boolean) => Promise<void>
   updateSyncSetting: (newSyncSetting: Partial<SyncSettings>) => Promise<void>
   updateSecuritySetting: (newSecuritySetting: Partial<SecuritySettings>) => Promise<void>
   updateRetentionPolicy: (newPolicy: Partial<RetentionPolicy>) => Promise<void>

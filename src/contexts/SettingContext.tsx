@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from '@/api/daemon'
 import {
   updateKeyboardShortcuts as persistKeyboardShortcuts,
   setQuickPanelEnabled as persistQuickPanelEnabled,
+  updateAutostart as persistAutostart,
 } from '@/api/tauri-command'
 import { DEFAULT_THEME_COLOR } from '@/constants/theme'
 import i18n, { normalizeLanguage, persistLanguage } from '@/i18n'
@@ -76,8 +77,12 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     await saveSetting(newSetting)
   }
 
-  // 更新通用设置
-  const updateGeneralSetting = async (newGeneralSetting: Partial<Settings['general']>) => {
+  // 更新通用设置。autoStart 被排除在外:它是桌面宿主 OS 副作用,必须走专用的
+  // updateAutostart 命令,否则会静默跳过 OS 启动项注册(daemon settings 管线
+  // 不触碰操作系统)。
+  const updateGeneralSetting = async (
+    newGeneralSetting: Partial<Omit<Settings['general'], 'autoStart'>>
+  ) => {
     if (!setting) return
     const updatedSetting: Settings = {
       ...setting,
@@ -87,6 +92,39 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
       },
     } as Settings
     await saveSetting(updatedSetting)
+  }
+
+  // 切换开机自启动。必须走 Tauri in-process command：OS 启动项注册是桌面宿主
+  // 副作用，daemon HTTP settings API 只做持久化、不触碰操作系统。命令内部会
+  // 持久化 auto_start 并应用 OS 注册（失败回滚），这里只把落地后的值合并进
+  // 内存 state 并广播，避免与 updateKeyboardShortcuts 一样的展示态漂移。
+  const updateAutostart = async (enabled: boolean) => {
+    if (!setting) {
+      throw new Error('No settings loaded')
+    }
+    try {
+      setLoading(true)
+      await persistAutostart(enabled)
+      const updatedSetting: Settings = {
+        ...setting,
+        general: { ...setting.general, autoStart: enabled },
+      }
+      setSetting(prev =>
+        prev ? { ...prev, general: { ...prev.general, autoStart: enabled } } : updatedSetting
+      )
+      setError(null)
+      try {
+        await emitSettingsChanged(updatedSetting)
+      } catch (err) {
+        log.error({ err }, 'Failed to broadcast settings change')
+      }
+    } catch (err) {
+      log.error({ err }, '更改自启动状态失败')
+      setError(`保存设置失败: ${err}`)
+      throw err
+    } finally {
+      setLoading(false)
+    }
   }
 
   // 更新同步设置
@@ -369,6 +407,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     error,
     updateSetting,
     updateGeneralSetting,
+    updateAutostart,
     updateSyncSetting,
     updateSecuritySetting,
     updateRetentionPolicy,
