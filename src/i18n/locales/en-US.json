@@ -481,6 +481,12 @@
           "label": "Enable quick panel",
           "description": "Registers a global shortcut and creates the quick panel window in the background. Disabling unregisters the shortcut immediately."
         },
+        "position": {
+          "label": "Position",
+          "description": "Choose where the quick panel appears when you press the shortcut.",
+          "center": "Screen center",
+          "followCursor": "Follow cursor"
+        },
         "restartHint": "Quick panel is now off. Restart the app to fully release the background processes."
       },
       "about": {
@@ -1404,10 +1410,11 @@
     "loading": "Connecting clipboard history...",
     "unavailable": "Clipboard history is unavailable right now.",
     "history": {
-      "searchPlaceholder": "Search (':' for advanced)...",
-      "advancedPlaceholder": "Filter...",
+      "searchPlaceholder": "Search clipboard history…",
+      "advancedPlaceholder": "Filter…",
       "searchAriaLabel": "Search clipboard history",
       "filterMenuLabel": "Open filter menu",
+      "listAriaLabel": "Clipboard history items",
       "filters": {
         "all": "All",
         "text": "Text",
@@ -1435,7 +1442,7 @@
         "close": "esc close",
         "loading": "Loading…",
         "searching": "Searching…",
-        "navigatePaste": "↑↓ navigate · ⏎ paste"
+        "navigatePaste": "↑↓ navigate · ⇥ type · ⏎ paste"
       },
       "empty": {
         "title": "No results found",

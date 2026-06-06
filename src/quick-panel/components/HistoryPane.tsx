@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { quickCardClassName } from '../constants'
+import { quickCardClassName, QUICK_FILTER_ORDER } from '../constants'
 import type { DisplayItem, TimeRangePreset } from '../types'
 import PanelItem from './PanelItem'
 
@@ -58,6 +58,18 @@ interface HistoryPaneProps {
   tokens: string[]
   setTokens: (t: string[]) => void
   onKeyDown: (e: KeyboardEvent) => void
+  focusSearchInput: () => void
+}
+
+// Icon per content-type filter. Keyed by Filter; QUICK_FILTER_ORDER decides
+// which ones are shown and in what order.
+const FILTER_ICONS: Partial<Record<Filter, React.ElementType>> = {
+  [Filter.All]: Layers,
+  [Filter.Text]: FileText,
+  [Filter.Image]: ImageIcon,
+  [Filter.Link]: LinkIcon,
+  [Filter.File]: Folder,
+  [Filter.Code]: Code,
 }
 
 const HistoryPane: React.FC<HistoryPaneProps> = React.memo(
@@ -91,18 +103,17 @@ const HistoryPane: React.FC<HistoryPaneProps> = React.memo(
     tokens,
     setTokens,
     onKeyDown,
+    focusSearchInput,
   }) => {
     const { t } = useTranslation(undefined, { keyPrefix: 'quickPanel.history' })
 
     const filterTypes = useMemo(
-      () => [
-        { id: Filter.All, icon: Layers, label: t('filters.all') },
-        { id: Filter.Text, icon: FileText, label: t('filters.text') },
-        { id: Filter.Image, icon: ImageIcon, label: t('filters.image') },
-        { id: Filter.Link, icon: LinkIcon, label: t('filters.link') },
-        { id: Filter.File, icon: Folder, label: t('filters.file') },
-        { id: Filter.Code, icon: Code, label: t('filters.code') },
-      ],
+      () =>
+        QUICK_FILTER_ORDER.map(id => ({
+          id,
+          icon: FILTER_ICONS[id] ?? Search,
+          label: t(`filters.${id}`),
+        })),
       [t]
     )
 
@@ -163,61 +174,70 @@ const HistoryPane: React.FC<HistoryPaneProps> = React.memo(
         ) : (
           <>
             {/* --- SPOTLIGHT STYLE TOP BAR --- */}
-            <div className="border-b border-border/50 relative">
-              <DropdownMenu>
-                <AdvancedSearch
-                  value={searchQuery}
-                  onValueChange={onSearchChange}
-                  isAdvanced={isAdvancedMode}
-                  onAdvancedChange={setIsAdvancedMode}
-                  tokens={tokens}
-                  onTokensChange={setTokens}
-                  placeholder={t('searchPlaceholder')}
-                  advancedPlaceholder={t('advancedPlaceholder')}
-                  inputRef={searchInputRef}
-                  onKeyDown={onKeyDown}
-                  icon={
-                    <div
-                      className={cn(
-                        'flex items-center gap-0.5 px-1 py-0.5 rounded transition-all',
-                        activeFilter !== Filter.All
-                          ? 'text-primary bg-primary/5'
-                          : 'text-muted-foreground/60'
-                      )}
+            <div className="border-b border-border/50">
+              <AdvancedSearch
+                value={searchQuery}
+                onValueChange={onSearchChange}
+                isAdvanced={isAdvancedMode}
+                onAdvancedChange={setIsAdvancedMode}
+                tokens={tokens}
+                onTokensChange={setTokens}
+                placeholder={t('searchPlaceholder')}
+                advancedPlaceholder={t('advancedPlaceholder')}
+                inputRef={searchInputRef}
+                onKeyDown={onKeyDown}
+                leftSlot={
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={t('filterMenuLabel')}
+                        className={cn(
+                          'flex items-center gap-0.5 rounded px-1.5 py-1 outline-none transition-colors hover:bg-muted/50',
+                          activeFilter !== Filter.All ? 'text-primary' : 'text-muted-foreground/50'
+                        )}
+                      >
+                        <CurrentFilterIcon className="size-3.5" />
+                        <ChevronDown className="size-2.5 shrink-0 opacity-50" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      className="w-36"
+                      onCloseAutoFocus={e => {
+                        // Keep focus on the search input so arrow keys keep
+                        // driving the list instead of re-opening this menu.
+                        e.preventDefault()
+                        focusSearchInput()
+                      }}
                     >
-                      <CurrentFilterIcon className="size-3.5" />
-                      {!isAdvancedMode && <ChevronDown className="size-2.5 opacity-40 shrink-0" />}
-                    </div>
-                  }
-                  onIconClick={() => {}}
-                  className="w-full"
-                />
-                <DropdownMenuTrigger asChild>
-                  {/* Anchor trigger to the fixed width icon container */}
-                  <button
-                    type="button"
-                    aria-label={t('filterMenuLabel')}
-                    className="absolute left-3.5 top-2 size-8 z-10 opacity-0 cursor-pointer"
-                  />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-36 ml-1">
-                  {filterTypes.map(f => (
-                    <DropdownMenuItem
-                      key={f.id}
-                      onClick={() => setActiveFilter(f.id)}
-                      className="flex items-center gap-2 text-[12px]"
-                    >
-                      <f.icon className="size-3.5 opacity-70" />
-                      {f.label}
-                      {activeFilter === f.id && <Check className="ml-auto size-3 text-primary" />}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                      {filterTypes.map(f => (
+                        <DropdownMenuItem
+                          key={f.id}
+                          onClick={() => setActiveFilter(f.id)}
+                          className="flex items-center gap-2 text-[12px]"
+                        >
+                          <f.icon className="size-3.5 opacity-70" />
+                          {f.label}
+                          {activeFilter === f.id && (
+                            <Check className="ml-auto size-3 text-primary" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                }
+                className="w-full"
+              />
             </div>
 
             {/* --- SCROLLABLE LIST --- */}
+            {/* role="listbox" 给下面 PanelItem 的 role="option" 提供合法父级。
+                未接 aria-activedescendant 的完整 combobox 链路:焦点恒在搜索框,
+                选中态由 isSelected/aria-selected 表达,够当前键盘导航用。 */}
             <div
+              role="listbox"
+              aria-label={t('listAriaLabel')}
               className="scrollbar-thin flex-1 overflow-y-auto px-1.5 py-1"
               onMouseMove={() => {
                 if (!hasPointerMovedSinceShow) onHistoryMouseMove()
@@ -284,7 +304,15 @@ const HistoryPane: React.FC<HistoryPaneProps> = React.memo(
                       <ChevronDown className="size-2.5 opacity-50" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-36">
+                  <DropdownMenuContent
+                    align="start"
+                    side="top"
+                    className="w-36"
+                    onCloseAutoFocus={e => {
+                      e.preventDefault()
+                      focusSearchInput()
+                    }}
+                  >
                     {timeRanges.map(range => (
                       <DropdownMenuItem
                         key={range.id}
