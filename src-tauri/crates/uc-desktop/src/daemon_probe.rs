@@ -359,6 +359,53 @@ where
     }
 }
 
+/// Stop the local daemon before an in-place update.
+///
+/// Applies the same PID-identity + InProcess safety checks as
+/// [`stop_local_daemon_on_full_quit`], but returns `Err` when the daemon was
+/// identified as running yet could not be terminated (timeout / signal
+/// failure).  This lets the caller abort the install on Windows where the
+/// NSIS installer cannot overwrite a locked `uniclipd.exe`.
+///
+/// Safe no-ops (no PID file, stale PID, InProcess legacy) return
+/// `Ok(false)`.  Successful termination returns `Ok(true)`.  Unreadable
+/// PID metadata (file exists but corrupt/inaccessible) returns `Err` — the
+/// daemon may still be running and we cannot identify its PID to kill it.
+pub fn stop_daemon_before_update() -> Result<bool, String> {
+    use uc_daemon_process::contract::terminate_and_wait;
+    use uc_daemon_process::process_metadata::{verify_pid_identity, PidVerification};
+
+    let metadata = match read_pid_metadata() {
+        Ok(Some(m)) => m,
+        Ok(None) => return Ok(false),
+        Err(e) => {
+            return Err(format!(
+                "pre-update: failed to read daemon pid metadata: {e}"
+            ));
+        }
+    };
+
+    if let PidVerification::Stale(reason) = verify_pid_identity(&metadata) {
+        tracing::info!(pid = metadata.pid, %reason, "pre-update: daemon PID stale");
+        return Ok(false);
+    }
+
+    if matches!(metadata.mode, DaemonProcessMode::InProcess) {
+        tracing::info!(
+            pid = metadata.pid,
+            "pre-update: in-process daemon — skipping"
+        );
+        return Ok(false);
+    }
+
+    let pid = metadata.pid;
+    terminate_and_wait(pid, std::time::Duration::from_secs(10))
+        .map_err(|e| format!("pre-update: failed to stop daemon pid {pid}: {e}"))?;
+
+    tracing::info!(pid, "pre-update: daemon stopped");
+    Ok(true)
+}
+
 /// Inner implementation that takes injected reader/terminator closures so the
 /// `InProcess` refusal can be unit-tested without touching the real PID file
 /// or sending real signals.
