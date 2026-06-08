@@ -26,7 +26,7 @@ use uc_webserver::api::auth::load_or_create_auth_token;
 use uc_webserver::api::event_emitter::DaemonApiEventEmitter;
 use uc_webserver::api::server::{run_http_server, DaemonApiState};
 use uc_webserver::api::setup_events::spawn_pairing_completion_forwarder;
-use uc_webserver::api::types::DaemonWsEvent;
+use uc_webserver::api::types::{DaemonResidency, DaemonWsEvent};
 use uc_webserver::security::{cleanup_rate_limiter_task, SecurityState};
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
@@ -177,6 +177,10 @@ pub struct DaemonApp {
     /// daemon。现存 run-mode 恒为 `Standalone`(可 SIGTERM);`InProcess` 仅作
     /// legacy PID 文件读取保留(ADR-008 P3-3)。
     process_mode: DaemonProcessMode,
+    /// 在 health/status 握手里上报的 daemon 驻留模式（ADR-008 P5-L L1）。
+    /// 从 `DaemonRunMode` 映射而来,透传进 `DaemonApiState`。默认
+    /// `Standalone`,持久客户端后续据此识别 `Oneshot` 并接管(R8-F2)。
+    residency: DaemonResidency,
     /// Mobile sync LAN endpoint adapter 的具体类型,daemon 启动时用它 spawn
     /// `mobile_lan` listener,起来后 `set` 当前 URL,关闭后 `clear`。
     /// `None` 表示该装配场景不接 mobile listener(测试或未来 GUI-only 模式)。
@@ -222,6 +226,7 @@ impl DaemonApp {
             local_device_id: None,
             listens_to_os_signals: true,
             process_mode: DaemonProcessMode::Standalone,
+            residency: DaemonResidency::Standalone,
             mobile_lan_endpoint_info: None,
             mobile_lan_lifecycle: None,
             analytics: None,
@@ -274,6 +279,7 @@ impl DaemonApp {
             local_device_id,
             listens_to_os_signals,
             process_mode,
+            residency: DaemonResidency::Standalone,
             mobile_lan_endpoint_info: None,
             mobile_lan_lifecycle: None,
             analytics: None,
@@ -318,6 +324,15 @@ impl DaemonApp {
         self
     }
 
+    /// Set the daemon residency mode reported in the health/status handshake
+    /// (ADR-008 P5-L L1). Mapped from `DaemonRunMode` at the assembly boundary
+    /// and forwarded into `DaemonApiState` so `GET /health` / `GET /status`
+    /// surface it. Defaults to [`DaemonResidency::Standalone`] when not set.
+    pub fn with_residency(mut self, residency: DaemonResidency) -> Self {
+        self.residency = residency;
+        self
+    }
+
     /// Run the daemon: start the HTTP API server and services, wait for shutdown, cleanup.
     ///
     /// NOTE: `recover_encryption_session` is called in the entrypoint background
@@ -332,7 +347,12 @@ impl DaemonApp {
             "loading daemon auth token"
         );
         let auth_token = load_or_create_auth_token(&token_path)?;
-        let pid_manager = DaemonPidManager::new(self.storage_paths.clone());
+        // ADR-008 P5-0: DaemonPidManager now stores the resolved PID-file path
+        // directly (the thin uc-daemon-process crate owns no app-stack deps).
+        // `AppPaths::daemon_pid_path()` is `<app_data_root>/.daemon-pid`, the
+        // exact path the manager used to compute internally from `AppPaths` —
+        // byte-identical behavior.
+        let pid_manager = DaemonPidManager::new(self.storage_paths.daemon_pid_path());
         let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone(), self.process_mode)?;
         let pid = std::process::id();
 
@@ -361,7 +381,8 @@ impl DaemonApp {
         security.register_pid(pid).await;
 
         // 3. Build API state using the shared event_tx (same channel used by all services)
-        let mut api_state = DaemonApiState::new(Arc::clone(&self.app_facade), auth_token, security);
+        let mut api_state = DaemonApiState::new(Arc::clone(&self.app_facade), auth_token, security)
+            .with_residency(self.residency);
         api_state.event_tx = self.event_tx.clone();
         let api_state = match &self.clipboard_capture_gate {
             Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
@@ -418,8 +439,43 @@ impl DaemonApp {
             );
         }
 
+        // ADR-008 P5-L L4: Oneshot self-termination. For the Oneshot residency
+        // ONLY, spawn the lease-draining supervisor and arm a terminate token;
+        // for Standalone / ServerHeadless `oneshot_terminate` stays `None`, so
+        // no supervisor is spawned and the run-loop arm below is wired to
+        // `pending` — byte-for-byte unchanged behaviour. The registry clone is
+        // captured AFTER `api_state` is fully built so it shares the SAME atomic
+        // counter the WS handler increments, and BEFORE `api_state` is moved into
+        // the HTTP server task below.
+        let oneshot_terminate =
+            (self.residency == DaemonResidency::Oneshot).then(CancellationToken::new);
+        if let Some(token) = oneshot_terminate.clone() {
+            let registry = api_state.lease_registry.clone();
+            // ADR-008 P5-L L8c: hand the supervisor the restart coordinator (which
+            // owns the L8b quiescing flag) so it reads quiescing through it and
+            // aborts a timed-out drain via `coordinator.abort()` — clearing the
+            // in-flight restart state + lowering quiescing atomically.
+            let restart = api_state.restart.clone();
+            let supervisor_shutdown = self.cancel.child_token();
+            tokio::spawn(
+                crate::daemon::oneshot::run_oneshot_self_terminate_supervisor(
+                    registry,
+                    restart,
+                    token,
+                    supervisor_shutdown,
+                    crate::daemon::oneshot::SupervisorTimings::production(),
+                ),
+            );
+        }
+
         // 6. Spawn HTTP server and rate limiter cleanup task
         let security_for_cleanup = api_state.security.clone();
+        // ADR-008 P5-L L8c: capture the restart coordinator (Arc-backed) BEFORE
+        // `api_state` is moved into the HTTP server task — it is read at
+        // terminate time to decide whether to persist a handover record. Captured
+        // UNCONDITIONALLY (not only for Oneshot): in every other residency
+        // `pending()` is always `None`, so the handover-write block is a no-op.
+        let restart_coordinator = api_state.restart.clone();
         let cleanup_cancel = self.cancel.child_token();
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
@@ -489,6 +545,10 @@ impl DaemonApp {
 
         // 7. Wait for shutdown signal, infrastructure crash, service crash, or deferred start
         let listens_to_os_signals = self.listens_to_os_signals;
+        // ADR-008 P5-L L8c: set only when the loop breaks via the Oneshot
+        // self-terminate arm — the sole path on which a controlled-restart
+        // handover record may be persisted (a signal/crash break leaves it false).
+        let mut oneshot_self_terminated = false;
         loop {
             tokio::select! {
                 _ = async {
@@ -510,6 +570,26 @@ impl DaemonApp {
                     }
                 } => {
                     info!("external shutdown signal received (parent process gone)");
+                    break;
+                }
+                // ADR-008 P5-L L4: Oneshot self-termination. `oneshot_terminate`
+                // is `Some` ONLY in the Oneshot residency; for every other
+                // residency it is `None`, so this arm awaits `pending` forever
+                // and can never fire — preserving Standalone / ServerHeadless
+                // behaviour byte-for-byte. When it does fire, the supervisor has
+                // observed the control leases drain; break into the EXISTING
+                // shutdown sequence below unchanged.
+                _ = async {
+                    match &oneshot_terminate {
+                        Some(token) => token.cancelled().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    info!("oneshot residency: control leases drained — self-terminating");
+                    // ADR-008 P5-L L8c: mark the supervisor-driven terminate so the
+                    // post-loop handover-write block runs (only this path persists a
+                    // record, and only when a restart is actually pending).
+                    oneshot_self_terminated = true;
                     break;
                 }
                 result = &mut http_handle => {
@@ -553,6 +633,35 @@ impl DaemonApp {
 
         // 8. Shutdown sequence
         info!("shutting down...");
+
+        // ADR-008 P5-L L8c: a controlled restart drains via the Oneshot supervisor
+        // and then self-terminates. Only on that supervisor-driven terminate AND
+        // with a pending restart do we persist the handover so the requester's
+        // spawn launches the target mode. Written here — inside the instance-lock
+        // window (host.rs holds it until after iroh unbinds) and before cancel — so
+        // a successor never acquires the lock before the record exists. A normal
+        // Oneshot self-terminate (no restart) has pending()==None -> no record; a
+        // signal/crash break leaves the flag false.
+        if oneshot_self_terminated {
+            if let Some(req) = restart_coordinator.pending() {
+                let record = uc_daemon_local::handover::HandoverRecord {
+                    target_mode: crate::daemon::run_mode::residency_to_run_mode_env(req.target),
+                    generation: req.generation,
+                };
+                if let Err(error) =
+                    uc_daemon_local::handover::write(&self.storage_paths.app_data_root_dir, &record)
+                {
+                    warn!(error = %error, "failed to write controlled-restart handover record");
+                } else {
+                    info!(
+                        target_mode = %record.target_mode,
+                        generation = record.generation,
+                        "wrote controlled-restart handover"
+                    );
+                }
+            }
+        }
+
         self.cancel.cancel();
 
         // mobile_sync LAN listener 不挂在主 cancel token 上(它有自己的子

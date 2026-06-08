@@ -1,7 +1,7 @@
 //! HTTP server bootstrap for the daemon API.
 
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,12 +25,13 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
+use crate::api::control_lease::ControlLeaseRegistry;
 use crate::api::dto::error::ApiError;
 use crate::api::openapi::ApiDoc;
 use crate::api::routes;
 use crate::api::types::{
-    DaemonWsEvent, HealthResponse, PeerSnapshotDto, PresenceRefreshResponse, SpaceMemberDto,
-    StatusResponse,
+    DaemonResidency, DaemonWsEvent, HealthResponse, PeerSnapshotDto, PresenceRefreshResponse,
+    SpaceMemberDto, StatusResponse,
 };
 use crate::api::ws;
 use crate::security::SecurityState;
@@ -67,6 +68,37 @@ pub struct DaemonApiState {
     /// payload` until the streaming reader supersedes it. Thumbnails are
     /// exempt (small, served via the separate `/clipboard/thumbnails` route).
     pub large_blob_semaphore: Arc<Semaphore>,
+    /// Daemon residency mode surfaced in the health/status handshake
+    /// (ADR-008 P5-L L1). Mapped from the daemon's `DaemonRunMode` at the
+    /// assembly boundary and injected via [`Self::with_residency`]. Defaults to
+    /// [`DaemonResidency::Standalone`] so assembly paths / tests that don't wire
+    /// it construct cleanly (same defaulting strategy as the analytics no-op).
+    pub residency: DaemonResidency,
+    /// Control-WS lease registry (ADR-008 P5-L L3). Each authenticated WS
+    /// connection holds one connection-bound lease for its lifetime; the active
+    /// count is the daemon-side liveness signal that L4 consumes to decide when
+    /// an `Oneshot` daemon may self-terminate. The registry is `Arc`-backed, so
+    /// every `DaemonApiState` clone shares the same counter. In L3 the count is
+    /// observed/logged only — no consumer reads it to drive behaviour yet.
+    pub lease_registry: ControlLeaseRegistry,
+    /// Controlled-restart quiescing flag (ADR-008 P5-L L8b). While set, admission
+    /// gates reject NEW work (new control-WS upgrades + new clipboard dispatch/resend)
+    /// with 503 `daemon_restarting` so in-flight leases can drain before a controlled
+    /// restart. `Arc`-backed so every `DaemonApiState` clone — and the Oneshot
+    /// supervisor that drains on it — shares the same flag. L8b adds NO setter: the
+    /// flag is always false in production (the restart control plane that flips it is
+    /// a later slice L8c), so this is production-behaviour-neutral.
+    pub quiescing: Arc<AtomicBool>,
+    /// Controlled-restart coordinator (ADR-008 P5-L L8c) — the SOLE mutator of
+    /// [`Self::quiescing`]. It holds the SAME `Arc` as `quiescing` (constructed
+    /// together in [`Self::new`]), so its `request()` / `abort()` transitions are
+    /// observed by the L8b admission gates that read `quiescing`. The
+    /// `/lifecycle/restart` handler drives `request()`; the Oneshot supervisor
+    /// drives `abort()` on a drain timeout. `Arc`-backed, so every
+    /// `DaemonApiState` clone shares the same arbitration state. Production-neutral
+    /// in this slice: only an Oneshot daemon's restart endpoint calls `request()`,
+    /// and no Oneshot daemon exists until L8d.
+    pub restart: crate::api::restart::RestartCoordinator,
 }
 
 /// Max concurrent full-buffer blob pulls (D6 interim RSS guard; see
@@ -82,6 +114,11 @@ impl DaemonApiState {
         security: Arc<SecurityState>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(64);
+        // ADR-008 P5-L L8c: the quiescing flag and the restart coordinator must
+        // share ONE `Arc` — the coordinator is the sole mutator, the L8b gates
+        // read `quiescing`. Construct the flag once and hand the SAME `Arc` to
+        // both so a coordinator `request()`/`abort()` is observed by every gate.
+        let quiescing = Arc::new(AtomicBool::new(false));
         Self {
             auth_token,
             app_facade,
@@ -92,11 +129,24 @@ impl DaemonApiState {
             security,
             analytics: Arc::new(NoopAnalyticsSink),
             large_blob_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_BLOB_PULLS)),
+            residency: DaemonResidency::Standalone,
+            lease_registry: ControlLeaseRegistry::new(),
+            quiescing: quiescing.clone(),
+            restart: crate::api::restart::RestartCoordinator::new(quiescing),
         }
     }
 
     pub fn with_security(mut self, security: Arc<SecurityState>) -> Self {
         self.security = security;
+        self
+    }
+
+    /// Inject the daemon's residency mode (ADR-008 P5-L L1) so the
+    /// health/status handshake reports whether this daemon is a persistent
+    /// member node or a transient `Oneshot`. Mapped from `DaemonRunMode` at the
+    /// daemon assembly boundary.
+    pub fn with_residency(mut self, residency: DaemonResidency) -> Self {
+        self.residency = residency;
         self
     }
 
@@ -112,19 +162,41 @@ impl DaemonApiState {
     }
 
     pub fn health_response(&self) -> HealthResponse {
+        Self::health_response_for(self.residency)
+    }
+
+    /// Build the `GET /health` body for a given residency. Split out from
+    /// [`Self::health_response`] (which just forwards `self.residency`) so the
+    /// residency-emission contract — every `DaemonRunMode` surfaces its own
+    /// residency in the handshake (ADR-008 P5-L L1) — is unit-testable without
+    /// composing a full `DaemonApiState` (and thus a full `AppFacade`).
+    pub fn health_response_for(residency: DaemonResidency) -> HealthResponse {
         HealthResponse {
             status: "ok".to_string(),
             package_version: env!("CARGO_PKG_VERSION").to_string(),
             api_revision: uc_daemon_contract::DAEMON_API_REVISION.to_string(),
+            residency,
         }
     }
 
     pub fn status_response(&self) -> StatusResponse {
         StatusResponse {
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            ..Self::status_response_for(self.residency)
+        }
+    }
+
+    /// Build the `GET /status` body for a given residency (uptime defaults to
+    /// `0`; the live method overrides it from `started_at`). Mirrors
+    /// [`Self::health_response_for`] so the residency-emission contract is
+    /// unit-testable without a full `DaemonApiState`.
+    pub fn status_response_for(residency: DaemonResidency) -> StatusResponse {
+        StatusResponse {
             package_version: env!("CARGO_PKG_VERSION").to_string(),
             api_revision: uc_daemon_contract::DAEMON_API_REVISION.to_string(),
-            uptime_seconds: self.started_at.elapsed().as_secs(),
+            uptime_seconds: 0,
             workers: Vec::new(),
+            residency,
         }
     }
 
@@ -206,6 +278,18 @@ impl DaemonApiState {
             &self.auth_token,
             client_pid,
         )
+    }
+}
+
+/// Admission gate for new daemon work during a controlled-restart drain
+/// (ADR-008 P5-L L8b). Returns `Err(ApiError::restarting)` (503 `daemon_restarting`)
+/// while `quiescing` is set, else `Ok(())`. Shared by the control-WS upgrade handler
+/// and the clipboard dispatch/resend handlers so the rejection is uniform.
+pub(crate) fn ensure_not_quiescing(quiescing: &AtomicBool) -> Result<(), ApiError> {
+    if quiescing.load(Ordering::SeqCst) {
+        Err(ApiError::restarting("daemon is restarting"))
+    } else {
+        Ok(())
     }
 }
 
@@ -440,4 +524,57 @@ pub async fn run_http_server(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod residency_handshake_tests {
+    use super::*;
+
+    /// ADR-008 P5-L L1: `GET /health` and `GET /status` must report whichever
+    /// residency the daemon was assembled with. `DaemonApiState` is fed
+    /// `DaemonRunMode -> DaemonResidency` at the assembly boundary (uc-daemon),
+    /// and the handler bodies copy `self.residency` verbatim — exercised here
+    /// per variant without composing a full `AppFacade`.
+    #[test]
+    fn health_and_status_report_each_residency() {
+        for residency in [
+            DaemonResidency::Standalone,
+            DaemonResidency::ServerHeadless,
+            DaemonResidency::Oneshot,
+        ] {
+            let health = DaemonApiState::health_response_for(residency);
+            assert_eq!(health.residency, residency);
+            assert_eq!(health.status, "ok");
+
+            let status = DaemonApiState::status_response_for(residency);
+            assert_eq!(status.residency, residency);
+        }
+    }
+}
+
+#[cfg(test)]
+mod quiescing_gate_tests {
+    use super::*;
+
+    /// ADR-008 P5-L L8b: while `quiescing` is clear (the production-default — no
+    /// setter wired in this slice) the admission gate must admit. Constructed off
+    /// a bare `AtomicBool`, no full `DaemonApiState`, so the gate's contract is
+    /// unit-testable in isolation.
+    #[test]
+    fn ensure_not_quiescing_admits_when_clear() {
+        let quiescing = AtomicBool::new(false);
+        assert!(ensure_not_quiescing(&quiescing).is_ok());
+    }
+
+    /// ADR-008 P5-L L8b: while `quiescing` is set the gate must reject with the
+    /// distinct 503 `daemon_restarting` surface (not the generic
+    /// `runtime_unavailable`) so clients can tell a controlled restart apart from
+    /// a generic outage and retry against the successor.
+    #[test]
+    fn ensure_not_quiescing_rejects_when_set() {
+        let quiescing = AtomicBool::new(true);
+        let err = ensure_not_quiescing(&quiescing).expect_err("must reject while quiescing");
+        assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.code, "daemon_restarting");
+    }
 }

@@ -18,6 +18,7 @@
 //! Migrated from `uc-desktop/src/daemon/host.rs` (ADR-008 P2, Slice 2b).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 use uc_application::clipboard_write::ClipboardWriteCoordinator;
@@ -38,6 +39,18 @@ use super::runtime_controls::build_daemon_runtime_controls;
 use super::search_assembly::build_daemon_search_assembly;
 use super::service_assembly::build_daemon_service_plan;
 use super::tokio_runtime::build_daemon_tokio_runtime;
+
+/// Backoff between instance-lock acquisition retries during a controlled-restart
+/// promotion (ADR-008 P5-L L8d-2). Only engaged when a handover record is
+/// present (see [`run`]); production never writes one, so this is unused there.
+const HANDOVER_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Max instance-lock acquisition attempts while a controlled-restart predecessor
+/// is still releasing the lock (ADR-008 P5-L L8d-2). The retry sleeps only
+/// BETWEEN attempts, so 75 attempts incur 74 × 200ms ≈ 14.8s of waiting — a ~15s
+/// budget that comfortably covers the predecessor's two 5s shutdown joins plus
+/// the iroh `endpoint.close()` teardown.
+const HANDOVER_LOCK_MAX_ATTEMPTS: usize = 75;
 
 /// Process-level persistent resource handles passed to the daemon on each spawn.
 ///
@@ -67,13 +80,56 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
             background,
             storage_paths,
             config: _config,
-        } = super::process_bootstrap::build_process_runtime().await?;
+        } = super::process_bootstrap::build_process_runtime(run_mode).await?;
 
         // D22: acquire per-profile instance lock before any port binding.
-        let _instance_lock = uc_daemon_local::instance_lock::DaemonInstanceLock::try_acquire(
-            &storage_paths.app_data_root_dir,
-        )
+        //
+        // ORDERING (ADR-008 P5-L L8a) — load-bearing for P5-L L8 controlled
+        // restart: this guard is held to the END of the `block_on` closure,
+        // i.e. until AFTER `handle.wait()` below returns. `handle.wait()`
+        // encloses the full iroh `endpoint.close()` teardown (via
+        // `run_loop.rs`'s sequential `daemon.run().await` → `…shutdown().await`),
+        // so the lock drops strictly AFTER iroh fully unbinds its socket. A new
+        // daemon must not acquire the lock until the old daemon's iroh socket is
+        // released, otherwise the replacement races `AddrInUse`. Do NOT move
+        // this guard's scope earlier (e.g. into a sub-block).
+        //
+        // When a handover record is present (a controlled-restart promotion
+        // spawn, ADR-008 P5-L L8d-2), acquisition retries with a bounded backoff
+        // to ride out the window where the predecessor still holds the lock
+        // during iroh teardown (its `/health` goes absent before lock-release).
+        //
+        // Peek (do NOT clear) the handover record before acquiring: a present
+        // record means we are a controlled-restart promotion spawn, so we must
+        // tolerate the predecessor still releasing the lock. In production no
+        // writer exists → `handover_present` is always false → single-shot
+        // `try_acquire`, byte-identical to before. The `clear` below still
+        // consumes the record AFTER the lock is held (claim under lock — R8-F1).
+        let handover_present =
+            uc_daemon_local::handover::read(&storage_paths.app_data_root_dir).is_some();
+        let _instance_lock = if handover_present {
+            uc_daemon_local::instance_lock::retry_while_already_running(
+                || {
+                    uc_daemon_local::instance_lock::DaemonInstanceLock::try_acquire(
+                        &storage_paths.app_data_root_dir,
+                    )
+                },
+                HANDOVER_LOCK_MAX_ATTEMPTS,
+                HANDOVER_LOCK_RETRY_INTERVAL,
+            )
+            .await
+        } else {
+            uc_daemon_local::instance_lock::DaemonInstanceLock::try_acquire(
+                &storage_paths.app_data_root_dir,
+            )
+        }
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // ADR-008 P5-L L7: now that we hold the instance lock, consume any pending
+        // cross-process handover by clearing it (claim under lock — R8-F1). A
+        // controlled restart (L8) leaves a {target_mode, generation} record in the
+        // lock dir; the new daemon clears it here. No-op in production (no writer yet).
+        uc_daemon_local::handover::clear(&storage_paths.app_data_root_dir);
 
         let clipboard_write_coordinator = background.clipboard_write_coordinator.clone();
         let file_transfer_lifecycle = background.file_transfer_lifecycle.clone();
@@ -113,18 +169,26 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
 }
 
 pub use uc_daemon_local::spawn_contract::RUN_MODE_ENV;
+pub use uc_daemon_local::spawn_contract::RUN_MODE_ONESHOT;
 pub use uc_daemon_local::spawn_contract::RUN_MODE_SERVER;
 
 /// Standalone daemon binary entry: parse run mode from environment, then start.
 ///
 /// Reads [`RUN_MODE_ENV`]: `"server"` → [`DaemonRunMode::ServerHeadless`]
-/// (headless node, no X11/Wayland); otherwise → [`DaemonRunMode::Standalone`].
+/// (headless node, no X11/Wayland); `"oneshot"` → [`DaemonRunMode::Oneshot`]
+/// (ADR-008 P5-L L0 inert skeleton, behavior-identical to standalone and not
+/// emitted by any spawner yet); otherwise → [`DaemonRunMode::Standalone`].
 pub fn run_standalone_from_env() -> anyhow::Result<()> {
-    let run_mode = if std::env::var(RUN_MODE_ENV).as_deref() == Ok(RUN_MODE_SERVER) {
-        std::env::set_var("UC_DISABLE_SYSTEM_CLIPBOARD", "1");
-        DaemonRunMode::ServerHeadless
-    } else {
-        DaemonRunMode::Standalone
+    let run_mode = match std::env::var(RUN_MODE_ENV).as_deref() {
+        Ok(RUN_MODE_SERVER) => {
+            std::env::set_var("UC_DISABLE_SYSTEM_CLIPBOARD", "1");
+            DaemonRunMode::ServerHeadless
+        }
+        // P5-L L0: Oneshot runs the system clipboard like Standalone, so it
+        // must NOT set UC_DISABLE_SYSTEM_CLIPBOARD. Unreachable in production
+        // (no spawner emits RUN_MODE_ONESHOT); decode only.
+        Ok(RUN_MODE_ONESHOT) => DaemonRunMode::Oneshot,
+        _ => DaemonRunMode::Standalone,
     };
     run(run_mode)
 }
@@ -255,6 +319,7 @@ pub async fn start_in_process(
         local_device_id,
         listens_to_os_signals: run_mode.listens_to_os_signals(),
         process_mode: run_mode.process_mode(),
+        residency: run_mode.into(),
         mobile_sync_endpoint_info,
         mobile_lan_lifecycle: Arc::clone(&mobile_lan_lifecycle),
         analytics: Arc::clone(&deps.analytics),

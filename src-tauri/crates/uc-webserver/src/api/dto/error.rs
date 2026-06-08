@@ -95,6 +95,19 @@ impl ApiError {
         )
     }
 
+    /// 503 returned by admission gates while a controlled restart is draining
+    /// (ADR-008 P5-L L8b). Emits the distinct `code` `daemon_restarting` (vs the
+    /// generic 503 `runtime_unavailable` from [`Self::service_unavailable`]) so
+    /// clients can tell "daemon is restarting, retry against the successor" apart
+    /// from a generic runtime outage.
+    pub fn restarting(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "daemon_restarting",
+            message,
+        )
+    }
+
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
@@ -129,6 +142,15 @@ impl ApiError {
     #[must_use]
     pub fn with_details(mut self, details: serde_json::Value) -> Self {
         self.details = Some(details);
+        self
+    }
+
+    /// Override the stable `code` token (ADR-008 P5-L L8d-1). Used where one HTTP
+    /// status carries several distinct, client-matchable refusal reasons (e.g. the
+    /// controlled-restart 409 reasons) so callers can branch on `code`, not message.
+    #[must_use]
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = code.into();
         self
     }
 }

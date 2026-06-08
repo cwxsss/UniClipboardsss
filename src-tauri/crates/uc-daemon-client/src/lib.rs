@@ -16,16 +16,17 @@ pub mod ws_bridge;
 
 use anyhow::{Context, Result};
 use uc_daemon_contract::api::auth::DaemonConnectionInfo;
-use uc_daemon_local::socket::resolve_daemon_http_addr;
+use uc_daemon_process::socket::resolve_daemon_http_addr;
 
 pub use connection::DaemonConnectionState;
 pub use http::{
-    DaemonAnalyticsClient, DaemonClipboardClient, DaemonPairingClient, DaemonPairingRequestError,
-    DaemonQueryClient, DaemonSearchClient, DaemonSearchRequestError, DaemonSettingsClient,
-    DaemonSetupClient, ExchangedSessionToken, SearchQueryRequest,
+    DaemonAnalyticsClient, DaemonClipboardClient, DaemonLifecycleClient, DaemonMobileSyncClient,
+    DaemonPairingClient, DaemonPairingRequestError, DaemonQueryClient, DaemonSearchClient,
+    DaemonSearchRequestError, DaemonSettingsClient, DaemonSetupClient, DaemonSetupV2Client,
+    DaemonUpgradeClient, ExchangedSessionToken, SearchQueryRequest,
 };
 pub use http_ws_service::HttpWsDaemonService;
-pub use service::DaemonService;
+pub use service::{DaemonService, FileExport};
 pub use ws_bridge::{BridgeState, DaemonWsBridge, DaemonWsBridgeConfig, DaemonWsBridgeError};
 
 const ENV_BASE_URL: &str = "UNICLIPBOARD_DAEMON_BASE_URL";
@@ -71,7 +72,7 @@ fn resolve_token_path() -> Result<PathBuf> {
         }
     }
 
-    uc_daemon_local::socket::resolve_daemon_token_path().map_err(anyhow::Error::from)
+    uc_daemon_process::socket::resolve_daemon_token_path().map_err(anyhow::Error::from)
 }
 
 /// Resolve the daemon connection info from environment for CLI clients.
@@ -191,6 +192,15 @@ impl DaemonClientContext {
         )
     }
 
+    /// Spawn a [`DaemonSetupV2Client`] that shares this context's connection state and HTTP client.
+    pub fn setup_v2_client(&self) -> DaemonSetupV2Client {
+        DaemonSetupV2Client::with_http_conn_state_and_type(
+            self.http.clone(),
+            self.connection_state.clone(),
+            self.client_type.clone(),
+        )
+    }
+
     /// Spawn a [`DaemonPairingClient`] that shares this context's connection state and HTTP client.
     pub fn pairing_client(&self) -> DaemonPairingClient {
         DaemonPairingClient::with_http_conn_state_and_type(
@@ -230,6 +240,33 @@ impl DaemonClientContext {
     /// Spawn a [`DaemonSearchClient`] that shares this context's connection state and HTTP client.
     pub fn search_client(&self) -> DaemonSearchClient {
         DaemonSearchClient::with_http_conn_state_and_type(
+            self.http.clone(),
+            self.connection_state.clone(),
+            self.client_type.clone(),
+        )
+    }
+
+    /// Spawn a [`DaemonMobileSyncClient`] that shares this context's connection state and HTTP client.
+    pub fn mobile_sync_client(&self) -> DaemonMobileSyncClient {
+        DaemonMobileSyncClient::with_http_conn_state_and_type(
+            self.http.clone(),
+            self.connection_state.clone(),
+            self.client_type.clone(),
+        )
+    }
+
+    /// Spawn a [`DaemonLifecycleClient`] that shares this context's connection state and HTTP client.
+    pub fn lifecycle_client(&self) -> DaemonLifecycleClient {
+        DaemonLifecycleClient::with_http_conn_state_and_type(
+            self.http.clone(),
+            self.connection_state.clone(),
+            self.client_type.clone(),
+        )
+    }
+
+    /// Spawn a [`DaemonUpgradeClient`] that shares this context's connection state and HTTP client.
+    pub fn upgrade_client(&self) -> DaemonUpgradeClient {
+        DaemonUpgradeClient::with_http_conn_state_and_type(
             self.http.clone(),
             self.connection_state.clone(),
             self.client_type.clone(),

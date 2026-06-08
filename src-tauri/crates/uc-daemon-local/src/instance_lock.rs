@@ -22,7 +22,12 @@ use fs2::FileExt;
 /// daemons against the same data dir.
 const DISABLE_ENV: &str = "UC_DISABLE_DAEMON_SINGLE_INSTANCE";
 
-fn single_instance_disabled() -> bool {
+/// Whether the per-profile single-instance lock is disabled via [`DISABLE_ENV`].
+///
+/// Exposed for ADR-008 P5-L L8c: the controlled-restart path refuses to operate
+/// when the single-instance lock is disabled (the handover safety model relies
+/// on lock mutual exclusion).
+pub fn single_instance_disabled() -> bool {
     std::env::var(DISABLE_ENV).as_deref() == Ok("1")
 }
 
@@ -115,6 +120,50 @@ impl DaemonInstanceLock {
     }
 }
 
+/// Retry an instance-lock acquisition while it keeps returning
+/// [`InstanceLockError::AlreadyRunning`].
+///
+/// Used by the daemon host to ride out the gap where a controlled-restart
+/// predecessor still holds the lock during iroh teardown: the predecessor's
+/// `/health` endpoint goes absent (HTTP server cancelled) BEFORE the instance
+/// lock is released (iroh `endpoint.close()` then guard drop), so a freshly
+/// spawned promotion daemon can briefly observe `AlreadyRunning` even though the
+/// predecessor is already exiting. Only [`InstanceLockError::AlreadyRunning`] is
+/// retried; any other error (e.g. [`InstanceLockError::Io`]) is returned
+/// immediately. If `max_attempts` is exhausted while still `AlreadyRunning`, the
+/// last `AlreadyRunning` is returned.
+///
+/// `max_attempts` caps attempts, not sleeps: the closure is always called at
+/// least once (even with `max_attempts == 0`), and a sleep happens only BETWEEN
+/// attempts, so `n` attempts incur at most `n - 1` sleeps.
+///
+/// Generic over `T` so it is unit-testable with a fake closure (no real fs2
+/// lock needed).
+pub async fn retry_while_already_running<T, F>(
+    mut attempt: F,
+    max_attempts: usize,
+    interval: std::time::Duration,
+) -> Result<T, InstanceLockError>
+where
+    F: FnMut() -> Result<T, InstanceLockError>,
+{
+    let mut remaining = max_attempts;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(InstanceLockError::AlreadyRunning { lock_path }) => {
+                remaining = remaining.saturating_sub(1);
+                if remaining == 0 {
+                    return Err(InstanceLockError::AlreadyRunning { lock_path });
+                }
+                tokio::time::sleep(interval).await;
+            }
+            // Any non-AlreadyRunning error is terminal — do not retry.
+            Err(other) => return Err(other),
+        }
+    }
+}
+
 fn is_would_block(error: &std::io::Error) -> bool {
     // fs2 returns WouldBlock when the lock is held by another process.
     // On some platforms it may also surface as a raw OS error.
@@ -175,6 +224,123 @@ mod tests {
         let lock = DaemonInstanceLock::try_acquire(dir.path()).unwrap();
         drop(lock);
         let _lock2 = DaemonInstanceLock::try_acquire(dir.path()).unwrap();
+    }
+
+    /// ADR-008 P5-L L8a: prove the lock-reuse ordering the controlled-restart
+    /// path relies on — modelled on `uc-webserver`'s port-reuse proxy
+    /// (`tests/graceful_shutdown_port_reuse.rs`). Sync test: the fs2 lock is
+    /// synchronous, so no tokio runtime is needed.
+    ///
+    /// 1. Acquire succeeds on a fresh profile dir.
+    /// 2. While the first guard is HELD, a second acquire returns
+    ///    `AlreadyRunning` (mutual exclusion — a new daemon cannot grab the
+    ///    lock before the old one releases it).
+    /// 3. Dropping the guard releases the lock; an acquire IMMEDIATELY after
+    ///    drop succeeds (release-on-drop, no lingering OS lock).
+    #[test]
+    fn lock_releases_on_drop_and_is_immediately_reacquirable() {
+        let _env = ENV_LOCK.lock().unwrap();
+        // Guard against the disabled escape valve leaking from another test: the
+        // mutual-exclusion assertion below only holds when the lock is live.
+        assert!(
+            !single_instance_disabled(),
+            "{DISABLE_ENV} must NOT be set for this test"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // (1) Fresh acquire succeeds.
+        let lock = DaemonInstanceLock::try_acquire(dir.path()).unwrap();
+
+        // (2) While HELD, a second acquire is rejected with AlreadyRunning.
+        match DaemonInstanceLock::try_acquire(dir.path()) {
+            Err(InstanceLockError::AlreadyRunning { .. }) => {}
+            other => panic!("expected AlreadyRunning while held, got {other:?}"),
+        }
+
+        // (3) Drop releases the lock; the very next acquire succeeds.
+        drop(lock);
+        let _lock2 = DaemonInstanceLock::try_acquire(dir.path())
+            .expect("lock must be re-acquirable immediately after the prior guard drops");
+    }
+
+    // ---------- retry_while_already_running ----------
+
+    /// A fake lock path so `AlreadyRunning` can be constructed without touching
+    /// the filesystem — `retry_while_already_running` never inspects the path.
+    fn fake_lock_path() -> PathBuf {
+        PathBuf::from("/tmp/fake.uniclipd.lock")
+    }
+
+    /// ADR-008 P5-L L8d-2: (a) N `AlreadyRunning` then `Ok` → succeeds after the
+    /// predecessor releases the lock, before exhausting the attempt budget.
+    #[tokio::test(start_paused = true)]
+    async fn retry_succeeds_after_some_already_running() {
+        let calls = std::cell::Cell::new(0usize);
+        let attempt = || {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n < 3 {
+                Err(InstanceLockError::AlreadyRunning {
+                    lock_path: fake_lock_path(),
+                })
+            } else {
+                Ok::<u32, InstanceLockError>(42)
+            }
+        };
+
+        let value = retry_while_already_running(attempt, 10, std::time::Duration::from_millis(200))
+            .await
+            .expect("must succeed once the predecessor releases the lock");
+
+        assert_eq!(value, 42);
+        assert_eq!(calls.get(), 4, "3 AlreadyRunning + 1 Ok = 4 attempts total");
+    }
+
+    /// (b) Always `AlreadyRunning` → returns `AlreadyRunning` after exhausting
+    /// `max_attempts`; assert the attempt count is exactly the budget.
+    #[tokio::test(start_paused = true)]
+    async fn retry_exhausts_budget_then_returns_already_running() {
+        let calls = std::cell::Cell::new(0usize);
+        let attempt = || {
+            calls.set(calls.get() + 1);
+            Err::<u32, _>(InstanceLockError::AlreadyRunning {
+                lock_path: fake_lock_path(),
+            })
+        };
+
+        let err = retry_while_already_running(attempt, 5, std::time::Duration::from_millis(200))
+            .await
+            .expect_err("a predecessor that never releases must surface AlreadyRunning");
+
+        assert!(matches!(err, InstanceLockError::AlreadyRunning { .. }));
+        assert_eq!(
+            calls.get(),
+            5,
+            "must attempt exactly max_attempts times before giving up"
+        );
+    }
+
+    /// (c) An `Io` error on the first call propagates immediately without retry —
+    /// only `AlreadyRunning` is transient.
+    #[tokio::test(start_paused = true)]
+    async fn retry_propagates_io_error_without_retry() {
+        let calls = std::cell::Cell::new(0usize);
+        let attempt = || {
+            calls.set(calls.get() + 1);
+            Err::<u32, _>(InstanceLockError::Io(std::io::Error::other("disk full")))
+        };
+
+        let err = retry_while_already_running(attempt, 10, std::time::Duration::from_millis(200))
+            .await
+            .expect_err("Io is terminal — must propagate");
+
+        assert!(matches!(err, InstanceLockError::Io(_)));
+        assert_eq!(
+            calls.get(),
+            1,
+            "non-AlreadyRunning errors must not be retried"
+        );
     }
 
     #[test]

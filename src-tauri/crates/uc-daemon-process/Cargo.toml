@@ -1,0 +1,47 @@
+[package]
+name = "uc-daemon-process"
+version.workspace = true
+license.workspace = true
+edition = "2021"
+description = "Thin daemon process-management primitives (PID file, socket path, detached spawn, spawn contract) with no app-stack or iroh/diesel dependencies"
+
+[features]
+test-helpers = []
+
+[lib]
+name = "uc_daemon_process"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+# contract.rs re-exports `ProbeOutcome` from uc-daemon-contract and
+# health_wait.rs references `DaemonBootstrapError`. The contract crate is a
+# pure-serde leaf — it does NOT pull iroh/diesel, preserving this crate's thin
+# invariant (ADR-008 P5-0).
+uc-daemon-contract = { path = "../uc-daemon-contract" }
+# health_wait.rs uses `tokio::time::{Instant, sleep}` for async deadline
+# polling. Only the `time` feature is required at runtime; test utilities
+# (macros, rt, test-util) are scoped to dev-dependencies below.
+tokio = { version = "1", features = ["time"] }
+# Resolves the application data root
+# (`<data_local_dir>/app.uniclipboard.desktop`) for the daemon PID/token paths
+# without dragging in the app stack (uc-application/uc-platform). The directory-
+# layout authority is the single source uc-platform also consumes, so the
+# resolved paths stay byte-identical (ADR-008 P5-0c). `dirs` is pulled in
+# transitively through this crate.
+uc-app-paths = { path = "../uc-app-paths" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Best-effort warn-level logging in the handover store (corrupt/unclearable
+# record). `tracing` is a leaf facade — it pulls nothing heavy, so the
+# iroh/diesel-free invariant of this thin crate is preserved.
+tracing = "0.1"
+which = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }

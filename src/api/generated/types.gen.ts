@@ -309,6 +309,27 @@ export type CurrentInvitation = {
     expiresAtMs: number;
 };
 
+/**
+ * Daemon residency mode reported in the health/status handshake (ADR-008 P5-L L1).
+ *
+ * Wire values (camelCase, to match the `HealthResponse`/`StatusResponse` field
+ * naming these enums travel inside): `"standalone" | "serverHeadless" |
+ * "oneshot"`. The wire enum is defined HERE in the contract — it deliberately
+ * does NOT depend on `uc-daemon`'s internal `DaemonRunMode`; the producer maps
+ * `DaemonRunMode -> DaemonResidency` at the daemon/webserver boundary.
+ *
+ * Consumers (CLI L2 version-check, future R8-F2 takeover) read this to learn
+ * whether the daemon they are talking to is a persistent member node
+ * (`Standalone`/`ServerHeadless`) or a transient `Oneshot` that a persistent
+ * client may later take over. As of L1 the CLI/GUI do NOT act on this field.
+ *
+ * Backward-tolerant: the field carries `#[serde(default)]`, so an OLDER
+ * daemon body that omits `residency` decodes to [`Self::Standalone`], and a
+ * NEWER body's `residency` is simply ignored by an older client. New variants
+ * must be added at the END so existing clients keep deserializing known values.
+ */
+export type DaemonResidency = 'standalone' | 'serverHeadless' | 'oneshot';
+
 export type DaemonWsEvent = {
     payload: {
         [key: string]: unknown;
@@ -769,6 +790,7 @@ export type HealthEnvelope = {
 export type HealthResponse = {
     apiRevision: string;
     packageVersion: string;
+    residency?: DaemonResidency;
     status: string;
 };
 
@@ -1155,6 +1177,7 @@ export type MobileSyncSettingsEnvelope = {
  */
 export type MobileSyncSettingsViewDto = {
     enabled: boolean;
+    lanAdvertiseBaseUrl?: string | null;
     lanAdvertiseIp?: string | null;
     lanListenEnabled: boolean;
     /**
@@ -1410,6 +1433,10 @@ export type RegisterMobileDeviceResultDto = {
     label: string;
     password: string;
     /**
+     * ASCII-art QR encoding `connectUri` (for terminal rendering).
+     */
+    qrCodeAscii: string;
+    /**
      * Base64 PNG encoding `connectUri`.
      */
     qrCodePngBase64: string;
@@ -1526,6 +1553,47 @@ export type ResendResponse = {
     errored: number;
     offline: number;
     pending: number;
+};
+
+/**
+ * POST /lifecycle/restart 202 ACCEPTED body (ADR-008 P5-L L8d-1). Echoes the
+ * locked-in `generation` + `targetMode` so the requester can correlate the
+ * accepted restart with the eventual handover record.
+ */
+export type RestartAccepted = {
+    generation: number;
+    targetMode: DaemonResidency;
+};
+
+/**
+ * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
+ *
+ * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
+ * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
+ * helper, not a hard dependency on when the handler reads the clock).
+ * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
+ * declared for forward-compat.
+ *
+ * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
+ * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
+ * alias line whenever a new payload type needs enveloping. NEVER register the
+ * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
+ * generic, and an un-aliased generic inlines an anonymous schema.
+ */
+export type RestartAcceptedEnvelope = {
+    data: RestartAccepted;
+    /**
+     * Server time when the response was built (unix epoch milliseconds).
+     */
+    ts: number;
+};
+
+/**
+ * POST /lifecycle/restart request body (ADR-008 P5-L L8d-1). `targetMode` is the
+ * residency the successor daemon should launch in.
+ */
+export type RestartRequest = {
+    targetMode: DaemonResidency;
 };
 
 /**
@@ -2186,6 +2254,7 @@ export type StatusEnvelope = {
 export type StatusResponse = {
     apiRevision: string;
     packageVersion: string;
+    residency?: DaemonResidency;
     uptimeSeconds: number;
     workers: Array<WorkerStatusDto>;
 };
@@ -2456,6 +2525,7 @@ export type UpdateMobileSyncSettingsEnvelope = {
  */
 export type UpdateMobileSyncSettingsRequest = {
     enabled?: boolean | null;
+    lanAdvertiseBaseUrl?: string | null;
     lanAdvertiseIp?: string | null;
     lanListenEnabled?: boolean | null;
     lanPort?: number | null;
@@ -2466,6 +2536,7 @@ export type UpdateMobileSyncSettingsRequest = {
  */
 export type UpdateMobileSyncSettingsResultDto = {
     enabled: boolean;
+    lanAdvertiseBaseUrl?: string | null;
     lanAdvertiseIp?: string | null;
     lanListenEnabled: boolean;
     /**
@@ -2698,6 +2769,10 @@ export type DispatchClipboardTextErrors = {
      * Internal server error
      */
     500: ApiErrorResponse;
+    /**
+     * Daemon is draining a controlled restart; retry against the successor
+     */
+    503: ApiErrorResponse;
 };
 
 export type DispatchClipboardTextError = DispatchClipboardTextErrors[keyof DispatchClipboardTextErrors];
@@ -2914,6 +2989,40 @@ export type ToggleClipboardEntryFavoriteResponses = {
 
 export type ToggleClipboardEntryFavoriteResponse = ToggleClipboardEntryFavoriteResponses[keyof ToggleClipboardEntryFavoriteResponses];
 
+export type GetClipboardEntryFileData = {
+    body?: never;
+    path: {
+        /**
+         * Entry identifier
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/clipboard/entries/{id}/file';
+};
+
+export type GetClipboardEntryFileErrors = {
+    /**
+     * Entry or file not found
+     */
+    404: ApiErrorResponse;
+    /**
+     * Internal server error
+     */
+    500: ApiErrorResponse;
+};
+
+export type GetClipboardEntryFileError = GetClipboardEntryFileErrors[keyof GetClipboardEntryFileErrors];
+
+export type GetClipboardEntryFileResponses = {
+    /**
+     * Raw bytes of the entry's first materialized file
+     */
+    200: Blob | File;
+};
+
+export type GetClipboardEntryFileResponse = GetClipboardEntryFileResponses[keyof GetClipboardEntryFileResponses];
+
 export type GetClipboardEntryResourceData = {
     body?: never;
     path: {
@@ -2972,6 +3081,10 @@ export type ResendClipboardEntryErrors = {
      * Storage or dispatch failure
      */
     500: ApiErrorResponse;
+    /**
+     * Daemon is draining a controlled restart; retry against the successor
+     */
+    503: ApiErrorResponse;
 };
 
 export type ResendClipboardEntryError = ResendClipboardEntryErrors[keyof ResendClipboardEntryErrors];
@@ -3305,6 +3418,35 @@ export type SignalLifecycleReadyResponses = {
 };
 
 export type SignalLifecycleReadyResponse = SignalLifecycleReadyResponses[keyof SignalLifecycleReadyResponses];
+
+export type RequestLifecycleRestartData = {
+    body: RestartRequest;
+    path?: never;
+    query?: never;
+    url: '/lifecycle/restart';
+};
+
+export type RequestLifecycleRestartErrors = {
+    /**
+     * Invalid target mode (cannot promote to a transient target)
+     */
+    400: ApiErrorResponse;
+    /**
+     * Restart unavailable (already in progress / not a transient daemon / single-instance disabled)
+     */
+    409: ApiErrorResponse;
+};
+
+export type RequestLifecycleRestartError = RequestLifecycleRestartErrors[keyof RequestLifecycleRestartErrors];
+
+export type RequestLifecycleRestartResponses = {
+    /**
+     * Controlled restart accepted; quiescing/drain started
+     */
+    202: RestartAcceptedEnvelope;
+};
+
+export type RequestLifecycleRestartResponse = RequestLifecycleRestartResponses[keyof RequestLifecycleRestartResponses];
 
 export type RetryLifecycleData = {
     body?: never;

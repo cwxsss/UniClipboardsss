@@ -498,6 +498,15 @@
         ],
         "type": "object"
       },
+      "DaemonResidency": {
+        "description": "Daemon residency mode reported in the health/status handshake (ADR-008 P5-L L1).\n\nWire values (camelCase, to match the `HealthResponse`/`StatusResponse` field\nnaming these enums travel inside): `\"standalone\" | \"serverHeadless\" |\n\"oneshot\"`. The wire enum is defined HERE in the contract — it deliberately\ndoes NOT depend on `uc-daemon`'s internal `DaemonRunMode`; the producer maps\n`DaemonRunMode -> DaemonResidency` at the daemon/webserver boundary.\n\nConsumers (CLI L2 version-check, future R8-F2 takeover) read this to learn\nwhether the daemon they are talking to is a persistent member node\n(`Standalone`/`ServerHeadless`) or a transient `Oneshot` that a persistent\nclient may later take over. As of L1 the CLI/GUI do NOT act on this field.\n\nBackward-tolerant: the field carries `#[serde(default)]`, so an OLDER\ndaemon body that omits `residency` decodes to [`Self::Standalone`], and a\nNEWER body's `residency` is simply ignored by an older client. New variants\nmust be added at the END so existing clients keep deserializing known values.",
+        "enum": [
+          "standalone",
+          "serverHeadless",
+          "oneshot"
+        ],
+        "type": "string"
+      },
       "DaemonWsEvent": {
         "properties": {
           "payload": {
@@ -1356,6 +1365,9 @@
           "packageVersion": {
             "type": "string"
           },
+          "residency": {
+            "$ref": "#/components/schemas/DaemonResidency"
+          },
           "status": {
             "type": "string"
           }
@@ -1845,6 +1857,10 @@
           "enabled": {
             "type": "boolean"
           },
+          "lanAdvertiseBaseUrl": {
+            "nullable": true,
+            "type": "string"
+          },
           "lanAdvertiseIp": {
             "nullable": true,
             "type": "string"
@@ -2278,6 +2294,10 @@
           "password": {
             "type": "string"
           },
+          "qrCodeAscii": {
+            "description": "ASCII-art QR encoding `connectUri` (for terminal rendering).",
+            "type": "string"
+          },
           "qrCodePngBase64": {
             "description": "Base64 PNG encoding `connectUri`.",
             "type": "string"
@@ -2297,7 +2317,8 @@
           "installUrl",
           "installQrCodePngBase64",
           "connectUri",
-          "qrCodePngBase64"
+          "qrCodePngBase64",
+          "qrCodeAscii"
         ],
         "type": "object"
       },
@@ -2539,6 +2560,54 @@
           "offline",
           "errored",
           "pending"
+        ],
+        "type": "object"
+      },
+      "RestartAccepted": {
+        "description": "POST /lifecycle/restart 202 ACCEPTED body (ADR-008 P5-L L8d-1). Echoes the\nlocked-in `generation` + `targetMode` so the requester can correlate the\naccepted restart with the eventual handover record.",
+        "properties": {
+          "generation": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "targetMode": {
+            "$ref": "#/components/schemas/DaemonResidency"
+          }
+        },
+        "required": [
+          "generation",
+          "targetMode"
+        ],
+        "type": "object"
+      },
+      "RestartAcceptedEnvelope": {
+        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/RestartAccepted"
+          },
+          "ts": {
+            "description": "Server time when the response was built (unix epoch milliseconds).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "RestartRequest": {
+        "description": "POST /lifecycle/restart request body (ADR-008 P5-L L8d-1). `targetMode` is the\nresidency the successor daemon should launch in.",
+        "properties": {
+          "targetMode": {
+            "$ref": "#/components/schemas/DaemonResidency"
+          }
+        },
+        "required": [
+          "targetMode"
         ],
         "type": "object"
       },
@@ -3471,6 +3540,9 @@
           "packageVersion": {
             "type": "string"
           },
+          "residency": {
+            "$ref": "#/components/schemas/DaemonResidency"
+          },
           "uptimeSeconds": {
             "format": "int64",
             "minimum": 0,
@@ -3880,6 +3952,10 @@
             "nullable": true,
             "type": "boolean"
           },
+          "lanAdvertiseBaseUrl": {
+            "nullable": true,
+            "type": "string"
+          },
           "lanAdvertiseIp": {
             "nullable": true,
             "type": "string"
@@ -3902,6 +3978,10 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          },
+          "lanAdvertiseBaseUrl": {
+            "nullable": true,
+            "type": "string"
           },
           "lanAdvertiseIp": {
             "nullable": true,
@@ -4409,6 +4489,16 @@
               }
             },
             "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Daemon is draining a controlled restart; retry against the successor"
           }
         },
         "security": [
@@ -4792,6 +4882,68 @@
         ]
       }
     },
+    "/clipboard/entries/{id}/file": {
+      "get": {
+        "description": "Serves the bytes of an entry's first materialized free-file (ADR-008\nP5-1b). The daemon materializes inbound free-files into a controlled cache\nand rewrites the entry's file-list representation; this endpoint reads that\ncached file and streams it back. Binary endpoint: the response is\n`application/octet-stream` (the representation MIME when known), NOT the\n`{ data, ts }` JSON envelope (ADR-008 §0.2 keeps binary endpoints exempt).\nA `Content-Disposition: attachment` header carries the cached filename so\nCLI `recv` can name the local copy. Returns 404 when the entry is unknown\nor carries no materialized free-file, 500 on a read failure.",
+        "operationId": "getClipboardEntryFile",
+        "parameters": [
+          {
+            "description": "Entry identifier",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Raw bytes of the entry's first materialized file"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Entry or file not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "summary": "GET /clipboard/entries/:id/file",
+        "tags": [
+          "clipboard"
+        ]
+      }
+    },
     "/clipboard/entries/{id}/resource": {
       "get": {
         "description": "Returns resource metadata (blob URL or inline content).",
@@ -4917,6 +5069,16 @@
               }
             },
             "description": "Storage or dispatch failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Daemon is draining a controlled restart; retry against the successor"
           }
         },
         "security": [
@@ -5479,6 +5641,66 @@
           }
         ],
         "summary": "通知 daemon：已解锁，可以开始采集剪贴板——打开 clipboard capture 门控。",
+        "tags": [
+          "lifecycle"
+        ]
+      }
+    },
+    "/lifecycle/restart": {
+      "post": {
+        "description": "transient (Oneshot) daemon (ADR-008 P5-L).\n\nREFUSES unless this daemon is an Oneshot residency AND the single-instance\nlock is enabled AND the target is not itself Oneshot. The accepted path raises\nthe L8b `quiescing` flag (via the coordinator) so admission gates drain\nin-flight work; the Oneshot supervisor then self-terminates and `app.rs`\npersists the handover record. Production-neutral: no Oneshot daemon exists\nuntil L8d, so the accept path is unreachable in production.",
+        "operationId": "requestLifecycleRestart",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartAcceptedEnvelope"
+                }
+              }
+            },
+            "description": "Controlled restart accepted; quiescing/drain started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid target mode (cannot promote to a transient target)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Restart unavailable (already in progress / not a transient daemon / single-instance disabled)"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "summary": "POST /lifecycle/restart — request a controlled restart/promotion of a",
         "tags": [
           "lifecycle"
         ]

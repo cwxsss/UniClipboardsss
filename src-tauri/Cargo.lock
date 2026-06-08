@@ -9735,6 +9735,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
+name = "uc-app-paths"
+version = "0.14.0-alpha.6"
+dependencies = [
+ "dirs 6.0.0",
+]
+
+[[package]]
 name = "uc-application"
 version = "0.14.0-alpha.6"
 dependencies = [
@@ -9821,12 +9828,13 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "uc-app-paths",
  "uc-application",
  "uc-bootstrap",
  "uc-core",
  "uc-daemon-client",
  "uc-daemon-contract",
- "uc-daemon-local",
+ "uc-daemon-process",
  "uc-observability",
  "uc-platform",
  "uuid",
@@ -9859,8 +9867,11 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "specta",
+ "specta-typescript",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "toml 0.8.2",
  "tracing",
  "url",
@@ -9913,7 +9924,7 @@ dependencies = [
  "tracing",
  "uc-core",
  "uc-daemon-contract",
- "uc-daemon-local",
+ "uc-daemon-process",
  "url",
 ]
 
@@ -9922,6 +9933,7 @@ name = "uc-daemon-contract"
 version = "0.14.0-alpha.6"
 dependencies = [
  "chrono",
+ "semver",
  "serde",
  "serde_json",
  "serde_with",
@@ -9940,12 +9952,26 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
+ "uc-daemon-contract",
+ "uc-daemon-process",
+]
+
+[[package]]
+name = "uc-daemon-process"
+version = "0.14.0-alpha.6"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "uc-application",
+ "uc-app-paths",
  "uc-daemon-contract",
- "uc-platform",
  "which",
 ]
 
@@ -9957,9 +9983,9 @@ dependencies = [
  "async-trait",
  "chrono",
  "diesel",
+ "gethostname",
  "mockall 0.13.1",
  "reqwest 0.12.28",
- "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -9967,17 +9993,14 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uc-application",
- "uc-bootstrap",
+ "uc-app-paths",
  "uc-core",
  "uc-daemon-client",
  "uc-daemon-contract",
- "uc-daemon-local",
- "uc-infra",
+ "uc-daemon-process",
  "uc-observability",
- "uc-platform",
- "uc-webserver",
  "url",
+ "uuid",
  "wiremock",
 ]
 
@@ -10066,7 +10089,6 @@ dependencies = [
  "chrono",
  "clipboard-rs",
  "clipboard-win",
- "dirs 6.0.0",
  "futures",
  "image",
  "keyring",
@@ -10092,6 +10114,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uc-app-paths",
  "uc-core",
  "url",
  "uuid",
@@ -10139,16 +10162,13 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "uc-application",
- "uc-bootstrap",
+ "uc-app-paths",
  "uc-core",
  "uc-daemon-client",
  "uc-daemon-contract",
- "uc-daemon-local",
+ "uc-daemon-process",
  "uc-desktop",
- "uc-infra",
  "uc-observability",
- "uc-platform",
  "url",
  "windows 0.61.3",
 ]

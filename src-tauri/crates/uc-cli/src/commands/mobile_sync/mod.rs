@@ -7,23 +7,20 @@
 //! | 首次一键向导 | `setup` |
 //! | 新增一台 iPhone | `add` |
 //! | 移除一台 iPhone | `revoke [<device-id>]` |
-//! | 查看全部状态 | `status`(读命令,daemon 跑时也允许) |
+//! | 查看全部状态 | `status` |
 //! | 完全停用 | `disable`(关总开关 + 关 LAN) |
 //! | 高级网络配置 | `network interfaces / set / off`(advanced) |
 //!
-//! 旧分组 `lan` / `devices` / `settings` 已删除(无 deprecation 周期):
-//! `add` / `revoke` 提到顶层,`lan` 改名 `network`,`settings show` 的字段
-//! 并入 `status`。
+//! P5-2b (ADR-008): all non-debug commands route through daemon HTTP
+//! endpoints via [`DaemonMobileSyncClient`]. The hidden `debug` subcommand
+//! (P5-3 scope) still uses in-process [`MobileSyncFacade`] directly.
 //!
-//! 全部 in-process 调 [`MobileSyncFacade`],不走 daemon HTTP API
-//! (项目惯例,详见 `uc-cli/AGENTS.md`)。写命令在执行前调
-//! [`refuse_if_daemon_running`] 拒绝同 profile 多进程。
-//!
+//! [`DaemonMobileSyncClient`]: uc_daemon_client::http::DaemonMobileSyncClient
 //! [`MobileSyncFacade`]: uc_application::facade::MobileSyncFacade
-//! [`refuse_if_daemon_running`]: crate::commands::app_session::refuse_if_daemon_running
 
 use clap::Subcommand;
 
+#[cfg(feature = "dev-tools")]
 pub mod debug;
 pub mod devices;
 pub mod disable;
@@ -67,6 +64,7 @@ pub enum MobileSyncCommands {
     /// `#[command(hide=true)]` keeps these out of the public `--help`
     /// surface — they are dev / E2E only(`scripts/test_mobile_sync_debug_e2e.sh`),
     /// not user-facing. Still callable explicitly.
+    #[cfg(feature = "dev-tools")]
     #[command(hide = true)]
     Debug {
         #[command(subcommand)]
@@ -82,6 +80,7 @@ pub async fn run(command: MobileSyncCommands, json: bool, verbose: bool) -> i32 
         MobileSyncCommands::Status => status::run(json, verbose).await,
         MobileSyncCommands::Disable => disable::run(json, verbose).await,
         MobileSyncCommands::Network { subcommand } => network::run(subcommand, json, verbose).await,
+        #[cfg(feature = "dev-tools")]
         MobileSyncCommands::Debug { subcommand } => debug::run(subcommand, json, verbose).await,
     }
 }

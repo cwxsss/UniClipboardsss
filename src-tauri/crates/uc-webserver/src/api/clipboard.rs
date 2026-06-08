@@ -340,12 +340,15 @@ fn require_app_facade(state: &DaemonApiState) -> Result<Arc<AppFacade>, ApiError
         (status = 200, description = "Dispatch fan-out outcome", body = DispatchOutcomeEnvelope),
         (status = 400, description = "Empty or malformed request", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
+        (status = 503, description = "Daemon is draining a controlled restart; retry against the successor", body = ApiErrorResponse),
     )
 )]
 async fn dispatch_text(
     State(state): State<DaemonApiState>,
     body: Result<Json<DispatchTextRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ApiEnvelope<DispatchOutcomeResponse>>, ApiError> {
+    // ADR-008 P5-L L8b: refuse new clipboard dispatch while a controlled restart drains.
+    crate::api::server::ensure_not_quiescing(&state.quiescing)?;
     let app = require_app_facade(&state)?;
     let Json(req) = body.map_err(|e| ApiError::bad_request(&e.to_string()))?;
 
@@ -400,12 +403,16 @@ async fn dispatch_text(
         (status = 404, description = "Entry not found", body = ApiErrorResponse),
         (status = 409, description = "Entry not resendable / target not trusted / no eligible targets", body = ApiErrorResponse),
         (status = 500, description = "Storage or dispatch failure", body = ApiErrorResponse),
+        (status = 503, description = "Daemon is draining a controlled restart; retry against the successor", body = ApiErrorResponse),
     )
 )]
 async fn resend_entry(
     State(state): State<DaemonApiState>,
     body: Result<Json<ResendRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ApiEnvelope<ResendResponse>>, Response> {
+    // ADR-008 P5-L L8b: refuse new clipboard resend while a controlled restart drains.
+    crate::api::server::ensure_not_quiescing(&state.quiescing)
+        .map_err(IntoResponse::into_response)?;
     let app = require_app_facade(&state).map_err(IntoResponse::into_response)?;
     let Json(req) = body.map_err(|e| ApiError::bad_request(e.to_string()).into_response())?;
 
