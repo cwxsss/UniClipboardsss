@@ -106,7 +106,16 @@ pub async fn restart_daemon(
             })?;
 
         connection_state.set(new_info);
-        info!("daemon restarted, connection state refreshed");
+        // The static JWT cache holds a token minted by the OLD daemon —
+        // the new daemon has a fresh JWT secret and will reject it.
+        uc_daemon_client::http::clear_session_token_cache().await;
+        info!("daemon restarted, connection state refreshed, session cache cleared");
+
+        let conn: DaemonConnectionState = (*connection_state).clone();
+        tauri::async_runtime::spawn(async move {
+            uc_desktop::daemon_recovery::recover_after_restart(conn).await;
+        });
+
         Ok(())
     }
     .instrument(span)
