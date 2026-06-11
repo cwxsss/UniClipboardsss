@@ -85,7 +85,9 @@ for (const target of TARGETS) {
   fs.mkdirSync(binDir, { recursive: true })
 
   if (target.ext === 'zip') {
-    execFileSync('unzip', ['-o', '-q', archive, '-d', binDir])
+    // -j junks directory components: zips produced before build-cli.yml
+    // flattened them nest the exes under src-tauri/target/release/.
+    execFileSync('unzip', ['-j', '-o', '-q', archive, '-d', binDir])
   } else {
     execFileSync('tar', ['-xzf', archive, '-C', binDir])
   }
@@ -161,7 +163,7 @@ if (fs.existsSync(licenseSrc)) {
 console.log(`assembled uniclipboard@${version}`)
 
 // Publish order matters: platform packages first, the main package last, so
-// there is no window where `npm install uniclipboard` resolves but its
+// there is no window where `npm install @uniclipboard/cli` resolves but its
 // optional dependencies 404.
 const order = [...TARGETS.map(t => `cli-${t.node}`), 'uniclipboard']
 fs.writeFileSync(path.join(outDir, 'publish-order.txt'), order.join('\n') + '\n')
