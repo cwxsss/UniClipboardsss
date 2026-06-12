@@ -1,8 +1,8 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClipboardPreviewState } from '@/hooks/useClipboardPreviewState'
+import type { DisplayClipboardItem } from '@/lib/clipboard-entry'
 import type { ClipboardPreviewData } from '@/lib/clipboard-preview-cache'
-import type { DisplayClipboardItem } from '../ClipboardContent'
 
 const useAppSelectorMock = vi.fn()
 const cacheGetMock = vi.fn()
@@ -15,7 +15,6 @@ vi.mock('@/store/slices/fileTransferSlice', () => ({
   resolveEntryTransferStatus: vi.fn(() => 'completed'),
   selectEntryTransferStatus: vi.fn(() => undefined),
   selectTransferByEntryId: vi.fn(() => undefined),
-  selectTransferByTransferIds: vi.fn(() => undefined),
 }))
 
 vi.mock('@/lib/clipboard-preview-cache', () => ({

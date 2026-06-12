@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ClipboardTextItem } from '@/api/clipboardItems'
-import type { DisplayClipboardItem } from '@/components/clipboard/ClipboardContent'
+import type { ClipboardTextItem, DisplayClipboardItem } from '@/lib/clipboard-entry'
 import { clipboardPreviewCache, type ClipboardPreviewData } from '@/lib/clipboard-preview-cache'
 import { createLogger } from '@/lib/logger'
 import { useAppSelector } from '@/store/hooks'
@@ -9,7 +8,6 @@ import {
   resolveEntryTransferStatus,
   selectEntryTransferStatus,
   selectTransferByEntryId,
-  selectTransferByTransferIds,
   type TransferProgressInfo,
 } from '@/store/slices/fileTransferSlice'
 
@@ -27,10 +25,7 @@ export interface ClipboardPreviewState {
 
 export function useClipboardPreviewState(item: DisplayClipboardItem | null): ClipboardPreviewState {
   const transfer = useAppSelector(state =>
-    item
-      ? (selectTransferByEntryId(state, item.id) ??
-        selectTransferByTransferIds(state, item.fileTransferIds ?? []))
-      : undefined
+    item ? selectTransferByEntryId(state, item.id) : undefined
   )
   const entryStatus = useAppSelector(state =>
     item ? selectEntryTransferStatus(state, item.id) : undefined

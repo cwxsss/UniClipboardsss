@@ -16,24 +16,23 @@ import {
 } from 'lucide-react'
 import React from 'react'
 import { useTranslation } from 'react-i18next'
-import {
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import type {
   ClipboardCodeItem,
   ClipboardFileItem,
   ClipboardImageItem,
   ClipboardLinkItem,
   ClipboardTextItem,
-} from '@/api/clipboardItems'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+  DisplayClipboardItem,
+} from '@/lib/clipboard-entry'
 import { cn } from '@/lib/utils'
 import { useAppSelector } from '@/store/hooks'
 import {
   normalizeCancelReason,
   resolveEntryTransferStatus,
   selectEntryTransferStatus,
-  selectTransferByTransferIds,
   selectTransferByEntryId,
 } from '@/store/slices/fileTransferSlice'
-import type { DisplayClipboardItem } from './ClipboardContent'
 
 const KNOWN_CANCEL_REASONS = new Set([
   'local_user',
@@ -140,11 +139,7 @@ function ClipboardItemRow({
 }: ClipboardItemRowProps & { ref?: React.Ref<HTMLDivElement> }) {
   const { t } = useTranslation()
   const Icon = FILE_EXT_ICON_MAP[getFileExt(item)] ?? typeIcons[item.type] ?? FileText
-  const transfer = useAppSelector(
-    state =>
-      selectTransferByEntryId(state, item.id) ??
-      selectTransferByTransferIds(state, item.fileTransferIds ?? [])
-  )
+  const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
   const entryStatus = useAppSelector(state => selectEntryTransferStatus(state, item.id))
 
   // Live progress must override stale pending state so the UI reflects actual movement.

@@ -14,10 +14,6 @@ import { invokeWithTrace } from '@/lib/tauri-command'
 
 const log = createLogger('clipboard-items')
 
-export type ClipboardItemsResult =
-  | { status: 'ready'; items: ClipboardItemResponse[] }
-  | { status: 'not_ready' }
-
 // Detail response type (for fetching full content)
 export interface ClipboardEntryDetail {
   id: string
@@ -65,70 +61,6 @@ export enum Filter {
   Link = 'link',
   Code = 'code',
   File = 'file',
-}
-
-export interface ClipboardTextItem {
-  display_text: string // Changed: now always shows preview
-  has_detail: boolean // NEW: replaced is_truncated, indicates if full content is available
-  size: number
-}
-
-export interface ClipboardImageItem {
-  thumbnail?: string | null
-  size: number
-  width: number
-  height: number
-}
-
-export interface ClipboardFileItem {
-  file_names: string[]
-  file_sizes: number[]
-  /**
-   * Per-file missing flag, aligned with `file_names` / `file_sizes` by index.
-   * `true` 表示这个文件在 entry 落库时未完成 materialize(用户取消了入站传输),
-   * 文件不可 open/copy/drag,但 entry 自身仍保留(允许删除、保留 filename/size)。
-   * 缺省视为全 false(向后兼容历史 entry / 非 file 类型 entry)。
-   */
-  file_missing?: boolean[]
-}
-
-export interface ClipboardLinkItem {
-  urls: string[]
-  domains: string[]
-}
-
-export interface ClipboardCodeItem {
-  code: string
-}
-
-export interface ClipboardItem {
-  text?: ClipboardTextItem | null
-  image?: ClipboardImageItem | null
-  file?: ClipboardFileItem | null
-  link?: ClipboardLinkItem | null
-  code?: ClipboardCodeItem | null
-  unknown?: null
-}
-
-export interface ClipboardItemResponse {
-  id: string
-  is_downloaded: boolean
-  is_favorited: boolean
-  created_at: number
-  updated_at: number
-  active_time: number
-  item: ClipboardItem
-  /** Persisted file transfer status for file entries: "pending" | "transferring" | "completed" | "failed" | null */
-  file_transfer_status?: string | null
-  /** Failure reason when file_transfer_status is "failed" */
-  file_transfer_reason?: string | null
-  file_transfer_ids?: string[]
-  /**
-   * `paste_rep` 的 payload_state, 仅在 `"Lost"` 时由后端输出。其他状态为
-   * undefined。前端在列表上把对应 entry 灰显并标记"内容已不可用",
-   * 用户在点击粘贴前就能识别——否则点击会得到 daemon 410 + toast。
-   */
-  payload_state?: string | null
 }
 
 export interface ClipboardStats {
@@ -289,41 +221,6 @@ export async function copyClipboardItem(id: string): Promise<boolean> {
 }
 
 /**
- * 根据内容类型获取符合前端显示的类型
- */
-export function getDisplayType(
-  item: ClipboardItem
-): 'text' | 'image' | 'link' | 'code' | 'file' | 'unknown' {
-  if (item.text) {
-    return 'text'
-  } else if (item.image) {
-    return 'image'
-  } else if (item.file) {
-    return 'file'
-  } else if (item.link) {
-    return 'link'
-  } else if (item.code) {
-    return 'code'
-  } else {
-    return 'unknown'
-  }
-}
-
-/**
- * 判断是否为图片类型
- */
-export function isImageType(contentType: string): boolean {
-  return contentType === 'image' || contentType.startsWith('image/')
-}
-
-/**
- * 判断是否为文本类型
- */
-export function isTextType(contentType: string): boolean {
-  return contentType === 'text' || contentType.startsWith('text/')
-}
-
-/**
  * 收藏剪贴板条目
  */
 export async function favoriteClipboardItem(id: string): Promise<boolean> {
@@ -361,23 +258,6 @@ export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
  */
 export async function copyFileToClipboard(entryId: string): Promise<void> {
   await daemonRestoreEntry(entryId)
-}
-
-/**
- * Download a file entry from a remote device to local clipboard.
- * Returns a transfer_id to track progress via transfer://progress events.
- *
- * TODO(issue #698 follow-up): Rust `download_file_entry` command 不存在 —
- * 调用会 runtime 报 "command not found"。tauri-specta 迁移阶段保留原
- * 字符串调用，待 daemon 化或 Rust 端补 command 时再切 typed `commands.xxx`。
- */
-export async function downloadFileEntry(entryId: string): Promise<{ transfer_id: string }> {
-  try {
-    return await invokeWithTrace('download_file_entry', { entryId })
-  } catch (error) {
-    log.error({ err: error }, 'Failed to download file entry')
-    throw error
-  }
 }
 
 /**

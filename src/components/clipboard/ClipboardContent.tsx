@@ -2,19 +2,7 @@ import { Inbox, Loader2, Search } from 'lucide-react'
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDefaultLayout } from 'react-resizable-panels'
-import {
-  getDisplayType,
-  ClipboardItemResponse,
-  Filter,
-  ClipboardTextItem,
-  ClipboardImageItem,
-  ClipboardLinkItem,
-  ClipboardCodeItem,
-  ClipboardFileItem,
-  copyFileToClipboard,
-  downloadFileEntry,
-  openFileLocation,
-} from '@/api/clipboardItems'
+import { Filter, copyFileToClipboard, openFileLocation } from '@/api/clipboardItems'
 import { querySearch } from '@/api/daemon/search'
 import type { SearchResultDto } from '@/api/daemon/search'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
@@ -23,6 +11,7 @@ import { useFileSyncNotifications } from '@/hooks/useFileSyncNotifications'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useTransferProgress } from '@/hooks/useTransferProgress'
+import type { ClipboardEntry, ClipboardFileItem, DisplayClipboardItem } from '@/lib/clipboard-entry'
 import { createLogger } from '@/lib/logger'
 import { cn } from '@/lib/utils'
 import { captureUserIntent } from '@/observability/breadcrumbs'
@@ -33,7 +22,6 @@ import {
   markEntryStale,
   type PendingClipboardEntry,
 } from '@/store/slices/clipboardSlice'
-import { linkTransferToEntry } from '@/store/slices/fileTransferSlice'
 import { selectEntryTransferStatus } from '@/store/slices/fileTransferSlice'
 import ClipboardActionBar from './ClipboardActionBar'
 import ClipboardItemRow from './ClipboardItemRow'
@@ -42,31 +30,6 @@ import DeleteConfirmDialog from './DeleteConfirmDialog'
 import FileContextMenu from './FileContextMenu'
 
 const log = createLogger('clipboard-content')
-
-export interface DisplayClipboardItem {
-  id: string
-  type: 'text' | 'image' | 'link' | 'code' | 'file' | 'unknown'
-  time: string
-  activeTime: number
-  isDownloaded?: boolean
-  isFavorited?: boolean
-  content:
-    | ClipboardTextItem
-    | ClipboardImageItem
-    | ClipboardLinkItem
-    | ClipboardCodeItem
-    | ClipboardFileItem
-    | null
-  fileTransferIds?: string[]
-  device?: string
-  /** Fallback preview text from search results when content is not available. */
-  textPreview?: string
-  /**
-   * True 表示 paste_rep 已 `Lost` —— 点击粘贴会回 daemon 410 + toast 提示
-   * "内容已不可用"。Row 据此把 entry 灰显并加角标, 让用户在点之前就识别。
-   */
-  isUnavailable?: boolean
-}
 
 interface DateGroup {
   label: string
@@ -301,7 +264,6 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
   const [activeItemId, setActiveItemId] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copySuccess, setCopySuccess] = useState(false)
-  const [transferringEntries, setTransferringEntries] = useState<Set<string>>(new Set())
   const [tick, setTick] = useState(0)
 
   const activeItemRef = useRef<HTMLDivElement>(null)
@@ -316,7 +278,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     if (!reduxItems || reduxItems.length === 0) return
 
     const now = Date.now()
-    const hasRecentItems = reduxItems.some(item => now - item.active_time < 3600000)
+    const hasRecentItems = reduxItems.some(item => now - item.activeTime < 3600000)
     const interval = hasRecentItems ? 30000 : 60000
 
     const id = setInterval(() => {
@@ -326,57 +288,22 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     return () => clearInterval(id)
   }, [reduxItems])
 
-  // Convert clipboard item to display item
+  // Browse rows are the domain entry plus a render-time relative-time label.
   const convertToDisplayItem = useCallback(
-    (item: ClipboardItemResponse): DisplayClipboardItem => {
-      const type = getDisplayType(item.item)
-
-      const activeTime = new Date(item.active_time)
-      const now = new Date()
-      const diffMs = now.getTime() - activeTime.getTime()
-      const diffMins = Math.round(diffMs / 60000)
-
-      let timeString: string
-      if (diffMins < 1) {
-        timeString = t('clipboard.time.justNow')
-      } else if (diffMins < 60) {
-        timeString = t('clipboard.time.minutesAgo', { minutes: diffMins })
-      } else if (diffMins < 1440) {
-        timeString = t('clipboard.time.hoursAgo', { hours: Math.floor(diffMins / 60) })
-      } else {
-        timeString = t('clipboard.time.daysAgo', { days: Math.floor(diffMins / 1440) })
-      }
-
-      const contentByType = {
-        text: item.item.text,
-        image: item.item.image,
-        link: item.item.link,
-        code: item.item.code,
-        file: item.item.file,
-        unknown: null,
-      } as const
-
-      return {
-        id: item.id,
-        type,
-        time: timeString,
-        activeTime: item.active_time,
-        isDownloaded: item.is_downloaded,
-        isFavorited: item.is_favorited,
-        content: contentByType[type] ?? null,
-        fileTransferIds: item.file_transfer_ids ?? [],
-        isUnavailable: item.payload_state === 'Lost',
-      }
-    },
+    (entry: ClipboardEntry): DisplayClipboardItem => ({
+      ...entry,
+      time: formatRelativeTime(entry.activeTime, t),
+    }),
     [t]
   )
 
   // Build display items: server search results or Redux browse items
   const clipboardItems = useMemo(() => {
-    // `tick` 看似没在 body 里被读，但 convertToDisplayItem 内部用 `new Date()`
-    // 计算 "minutes ago" 字符串 —— 每次 tick 自增都需要把缓存的 displayItem
-    // 整体抛掉重算，否则时间戳就会停在最近一次依赖变更的那一刻。这里显式
-    // 读一下 tick 让 react-doctor / exhaustive-deps 知道它确实进入语义。
+    // `tick` is never read in the body, but formatRelativeTime uses Date.now()
+    // to build the "minutes ago" labels — every tick must throw away the cached
+    // display items and recompute, otherwise timestamps freeze at the moment of
+    // the last dependency change. Reading tick explicitly tells react-doctor /
+    // exhaustive-deps it genuinely participates.
     void tick
 
     // When a search query is active, use server-side results
@@ -600,28 +527,6 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     [dispatch, t, flatItems]
   )
 
-  // Sync to clipboard (download file entry)
-  const handleSyncToClipboard = useCallback(
-    async (itemId: string) => {
-      try {
-        setTransferringEntries(prev => new Set(prev).add(itemId))
-        const result = await downloadFileEntry(itemId)
-        dispatch(linkTransferToEntry({ transferId: result.transfer_id, entryId: itemId }))
-      } catch (err) {
-        log.error({ err }, 'Sync to clipboard failed')
-        toast.error(t('clipboard.errors.syncFailed'), {
-          description: err instanceof Error ? err.message : t('clipboard.errors.unknown'),
-        })
-        setTransferringEntries(prev => {
-          const next = new Set(prev)
-          next.delete(itemId)
-          return next
-        })
-      }
-    },
-    [dispatch, t]
-  )
-
   // Open file location in system file manager
   const handleOpenFileLocation = useCallback(
     async (itemId: string) => {
@@ -736,8 +641,6 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                         itemId={item.id}
                         itemType={item.type}
                         transferStatus={{
-                          isDownloaded: item.isDownloaded ?? true,
-                          isTransferring: transferringEntries.has(item.id),
                           isStale: staleEntryIds.includes(item.id),
                           hasMissingFiles:
                             item.type === 'file'
@@ -752,7 +655,6 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                           captureUserIntent('delete_entry', { count: 1 })
                           setDeleteDialogOpen(true)
                         }}
-                        onSyncToClipboard={id => void handleSyncToClipboard(id)}
                         onOpenFileLocation={id => void handleOpenFileLocation(id)}
                       >
                         <ClipboardItemRow
@@ -781,10 +683,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                   <ClipboardActionBar
                     hasActiveItem={activeItemId !== null}
                     copySuccess={copySuccess}
-                    activeItemType={activeItem?.type}
                     transferStatus={{
-                      isDownloaded: activeItem?.isDownloaded,
-                      isTransferring: activeItemId ? transferringEntries.has(activeItemId) : false,
                       isCopyBlocked: isActiveFileCopyBlocked,
                       copyBlockedReason:
                         isActiveFileCopyBlocked && activeEntryStatus
@@ -804,9 +703,6 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                         captureUserIntent('delete_entry', { count: 1 })
                         setDeleteDialogOpen(true)
                       }
-                    }}
-                    onSyncToClipboard={() => {
-                      if (activeItemId) void handleSyncToClipboard(activeItemId)
                     }}
                   />
                 }
