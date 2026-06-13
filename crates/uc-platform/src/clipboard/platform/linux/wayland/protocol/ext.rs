@@ -651,9 +651,13 @@ fn handle_write(
         .clone();
 
     if snapshot.representations.is_empty() {
-        if let Some(prev) = state.active_source.take() {
-            prev.source.destroy();
-        }
+        // Clear the selection. Do NOT destroy the previous source eagerly:
+        // `set_selection(None)` makes the compositor cancel it, and the
+        // `Cancelled` handler destroys it. An eager destroy here used to make
+        // the compositor emit an extra `Selection { id: None }` event on top of
+        // the clear, desyncing `self_echo_pending` (see the replace path below
+        // for the full self-deadlock failure mode).
+        state.active_source = None;
         device.set_selection(None);
         state.cached_snapshot = None;
         state.self_echo_pending = state.self_echo_pending.saturating_add(1);
@@ -664,35 +668,43 @@ fn handle_write(
     let mut payloads: HashMap<String, Arc<Vec<u8>>> = HashMap::new();
 
     for rep in &snapshot.representations {
-        let mime_str = rep
+        let Some(primary_mime) = rep
             .mime
             .as_ref()
             .map(|m| m.0.clone())
-            .or_else(|| super::default_mime_for_format(&rep.format_id).map(String::from));
+            .or_else(|| super::default_mime_for_format(&rep.format_id).map(String::from))
+        else {
+            continue;
+        };
 
-        if let Some(mime) = mime_str {
+        // 用 `rep_bytes` 而非 `expect_inline_bytes`：远端 push 的 image rep 由
+        // `apply_inbound::materializer` 合成为 `LocalFile` source（指向 blob cache
+        // 文件），直接调 `expect_inline_bytes` 会 panic（见
+        // `clipboard::payload::rep_bytes` 注释）。读盘失败时跳过该 rep + warn,
+        // 与 macOS / Windows 平台同语义。
+        let bytes = match crate::clipboard::payload::rep_bytes(rep) {
+            Ok(b) => Arc::new(b.into_owned()),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    format_id = %rep.format_id,
+                    mime = %primary_mime,
+                    "ext-data-control write: read LocalFile rep failed; skipping this mime"
+                );
+                continue;
+            }
+        };
+
+        // Advertise every MIME alias a paster might request (text expands to the
+        // full UTF-8 family) so apps like Firefox that only negotiate
+        // `text/plain;charset=utf-8` / `UTF8_STRING` can paste. All aliases share
+        // the same payload bytes.
+        for mime in super::offer_mimes_for(&primary_mime) {
             if payloads.contains_key(&mime) {
                 continue;
             }
-            // 用 `rep_bytes` 而非 `expect_inline_bytes`：远端 push 的 image rep 由
-            // `apply_inbound::materializer` 合成为 `LocalFile` source（指向 blob cache
-            // 文件），直接调 `expect_inline_bytes` 会 panic（见
-            // `clipboard::payload::rep_bytes` 注释）。读盘失败时跳过该 rep + warn,
-            // 与 macOS / Windows 平台同语义。
-            let bytes = match crate::clipboard::payload::rep_bytes(rep) {
-                Ok(b) => b.into_owned(),
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        format_id = %rep.format_id,
-                        mime = %mime,
-                        "ext-data-control write: read LocalFile rep failed; skipping this mime"
-                    );
-                    continue;
-                }
-            };
             source.offer(mime.clone());
-            payloads.insert(mime, Arc::new(bytes));
+            payloads.insert(mime, Arc::clone(&bytes));
         }
     }
 
@@ -701,10 +713,19 @@ fn handle_write(
         anyhow::bail!("ext-data-control write: no mime could be derived from snapshot");
     }
 
-    if let Some(prev) = state.active_source.take() {
-        prev.source.destroy();
-    }
-
+    // Do NOT destroy the previous source before installing the new one.
+    // `set_selection` atomically replaces the selection and the compositor
+    // sends `Cancelled` for the old source, which the source Dispatch handler
+    // destroys. Destroying it eagerly here made the compositor emit a spurious
+    // `Selection { id: None }` (clear) event *in addition to* the `Selection`
+    // for the new source — two self-originated selection events for a single
+    // `self_echo_pending += 1`. The clear consumed the only echo token, so the
+    // new selection (our own write) was mis-classified as an external change
+    // and read back via `build_from_offer` on this very worker thread. That
+    // read can only be served by this same thread, so it self-deadlocked until
+    // the 2s per-mime read timeout fired — blocking real apps' paste requests
+    // for seconds. Replacing without the eager destroy keeps echo accounting
+    // balanced (one self `Selection`, one token).
     device.set_selection(Some(&source));
     state.cached_snapshot = Some(snapshot);
     state.self_echo_pending = state.self_echo_pending.saturating_add(1);
@@ -886,14 +907,24 @@ impl Dispatch<ExtDataControlSourceV1, ()> for WorkerState {
                 }
             }
             ext_data_control_source_v1::Event::Cancelled => {
-                if let Some(active) = &state.active_source {
-                    if active.source.id() == source.id() {
-                        debug!("ext-data-control worker: source cancelled by compositor");
-                        if let Some(prev) = state.active_source.take() {
-                            prev.source.destroy();
-                        }
-                    }
+                // A source is cancelled either because another client took over
+                // the selection, or because we replaced our own source via a
+                // fresh `set_selection`. Destroy it in both cases to release the
+                // proxy. Only drop `active_source` when the *current* source
+                // lost the selection; a cancelled *previous* source is just our
+                // own replace cleanup and must not disturb the live one.
+                let is_active = state
+                    .active_source
+                    .as_ref()
+                    .map(|active| active.source.id() == source.id())
+                    .unwrap_or(false);
+                if is_active {
+                    debug!("ext-data-control worker: active source cancelled by compositor");
+                    state.active_source = None;
+                } else {
+                    debug!("ext-data-control worker: replaced source cancelled — cleaning up");
                 }
+                source.destroy();
             }
             _ => {}
         }
