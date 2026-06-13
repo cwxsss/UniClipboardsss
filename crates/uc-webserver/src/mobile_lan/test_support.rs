@@ -128,19 +128,29 @@ pub(crate) async fn build_facade_with_seeded_device(
         ) -> Result<(), MobileDeviceError> {
             Ok(())
         }
-        async fn update_password_hash(
+        async fn update_mobile_device(
             &self,
-            id: &MobileDeviceId,
-            new_hash: String,
+            updated: &MobileDevice,
         ) -> Result<bool, MobileDeviceError> {
             let mut devs = self.devices.lock().unwrap();
-            match devs.iter_mut().find(|d| d.device_id == *id) {
-                Some(d) => {
-                    d.password_hash = new_hash;
-                    Ok(true)
-                }
-                None => Ok(false),
+            // Mirror the real adapter: a missing device returns Ok(false)
+            // regardless of any username collision, so check existence first.
+            if !devs.iter().any(|d| d.device_id == updated.device_id) {
+                return Ok(false);
             }
+            if devs
+                .iter()
+                .any(|d| d.device_id != updated.device_id && d.username == updated.username)
+            {
+                return Err(MobileDeviceError::UsernameCollision);
+            }
+            // Only the editable management fields change; the rest is preserved.
+            if let Some(d) = devs.iter_mut().find(|d| d.device_id == updated.device_id) {
+                d.label = updated.label.clone();
+                d.username = updated.username.clone();
+                d.password_hash = updated.password_hash.clone();
+            }
+            Ok(true)
         }
     }
 
