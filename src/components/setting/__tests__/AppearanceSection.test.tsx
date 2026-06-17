@@ -43,6 +43,7 @@ const baseSetting: Settings = {
     deviceName: 'Test Device',
     telemetryEnabled: true,
     usageAnalyticsEnabled: true,
+    debugMode: false,
   },
   sync: {
     autoSync: true,
@@ -109,6 +110,7 @@ const setup = (theme: Settings['general']['theme'] = 'light') => {
     },
     loading: false,
     error: null,
+    reloadSetting: vi.fn(),
     updateSetting: vi.fn(),
     updateGeneralSetting,
     updateAutostart: vi.fn(),
