@@ -40,9 +40,8 @@ cargo build -p uc-cli
 | `uniclip status` | 查看当前应用状态。 |
 | `uniclip init` | 在当前 profile 创建新的加密空间。 |
 | `uniclip invite` | 作为 sponsor 发起配对邀请。 |
-| `uniclip join` | 使用邀请加入已有空间。 |
-| `uniclip devices` | 列出已配对设备。 |
-| `uniclip members` | 列出空间成员和在线状态。 |
+| `uniclip join` | 用邀请码加入空间。默认走非破坏性的赎回 / 重新配对分支（首次加入，以及在「同一空间」单侧解除配对后重新配对——见 issue #1023）。加 `--switch` 才切换到「另一个」sponsor 的空间并重加密迁移本地历史（破坏性，会先确认，再加 `--yes` 在非交互场景跳过确认）。 |
+| `uniclip members` | 列出空间成员（本机 + 已配对设备）及在线状态；加 `--probe` 主动探测刷新状态。`devices` 是其别名。 |
 | `uniclip send [TEXT]` | 向在线配对设备发送一段文本；省略 `TEXT` 时从 stdin 读取。 |
 | `uniclip watch` | 监听并打印收到的剪贴板 payload；不会写入系统剪贴板。 |
 | `uniclip recv` | 阻塞等待 **下一个** 入站文件并落盘；不会写入系统剪贴板。 |
@@ -57,7 +56,7 @@ cargo build -p uc-cli
 uniclip get                      # 取最新一条可用条目
 uniclip get --type image         # 取最新一张图片
 uniclip get --type file -o ~/in  # 取最新一个文件并落地到 ~/in
-uniclip get --id <ENTRY-ID>      # 取指定条目（id 来自 search query）
+uniclip get --id <ENTRY-ID>      # 取指定条目（id 来自 uniclip search）
 uniclip get --list -n 20         # 仅列出最近 20 条，不取回
 ```
 
@@ -80,16 +79,16 @@ path=$(uniclip get --type image)   # 落地并拿到路径
 ## 搜索命令
 
 ```bash
+uniclip search "keyword"
 uniclip search status
 uniclip search rebuild
-uniclip search query "keyword"
 ```
 
-`search query` 支持内容类型、文件扩展名、时间范围、分页和详细输出：
+查询直接跟在 `search` 后面，支持内容类型、文件扩展名、时间范围、分页和详细输出：
 
 ```bash
-uniclip search query "report" --type text --ext md --limit 20 --detailed
-uniclip search query "report" --from-ms 1710000000000 --to-ms 1710100000000
+uniclip search "report" --type text --ext md --limit 20 --detailed
+uniclip search "report" --from-ms 1710000000000 --to-ms 1710100000000
 ```
 
 `search rebuild` 是同步命令，完成后才返回。
@@ -107,9 +106,7 @@ uniclip blob fetch <TICKET> --entry-id <ENTRY_ID> --out ./restored.bin
 
 ## 空间切换
 
-| 命令 | 用途 |
-| --- | --- |
-| `uniclip switch-space` | 切换到另一个 sponsor 的空间，并迁移本地历史数据。 |
+切换到另一个 sponsor 的空间已合并进 `uniclip join`：在已加入空间的设备上运行 `join --switch`，会走切换分支，重加密并迁移本地历史数据。无需单独的 `switch-space` 命令。不带 `--switch` 的 `join` 始终走非破坏性的赎回 / 重新配对分支。
 
 ## 隐藏的剪贴板诊断命令组（`probe`）
 

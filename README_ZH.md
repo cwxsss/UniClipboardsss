@@ -228,7 +228,7 @@ bun tauri build
 2. 在新设备上启动应用，选择 **加入已有空间**，输入邀请码与空间口令
 3. 口令验证通过后，新设备完成加入并自动开始同步
 
-> 已经完成设置、想切换到另一个空间？在 **设备** 页使用 **切换空间**（或 CLI 中的 `uniclip switch-space`）—— 本地的剪贴板历史会被重新加密并迁移到新空间。
+> 已经完成设置、想切换到另一个空间？在 **设备** 页使用 **切换空间**（或在 CLI 中运行 `uniclip join --switch`）—— 本地的剪贴板历史会被重新加密并迁移到新空间。不带 `--switch` 时，`uniclip join` 走非破坏性的赎回 / 重新配对分支，不会切换空间。
 
 ### 配对手机（伴侣） <a id="mobile-companion-lan"></a>
 
@@ -289,11 +289,11 @@ flowchart LR
 ```bash
 uniclip init                    # 在本机创建一个新的加密空间
 uniclip invite                  # 生成短期邀请码
-uniclip join <code>             # 通过邀请码加入已有空间
+uniclip join <code>             # 通过邀请码加入空间（重新配对，非破坏性）
+uniclip join --switch <code>    # 切换到另一个空间（重新加密本地历史）
 uniclip members                 # 列出已配对设备及在线状态
 uniclip send "hello"            # 把内容发送到其他设备
 uniclip watch                   # 实时接收来自其他设备的剪贴板内容
-uniclip switch-space            # 把本机切换到另一个空间
 uniclip status / start / stop   # 守护进程生命周期
 ```
 

@@ -103,48 +103,62 @@ enum Commands {
     /// `unlock` — no passphrase re-entry needed. Fails if the profile
     /// has not been initialized yet.
     Invite,
-    /// Redeem an invitation and join an existing space (joiner side).
+    /// Join a space with an invitation code and passphrase.
+    ///
+    /// Default (re-pair / first-time join) → redeems the invitation and
+    /// joins the sponsor's space (joiner side of pairing). Safe to run when
+    /// already in the *same* space: stale member/trust rows are replaced in
+    /// the new handshake (issue #1023), so this is how you re-pair after a
+    /// one-sided unpair.
+    ///
+    /// `--switch` → switches to a *different* sponsor's space, re-encrypting
+    /// local clipboard history under the new master key (4-phase migration:
+    /// backup → handshake → swap → commit). This is destructive and prompts
+    /// for confirmation; pass `--yes` to skip the prompt in non-interactive
+    /// contexts. A daemon crash mid-migration auto-resumes on the next
+    /// `uniclip` invocation thanks to `MigrationStatePort` persistence.
     Join {
         /// Invitation code printed by the sponsor's `invite`. Prompted
         /// interactively when omitted.
         #[arg(long)]
         code: Option<String>,
-        /// Space passphrase the sponsor chose during `init`. Prompted
-        /// interactively when omitted.
+        /// Space passphrase: the sponsor's passphrase when joining, or the
+        /// new sponsor's passphrase when switching. Prompted interactively
+        /// when omitted.
         #[arg(long)]
         passphrase: Option<String>,
-        /// Display name advertised to the sponsor as this device's name.
-        /// Defaults to the OS hostname (plus `(profile)` suffix when
-        /// `--profile` is set). Persisted to settings before dialing so
-        /// the B2 handshake can read it back.
+        /// Display name advertised to the sponsor as this device's name on
+        /// first-time join. Defaults to the OS hostname (plus `(profile)`
+        /// suffix when `--profile` is set). Persisted to settings before
+        /// dialing so the B2 handshake can read it back. Ignored with
+        /// `--switch`.
         #[arg(long)]
         device_name: Option<String>,
-    },
-    /// Switch to another sponsor's space, re-encrypting local clipboard
-    /// history under the new master key (4-phase migration).
-    ///
-    /// Pre-condition: this device has already completed `init` or `join`.
-    /// Runs the full re-encryption pipeline: backup → handshake → swap →
-    /// commit. A daemon crash mid-run resumes automatically on the next
-    /// `uniclip` invocation thanks to `MigrationStatePort` persistence.
-    SwitchSpace {
-        /// Invitation code printed by the new sponsor's `invite`. Prompted
-        /// interactively when omitted.
+        /// Switch to a *different* sponsor's space instead of re-pairing,
+        /// re-encrypting local clipboard history under the new master key.
+        /// Destructive; without it `join` always takes the non-destructive
+        /// re-pair path.
         #[arg(long)]
-        code: Option<String>,
-        /// Passphrase the new sponsor chose during `init`. Prompted
-        /// interactively when omitted.
+        switch: bool,
+        /// Skip the confirmation prompt shown before a destructive space
+        /// switch (re-encrypting local history). Required when switching
+        /// non-interactively. Only meaningful together with `--switch`.
         #[arg(long)]
-        new_passphrase: Option<String>,
+        yes: bool,
     },
-    /// List paired devices
-    Devices,
-    /// List members of this space with presence (online / offline / unknown).
+    /// List members of this space: the local device plus paired peers.
     ///
-    /// Self-contained direct mode (Slice 2 Phase 1): runs a one-off probe of
-    /// all paired peers so states are fresh on every call. No daemon
-    /// required. Prints `{name} ({state}) [local]` per device.
-    Members,
+    /// Self-contained direct mode. Prints `{name} ({state}) [local]` per
+    /// member using each peer's last-known reachability. Pass `--probe` to
+    /// actively ping every paired peer first so the states are fresh.
+    /// Also available under the `devices` alias.
+    #[command(alias = "devices")]
+    Members {
+        /// Actively probe paired peers for fresh online/offline state
+        /// before listing (adds a network round-trip; off by default).
+        #[arg(long)]
+        probe: bool,
+    },
     /// Dispatch one clipboard payload to paired peers.
     ///
     /// Self-contained direct mode. Two input modes, mutually exclusive:
@@ -227,7 +241,7 @@ enum Commands {
     ///
     /// Selection (default: the newest usable entry):
     /// * `--type <image|file|text|link>` — newest entry of that kind.
-    /// * `--id <ENTRY-ID>` — a specific entry (see `uniclip search query`).
+    /// * `--id <ENTRY-ID>` — a specific entry (see `uniclip search`).
     /// * `--list` — list recent entries instead of materializing one.
     ///
     /// Output: text/link content prints to stdout; image/file bytes are
@@ -242,7 +256,7 @@ enum Commands {
         /// Restrict selection to the newest entry of this kind.
         #[arg(long = "type", value_name = "KIND", value_enum)]
         kind: Option<commands::get::GetKind>,
-        /// Select a specific entry by id (from `uniclip search query`).
+        /// Select a specific entry by id (from `uniclip search`).
         #[arg(long, value_name = "ENTRY-ID", conflicts_with = "kind")]
         id: Option<String>,
         /// List recent entries instead of materializing one.
@@ -263,16 +277,21 @@ enum Commands {
         #[command(subcommand)]
         subcommand: commands::blob::BlobCommands,
     },
-    /// Search clipboard history (query or inspect search availability)
+    /// Search clipboard history. Provide a query to search, or use the
+    /// `status` / `rebuild` subcommands to inspect or maintain the index.
+    #[command(args_conflicts_with_subcommands = true)]
     Search {
+        #[command(flatten)]
+        query: commands::search::SearchQueryArgs,
         #[command(subcommand)]
-        subcommand: commands::search::SearchCommands,
+        subcommand: Option<commands::search::SearchCommands>,
     },
     /// Inspect or advance the upgrade-detection cursor (manual verification
-    /// for the P1 thin upgrade module).
+    /// for the P1 thin upgrade module). Bare `upgrade` prints status; use
+    /// the `ack` subcommand to advance the cursor.
     Upgrade {
         #[command(subcommand)]
-        subcommand: commands::upgrade::UpgradeCommands,
+        subcommand: Option<commands::upgrade::UpgradeCommands>,
     },
     /// Manage persistent local debug logging and export diagnostic logs
     Debug {
@@ -363,32 +382,24 @@ fn main() -> anyhow::Result<()> {
                 code,
                 passphrase,
                 device_name,
+                switch,
+                yes,
             } => {
                 commands::join::run(
                     commands::join::JoinArgs {
                         code,
                         passphrase,
                         device_name,
+                        switch,
+                        yes,
                     },
                     cli.verbose,
                 )
                 .await
             }
-            Commands::SwitchSpace {
-                code,
-                new_passphrase,
-            } => {
-                commands::switch_space::run(
-                    commands::switch_space::SwitchSpaceArgs {
-                        code,
-                        new_passphrase,
-                    },
-                    cli.verbose,
-                )
-                .await
+            Commands::Members { probe } => {
+                commands::members::run(probe, cli.json, cli.verbose).await
             }
-            Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
-            Commands::Members => commands::members::run(cli.json, cli.verbose).await,
             Commands::Send {
                 text,
                 file,
@@ -433,8 +444,8 @@ fn main() -> anyhow::Result<()> {
             Commands::Blob { subcommand } => {
                 commands::blob::run(subcommand, cli.json, cli.verbose).await
             }
-            Commands::Search { subcommand } => {
-                commands::search::run(subcommand, cli.json, cli.verbose).await
+            Commands::Search { query, subcommand } => {
+                commands::search::run(query, subcommand, cli.json, cli.verbose).await
             }
             Commands::Upgrade { subcommand } => {
                 commands::upgrade::run(subcommand, cli.json, cli.verbose).await
@@ -459,7 +470,7 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{commands, Cli, Commands};
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -492,6 +503,57 @@ mod tests {
     }
 
     #[test]
+    fn switch_space_command_is_removed() {
+        let result = Cli::try_parse_from(["uniclip", "switch-space", "--code", "ABCD-1234"]);
+
+        assert!(
+            result.is_err(),
+            "switch-space is merged into `join`; the standalone command must be gone"
+        );
+    }
+
+    #[test]
+    fn join_accepts_switch_and_yes_flags() {
+        // `--switch` opts into the destructive migration path; `--yes` skips
+        // its confirmation in non-interactive contexts.
+        let cli = Cli::try_parse_from([
+            "uniclip",
+            "join",
+            "--code",
+            "ABCD-1234",
+            "--passphrase",
+            "pw",
+            "--switch",
+            "--yes",
+        ])
+        .expect("join must accept --switch and --yes");
+        let Some(Commands::Join { switch, yes, .. }) = cli.command else {
+            panic!("expected Join command");
+        };
+        assert!(switch, "--switch must parse into the Join command");
+        assert!(yes, "--yes must parse into the Join command");
+    }
+
+    #[test]
+    fn join_defaults_to_re_pair_without_switch() {
+        // A bare `join` (no `--switch`) must route to the non-destructive
+        // redeem / re-pair path regardless of setup state (issue #1023).
+        let cli = Cli::try_parse_from([
+            "uniclip",
+            "join",
+            "--code",
+            "ABCD-1234",
+            "--passphrase",
+            "pw",
+        ])
+        .expect("bare join must parse");
+        let Some(Commands::Join { switch, .. }) = cli.command else {
+            panic!("expected Join command");
+        };
+        assert!(!switch, "join must default to re-pair, not switch");
+    }
+
+    #[test]
     fn search_rebuild_no_wait_is_removed() {
         let result = Cli::try_parse_from(["uniclip", "search", "rebuild", "--no-wait"]);
 
@@ -499,6 +561,79 @@ mod tests {
             result.is_err(),
             "standalone CLI search rebuild must be synchronous and reject --no-wait"
         );
+    }
+
+    #[test]
+    fn search_query_is_flattened_to_top_level() {
+        // `search <query>` no longer requires the `query` subcommand.
+        let cli = Cli::try_parse_from(["uniclip", "search", "report", "--type", "text"])
+            .expect("flattened search query must parse");
+        let Some(Commands::Search { subcommand, .. }) = cli.command else {
+            panic!("expected Search command");
+        };
+        assert!(
+            subcommand.is_none(),
+            "a bare query must not be parsed as a subcommand"
+        );
+    }
+
+    #[test]
+    fn search_status_still_parses_as_subcommand() {
+        let cli =
+            Cli::try_parse_from(["uniclip", "search", "status"]).expect("search status must parse");
+        let Some(Commands::Search { subcommand, .. }) = cli.command else {
+            panic!("expected Search command");
+        };
+        assert!(matches!(
+            subcommand,
+            Some(commands::search::SearchCommands::Status)
+        ));
+    }
+
+    #[test]
+    fn bare_upgrade_defaults_to_no_subcommand() {
+        // `uniclip upgrade` (no subcommand) is valid and means "show status".
+        let cli = Cli::try_parse_from(["uniclip", "upgrade"]).expect("bare upgrade must parse");
+        let Some(Commands::Upgrade { subcommand }) = cli.command else {
+            panic!("expected Upgrade command");
+        };
+        assert!(subcommand.is_none());
+    }
+
+    #[test]
+    fn upgrade_ack_parses_as_subcommand() {
+        let cli =
+            Cli::try_parse_from(["uniclip", "upgrade", "ack"]).expect("upgrade ack must parse");
+        let Some(Commands::Upgrade { subcommand }) = cli.command else {
+            panic!("expected Upgrade command");
+        };
+        assert!(matches!(
+            subcommand,
+            Some(commands::upgrade::UpgradeCommands::Ack)
+        ));
+    }
+
+    #[test]
+    fn members_probe_flag_parses_and_defaults_off() {
+        let bare = Cli::try_parse_from(["uniclip", "members"]).expect("bare members must parse");
+        let Some(Commands::Members { probe }) = bare.command else {
+            panic!("expected Members command");
+        };
+        assert!(!probe, "probe must default off");
+
+        let probed =
+            Cli::try_parse_from(["uniclip", "members", "--probe"]).expect("members --probe parses");
+        let Some(Commands::Members { probe }) = probed.command else {
+            panic!("expected Members command");
+        };
+        assert!(probe);
+    }
+
+    #[test]
+    fn devices_is_an_alias_for_members() {
+        // The former `devices` command is now a hidden alias of `members`.
+        let cli = Cli::try_parse_from(["uniclip", "devices"]).expect("devices alias must parse");
+        assert!(matches!(cli.command, Some(Commands::Members { .. })));
     }
 
     #[test]

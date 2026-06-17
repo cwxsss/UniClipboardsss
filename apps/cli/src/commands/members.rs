@@ -1,9 +1,12 @@
-//! `uniclip members` — list paired devices + presence (ADR-008 P5-2a).
+//! `uniclip members` — list this space's members: the local device plus
+//! paired peers, with each peer's reachability (ADR-008 P5-2a). Also reachable
+//! under the `devices` alias.
 //!
-//! Routes through a running or freshly-spawned daemon (ADR-008 P5-2a).
-//! Holds a control-WS lease to keep a transient Oneshot daemon alive for
-//! the duration of the query sequence, then lets the daemon self-terminate
-//! via its idle timer.
+//! Routes through a running or freshly-spawned daemon. Holds a control-WS
+//! lease to keep a transient Oneshot daemon alive for the duration of the
+//! query sequence, then lets the daemon self-terminate via its idle timer.
+//! By default the listing uses last-known reachability; `--probe` actively
+//! pings every paired peer first so the states are fresh.
 //!
 //! Human output:
 //!
@@ -17,54 +20,41 @@
 
 use serde::Serialize;
 use uc_core::ports::ReachabilityState;
-use uc_daemon_client::DaemonClientContext;
 
-use crate::commands::app_session::connect_or_spawn_oneshot_daemon;
+use crate::commands::app_session::connect_with_lease;
 use crate::exit_codes;
+use crate::output;
 use crate::ui;
 
-pub async fn run(json: bool, verbose: bool) -> i32 {
+pub async fn run(probe: bool, json: bool, verbose: bool) -> i32 {
     ui::header("Members");
 
-    let service = match connect_or_spawn_oneshot_daemon(verbose).await {
-        Ok(s) => s,
+    let (_lease, ctx) = match connect_with_lease(verbose).await {
+        Ok(pair) => pair,
         Err(code) => return code,
-    };
-
-    let _lease = match service.hold_control_lease().await {
-        Ok(guard) => guard,
-        Err(err) => {
-            ui::error(&format!("Failed to hold daemon session lease: {err}"));
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let ctx = match DaemonClientContext::from_env() {
-        Ok(ctx) => ctx,
-        Err(err) => {
-            ui::error(&format!("Failed to connect to daemon: {err}"));
-            return exit_codes::EXIT_ERROR;
-        }
     };
     let query = ctx.query_client();
 
-    // Probe presence so state is fresh before listing.
-    let probe_spinner = ui::spinner("Probing paired peers...");
-    match query.refresh_presence().await {
-        Ok(report) => {
-            ui::spinner_finish_success(
-                &probe_spinner,
-                &format!(
-                    "Probed {} peer(s): {} online, {} offline, {} error(s)",
-                    report.total, report.online, report.offline, report.errors
-                ),
-            );
-        }
-        Err(err) => {
-            ui::spinner_finish_error(
-                &probe_spinner,
-                &format!("Probe round failed: {err} (showing last-known state)"),
-            );
+    // Optionally probe presence so state is fresh before listing. Off by
+    // default to keep listing fast; `--probe` opts into the round-trip.
+    if probe {
+        let probe_spinner = ui::spinner("Probing paired peers...");
+        match query.refresh_presence().await {
+            Ok(report) => {
+                ui::spinner_finish_success(
+                    &probe_spinner,
+                    &format!(
+                        "Probed {} peer(s): {} online, {} offline, {} error(s)",
+                        report.total, report.online, report.offline, report.errors
+                    ),
+                );
+            }
+            Err(err) => {
+                ui::spinner_finish_error(
+                    &probe_spinner,
+                    &format!("Probe round failed: {err} (showing last-known state)"),
+                );
+            }
         }
     }
 
@@ -113,17 +103,10 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     }
 
     if json {
-        match serde_json::to_string_pretty(&entries) {
-            Ok(json_str) => println!("{json_str}"),
-            Err(err) => {
-                ui::error(&format!("Failed to serialize roster: {err}"));
-                return exit_codes::EXIT_ERROR;
-            }
-        }
-    } else {
-        render_human(&entries);
+        return output::emit_json(&entries, "roster");
     }
 
+    render_human(&entries);
     exit_codes::EXIT_SUCCESS
 }
 

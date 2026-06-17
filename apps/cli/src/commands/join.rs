@@ -1,19 +1,31 @@
-//! `uniclip join` — joiner side of Slice 1 pairing via daemon HTTP API.
+//! `uniclip join` — join a space via daemon HTTP API. The route is chosen by
+//! explicit intent, not by the device's setup state.
 //!
-//! Takes an invitation code and passphrase, then calls
-//! `POST /v2/setup/redeem` on the daemon. Unlike [`invite`](super::invite),
-//! this command is a single blocking RPC — the daemon drives the
-//! dial/wait loop internally, so we simply await the result (with
-//! Ctrl+C handling for clean cancellation).
+//! * Default (no `--switch`) → calls `POST /v2/setup/redeem` (joiner side of
+//!   Slice 1 pairing). A single blocking RPC — the daemon drives the dial/wait
+//!   loop internally, so we simply await the result. Safe to run when already
+//!   in the *same* space: stale rows are replaced in the new handshake (issue
+//!   #1023), so this is also the re-pair-after-unpair path.
+//! * `--switch` → calls `POST /v2/setup/switch-space`, which drives the
+//!   4-phase re-encryption migration internally for moving to a *different*
+//!   space. This is destructive, so we confirm first (unless `--yes`) and show
+//!   a spinner while it runs.
+//!
+//! Routing on explicit intent (rather than a local setup-state check) keeps
+//! same-space re-pair non-destructive: a set-up device re-joining its own
+//! space must redeem, not migrate. Both paths handle Ctrl+C for clean
+//! cancellation.
 
 use tokio::select;
 use tokio::signal;
 
 use uc_daemon_client::DaemonClientContext;
 use uc_daemon_contract::api::dto::settings::{GeneralSettingsPatchDto, SettingsPatchDto};
-use uc_daemon_contract::api::dto::v2::setup::RedeemRequest;
+use uc_daemon_contract::api::dto::v2::setup::{RedeemRequest, SwitchSpaceRequest};
 
-use crate::commands::app_session::{default_device_name, ensure_daemon_for_setup};
+use crate::commands::app_session::{
+    connect_with_lease, default_device_name, ensure_daemon_for_setup,
+};
 use crate::exit_codes;
 use crate::ui;
 
@@ -51,12 +63,16 @@ pub struct JoinArgs {
     pub code: Option<String>,
     pub passphrase: Option<String>,
     pub device_name: Option<String>,
+    pub switch: bool,
+    pub yes: bool,
 }
 
 pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
     ui::header("Join a space");
 
-    // Collect invitation code: --code wins; otherwise prompt.
+    // Collect invitation code: --code wins; otherwise prompt. Shared by both
+    // the redeem and switch paths (both are rendezvous lookup keys, so both
+    // get the same byte-for-byte normalization).
     let code_str = match args.code {
         Some(c) if !c.trim().is_empty() => normalize_invitation_code(&c),
         Some(_) => {
@@ -76,7 +92,7 @@ pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
         },
     };
 
-    // Collect passphrase (single entry, no confirmation).
+    // Collect passphrase (single entry, no confirmation). Shared by both paths.
     let passphrase_str = match args.passphrase {
         Some(p) if !p.trim().is_empty() => p,
         Some(_) => {
@@ -96,9 +112,31 @@ pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
         },
     };
 
+    // Route by explicit intent, not by setup state. Without `--switch` we
+    // always take the non-destructive redeem path — which doubles as the
+    // re-pair-after-unpair path (issue #1023), since redeeming an invitation
+    // for the space this device is already in just replaces stale rows. Only
+    // `--switch` opts into the destructive re-encryption migration to a
+    // different space.
+    if args.switch {
+        if args.device_name.is_some() {
+            ui::warn("--device-name is ignored when switching spaces");
+        }
+        return run_switch(code_str, passphrase_str, args.yes, verbose).await;
+    }
+
+    run_redeem(code_str, passphrase_str, args.device_name, verbose).await
+}
+
+/// First-time join: redeem an invitation and adopt the sponsor's space.
+async fn run_redeem(
+    code_str: String,
+    passphrase_str: String,
+    device_name_arg: Option<String>,
+    verbose: bool,
+) -> i32 {
     // Determine device name.
-    let device_name = args
-        .device_name
+    let device_name = device_name_arg
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -179,6 +217,84 @@ pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
         },
         _ = signal::ctrl_c() => {
             ui::spinner_finish_error(&spinner, "Interrupted by user");
+            EXIT_SIGINT
+        }
+    }
+}
+
+/// Already-set-up device: switch to another sponsor's space, re-encrypting
+/// local clipboard history under the new master key (4-phase migration).
+///
+/// Destructive, so we confirm first unless `--yes` was passed. The daemon
+/// drives the migration internally and persists `MigrationStatePort`, so a
+/// crash mid-run auto-resumes on the next `uniclip` invocation.
+async fn run_switch(code_str: String, new_passphrase: String, yes: bool, verbose: bool) -> i32 {
+    ui::warn(
+        "This device is already in a space. Switching will re-encrypt all local \
+         clipboard history under the new space's master key.",
+    );
+    if !yes {
+        match ui::confirm("Switch to the new space now?", false) {
+            Ok(true) => {}
+            Ok(false) => {
+                ui::end("Cancelled — staying in the current space.");
+                return exit_codes::EXIT_SUCCESS;
+            }
+            Err(e) => {
+                ui::error(&e);
+                return exit_codes::EXIT_ERROR;
+            }
+        }
+    }
+
+    // Device IS set up → normal connect path (vs. redeem's setup-gated spawn).
+    let (_lease, ctx) = match connect_with_lease(verbose).await {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+
+    let spinner = ui::spinner(
+        "Migrating local clipboard history to the new space (4 phases \u{2014} this may take a while)...",
+    );
+
+    let req = SwitchSpaceRequest {
+        code: code_str,
+        new_passphrase,
+    };
+
+    let setup_client = ctx.setup_v2_client();
+    let switch_fut = setup_client.switch_space(&req);
+    tokio::pin!(switch_fut);
+
+    select! {
+        result = &mut switch_fut => match result {
+            Ok(resp) => {
+                ui::spinner_finish_success(&spinner, "Switched space");
+                ui::info("space_id", &resp.space_id);
+                ui::info("self_device_id", &resp.self_device_id);
+                ui::info("self_fingerprint", &resp.self_identity_fingerprint);
+                ui::info("sponsor_device_id", &resp.sponsor_device_id);
+                ui::info("sponsor_fingerprint", &resp.sponsor_identity_fingerprint);
+                ui::info("migrated_records", &resp.migrated_records.to_string());
+                exit_codes::EXIT_SUCCESS
+            }
+            Err(err) => {
+                ui::spinner_finish_error(
+                    &spinner,
+                    &format!(
+                        "Switch-space failed: {}",
+                        crate::commands::daemon_error_message(&err)
+                    ),
+                );
+                exit_codes::EXIT_ERROR
+            }
+        },
+        _ = signal::ctrl_c() => {
+            ui::spinner_finish_error(&spinner, "Interrupted by user");
+            ui::info(
+                "note",
+                "Migration may be partially complete. Restart `uniclip` to auto-resume.",
+            );
             EXIT_SIGINT
         }
     }

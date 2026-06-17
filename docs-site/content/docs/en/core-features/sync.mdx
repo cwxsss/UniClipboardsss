@@ -58,12 +58,12 @@ the local clipboard history:
 - Encrypted SQLite database under the platform-specific app data
   directory ([see Install](../getting-started/install#where-data-lives)).
 - A separate **encrypted full-text search index** for the dashboard
-  search box and `uniclip search query`. The index is encrypted on
+  search box and `uniclip search`. The index is encrypted on
   disk too — "stored locally" is not the same as "stored safely."
 - Blob chunks live under a sibling directory and are garbage-collected
   according to your retention settings.
 
-If you switch spaces (`uniclip switch-space`), the existing history
+If you switch spaces (`uniclip join --switch` with another sponsor's invitation), the existing history
 is re-encrypted under the new space's MasterKey before the daemon
 reports the switch as complete. There is no plaintext window during
 the transition.
@@ -83,8 +83,8 @@ Every paired device exposes a small set of toggles that bound what
 
 Toggles are enforced at the **sending side's** dispatcher, so any
 type you disable for a peer never has its bytes leave this machine in
-the first place. See the **Devices** page in the GUI, or the
-forthcoming `uniclip devices` config commands in the CLI.
+the first place. See the **Devices** page in the GUI; equivalent CLI
+config commands are on the roadmap.
 
 ## Mobile sync (companion mode)
 
