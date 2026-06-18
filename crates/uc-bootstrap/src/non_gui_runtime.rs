@@ -195,7 +195,9 @@ pub struct ClipboardRestoreAssembly {
 /// daemon 入口仍走自己的 enhanced 装配(`runtime_assembly.rs`),不受影响。
 fn build_fallback_apply_inbound(deps: &AppDeps) -> Arc<ApplyInboundClipboardUseCase> {
     let capture_uc = Arc::new(CaptureClipboardUseCase::new(
-        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.entry_ports.save.clone(),
+        deps.clipboard.entry_ports.touch.clone(),
+        deps.clipboard.entry_ports.find_by_snapshot_hash.clone(),
         deps.clipboard.clipboard_event_repo.clone(),
         deps.clipboard.representation_policy.clone(),
         deps.clipboard.representation_normalizer.clone(),
@@ -208,7 +210,7 @@ fn build_fallback_apply_inbound(deps: &AppDeps) -> Arc<ApplyInboundClipboardUseC
     let capture: Arc<dyn ApplyInboundCapture> = capture_uc;
     let write: Arc<dyn ApplyInboundWrite> = Arc::new(NoopInboundWrite);
     Arc::new(ApplyInboundClipboardUseCase::new(
-        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.entry_ports.find_by_snapshot_hash.clone(),
         capture,
         write,
     ))
@@ -275,9 +277,9 @@ pub fn build_mobile_sync_facade(
         incoming_buffer: Arc::new(IncomingMobileBuffer::new()),
         file_staging: FilesystemMobileFileStaging::new(storage_paths.file_cache_dir.clone()),
         snapshot_ports: MobileSyncSnapshotPorts {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            entry_repo: deps.clipboard.entry_ports.list.clone(),
             selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
+            representation_repo: deps.clipboard.representation_ports.get.clone(),
             payload_resolver: deps.clipboard.payload_resolver.clone(),
             blob_reader: deps.storage.blob_store.clone(),
         },
@@ -396,9 +398,9 @@ pub fn build_app_facade_from_deps(
 
     let clipboard_restore = options.clipboard_restore.map(|restore| {
         Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
             selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
+            entry_ports: deps.clipboard.entry_ports.clone(),
+            representation_ports: deps.clipboard.representation_ports.clone(),
             payload_resolver: deps.clipboard.payload_resolver.clone(),
             blob_store: deps.storage.blob_store.clone(),
             clock: deps.system.clock.clone(),
@@ -418,15 +420,16 @@ pub fn build_app_facade_from_deps(
             space_access: deps.security.space_access.clone(),
         })),
         resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-            representation_repo: deps.clipboard.representation_repo.clone(),
+            representation_by_blob_id: deps.clipboard.representation_ports.get_by_blob_id.clone(),
+            representations_for_event: deps.clipboard.representation_ports.list_for_event.clone(),
             thumbnail_repo: deps.storage.thumbnail_repo.clone(),
             blob_store: deps.storage.blob_store.clone(),
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            entry_repo: deps.clipboard.entry_ports.get.clone(),
         })),
         clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            entry_ports: deps.clipboard.entry_ports.clone(),
             selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
+            representation_ports: deps.clipboard.representation_ports.clone(),
             event_writer: deps.clipboard.clipboard_event_repo.clone(),
             payload_resolver: deps.clipboard.payload_resolver.clone(),
             blob_store: deps.storage.blob_store.clone(),
@@ -523,8 +526,8 @@ pub async fn build_cli_app_facade(
         deps.search.search_index.clone(),
         deps.search.search_key_derivation.clone(),
         deps.search.search_pipeline.clone(),
-        deps.clipboard.clipboard_entry_repo.clone(),
-        deps.clipboard.representation_repo.clone(),
+        deps.clipboard.entry_ports.list.clone(),
+        deps.clipboard.representation_ports.list_for_event.clone(),
         deps.clipboard.selection_repo.clone(),
     )));
 
@@ -616,8 +619,8 @@ pub async fn build_cli_app_runtime(
         deps.search.search_index.clone(),
         deps.search.search_key_derivation.clone(),
         deps.search.search_pipeline.clone(),
-        deps.clipboard.clipboard_entry_repo.clone(),
-        deps.clipboard.representation_repo.clone(),
+        deps.clipboard.entry_ports.list.clone(),
+        deps.clipboard.representation_ports.list_for_event.clone(),
         deps.clipboard.selection_repo.clone(),
     )));
 
@@ -636,10 +639,15 @@ pub async fn build_cli_app_runtime(
         settings: deps.settings.clone(),
         clipboard_sync: assembly.clipboard_sync.clone(),
         blob_transfer: assembly.blob.clone(),
-        entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+        entry_repo: deps.clipboard.entry_ports.get.clone(),
         event_repo: wired.clipboard_event_reader_repo.clone(),
         selection_repo: deps.clipboard.selection_repo.clone(),
-        representation_repo: deps.clipboard.representation_repo.clone(),
+        representation_repo: deps.clipboard.representation_ports.get.clone(),
+        rep_processing_repo: deps
+            .clipboard
+            .representation_ports
+            .update_processing_result
+            .clone(),
         payload_resolver: deps.clipboard.payload_resolver.clone(),
         blob_store: deps.storage.blob_store.clone(),
         entry_delivery_repo: wired.entry_delivery_repo.clone(),
