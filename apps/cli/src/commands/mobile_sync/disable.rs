@@ -1,4 +1,4 @@
-//! `uniclip mobile-sync disable` — one-shot disable: master switch off + LAN off.
+//! `uniclip mobile disable` — one-shot disable: master switch off + LAN off.
 //!
 //! Routes through daemon HTTP endpoints (P5-2b ADR).
 
@@ -18,7 +18,7 @@ struct DisableResult {
 }
 
 pub async fn run(json: bool, verbose: bool) -> i32 {
-    let ctx = match shared::enter("Mobile-sync disable", json, verbose).await {
+    let ctx = match shared::enter("Mobile disable", json, verbose).await {
         Ok(c) => c,
         Err(code) => return code,
     };
@@ -46,7 +46,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 ui::info(
                     "note",
                     "Paired devices remain registered. Revoke individually with \
-                     `uniclip mobile-sync revoke`.",
+                     `uniclip mobile revoke`.",
                 );
                 if out.restart_required {
                     ui::warn(shared::restart_hint());

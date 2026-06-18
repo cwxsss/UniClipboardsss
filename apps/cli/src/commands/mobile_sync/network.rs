@@ -1,4 +1,4 @@
-//! `uniclip mobile-sync network ...` — LAN listener advanced configuration.
+//! `uniclip mobile network ...` — LAN listener advanced configuration.
 //!
 //! Routes through daemon HTTP endpoints (P5-2b ADR).
 
@@ -129,7 +129,7 @@ async fn set(
     verbose: bool,
 ) -> i32 {
     if !json {
-        ui::header("Mobile-sync network set");
+        ui::header("Mobile network set");
     }
 
     // Translate the advertise choice into the two persisted fields.
@@ -226,7 +226,7 @@ struct DisableResult {
 }
 
 async fn off(json: bool, verbose: bool) -> i32 {
-    let ctx = match shared::enter("Mobile-sync network off", json, verbose).await {
+    let ctx = match shared::enter("Mobile network off", json, verbose).await {
         Ok(c) => c,
         Err(code) => return code,
     };
