@@ -21,7 +21,8 @@ use tracing::info;
 
 use uc_application::deps::{
     AppDeps, ClipboardEntryPorts, ClipboardPorts, ClipboardRepresentationPorts, DevicePorts,
-    FileTransferPorts, MobileSyncPorts, SearchPorts, SecurityPorts, StoragePorts, SystemPorts,
+    FileTransferPorts, MobileDevicePorts, MobileSyncPorts, SearchPorts, SecurityPorts,
+    StoragePorts, SystemPorts,
 };
 use uc_application::facade::HostEventEmitterPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
@@ -300,9 +301,10 @@ struct InfraLayer {
     // handing it to the publisher and use cases).
     file_transfer_store: Arc<crate::file_transfer_lifecycle::FileTransferEventStore>,
 
-    // Mobile sync 设备仓库 — `DieselMobileDeviceRepository`,跨重启 / 跨进
-    // 程稳定的已登记设备列表(替代之前进程内 HashMap)。
-    mobile_device_repo: Arc<dyn uc_core::ports::MobileDeviceRepositoryPort>,
+    // Mobile sync 设备仓库 — narrow device-repository intent ports, all backed
+    // by one `DieselMobileDeviceRepository` (cross-restart / cross-process
+    // stable; coerced per ports.md §8.3).
+    mobile_device_ports: MobileDevicePorts,
 
     // Mobile sync LAN 端点状态(单例) — daemon listener 启停时调 inherent
     // `set` / `clear` 写它,facade 通过 `MobileSyncEndpointInfoPort` 只读。
@@ -539,9 +541,22 @@ fn create_infra_layer(
         uc_infra::file_transfer::SqliteReceiverFileTransferStore::new(Arc::clone(&db_executor)),
     );
 
-    let mobile_device_repo: Arc<dyn uc_core::ports::MobileDeviceRepositoryPort> = Arc::new(
-        DieselMobileDeviceRepository::new(Arc::clone(&db_executor), MobileDeviceRowMapper),
-    );
+    // Keep a concrete Arc so it can be coerced into each narrow device-repo
+    // intent port. The adapter implements the aggregate MobileDeviceStore and
+    // each intent-port impl delegates to it (ports.md §8.3); only the narrow
+    // ports are exposed upward.
+    let mobile_device_repo_arc = Arc::new(DieselMobileDeviceRepository::new(
+        Arc::clone(&db_executor),
+        MobileDeviceRowMapper,
+    ));
+    let mobile_device_ports = MobileDevicePorts {
+        find_by_username: mobile_device_repo_arc.clone(),
+        find_by_id: mobile_device_repo_arc.clone(),
+        list: mobile_device_repo_arc.clone(),
+        save: mobile_device_repo_arc.clone(),
+        delete: mobile_device_repo_arc.clone(),
+        update: mobile_device_repo_arc,
+    };
 
     // endpoint_info adapter:进程级单例,daemon LAN listener 与 facade 各持
     // 一份 Arc 共享同一份内存。整个进程只跑一次 `wire_dependencies`,这里
@@ -574,7 +589,7 @@ fn create_infra_layer(
         hash,
         file_transfer,
         file_transfer_store,
-        mobile_device_repo,
+        mobile_device_ports,
         mobile_sync_endpoint_info,
     };
 
@@ -1164,7 +1179,7 @@ pub fn wire_dependencies(
             search_pipeline,
         },
         mobile_sync: MobileSyncPorts {
-            device_repo: infra.mobile_device_repo,
+            devices: infra.mobile_device_ports,
             endpoint_info: infra.mobile_sync_endpoint_info.clone(),
         },
         analytics: crate::analytics::build_analytics_sink(),
