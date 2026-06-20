@@ -48,6 +48,13 @@ async-trait = "0.1"
 # is the cheapest stdlib-friendly choice that keeps `space_id` un-recoverable
 # from the published hash (schema doc §6.3).
 sha2 = "0.10"
+# pending_import reads the boot-time staging contract owned by
+# uc-infra::config_migration::staging — the `pending-import.json` marker
+# (`PendingImportMarker`) and `secrets.json` (`SecretsFile`) are public
+# `Deserialize` types, so the composition root decodes them with serde_json
+# while applying a staged config import before the db pool / secure storage are
+# consumed.
+serde_json = "1"
 
 [features]
 # Forward to uc-platform; activated by uc-tauri/dev-profile for `bun tauri:build:dev`.
@@ -58,10 +65,6 @@ tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 mockall = "0.13"
 wiremock = "0.6"
-# tests/slice*_e2e.rs use serde_json::json! to build wiremock response bodies
-# and serde_json::from_slice to decode pairing request bodies. Production
-# composition root never serializes to JSON itself — keep this in dev only.
-serde_json = "1"
 # Slice 2 Phase 2 · T12 — clipboard e2e packs plaintext as `Bytes`
 # for `ClipboardSyncFacade::dispatch_entry`.
 bytes = "1.7"
@@ -70,6 +73,10 @@ bytes = "1.7"
 # elide BIND_LOCK 守护（production build 不启用此 feature，结构性防御依然
 # 生效）。见 uc-infra/src/network/iroh/node.rs BIND_LOCK doc comment。
 uc-infra = { path = "../uc-infra", features = ["test-util"] }
+# config-migration round-trip e2e seeds a real sqlite db with a probe row and
+# reads it back from the landed snapshot. Version/features mirror uc-infra so no
+# extra build cost is introduced (same compiled diesel + bundled libsqlite3).
+diesel = { version = "2.3.5", features = ["sqlite", "r2d2"] }
 
 [lints]
 workspace = true

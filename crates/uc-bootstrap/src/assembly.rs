@@ -24,11 +24,11 @@ use uc_application::deps::{
     FileTransferPorts, MobileDevicePorts, MobileSyncPorts, SearchPorts, SecurityPorts,
     SpaceAccessPorts, StoragePorts, SystemPorts,
 };
-use uc_application::facade::HostEventEmitterPort;
+use uc_application::facade::{ConfigMigrationDeps, ConfigMigrationFacade, HostEventEmitterPort};
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
-use uc_core::ids::RepresentationId;
+use uc_core::ids::{ProfileId, RepresentationId};
 use uc_core::ports::blob::BlobReferenceRepositoryPort;
 use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
@@ -42,6 +42,7 @@ use uc_infra::clipboard::{
     InfraThumbnailGenerator, RepresentationCache, SpoolManager,
 };
 use uc_infra::config::ClipboardStorageConfig;
+use uc_infra::config_migration::{ConfigMigrationAdapter, ConfigMigrationPaths};
 use uc_infra::db::executor::DieselSqliteExecutor;
 use uc_infra::db::mappers::{
     blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
@@ -61,6 +62,7 @@ use uc_infra::db::repositories::{
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
+use uc_infra::network::iroh::IrohIdentityStore;
 use uc_infra::search::{HkdfSearchKeyDerivation, SearchPipeline, SqliteSearchIndex};
 use uc_infra::security::{
     Argon2PinHasher, Blake3Hasher, DecryptingClipboardRepresentationRepository, EncryptedBlobStore,
@@ -92,6 +94,9 @@ pub enum WiringError {
 
     #[error("Secure storage initialization failed: {0}")]
     SecureStorageInit(String),
+
+    #[error("Applying staged config import failed: {0}")]
+    PendingImport(String),
 
     #[error("Clipboard initialization failed: {0}")]
     ClipboardInit(String),
@@ -953,19 +958,55 @@ pub fn wire_dependencies(
     let paths = resolve_app_paths(&platform_dirs, config)?;
 
     let db_path = paths.db_path;
-    let db_pool = create_db_pool(&db_path)?;
-    // Clone pool before infra layer consumes it — search bundle needs the same pool.
-    let db_pool_for_search = db_pool.clone();
-
     let vault_path = paths.vault_dir;
     let settings_path = paths.settings_path;
     let app_data_root = paths.app_data_root_dir.clone();
 
+    // Secure storage is created *before* the db pool so a staged config import
+    // (gap-3 bridge) can land secrets into the same backend the rest of wiring
+    // uses, and copy the db snapshot into place, before anything opens it.
     let secure_storage =
         uc_platform::secure_storage::create_default_secure_storage_in_app_data_root(
             app_data_root.clone(),
         )
         .map_err(|e| WiringError::SecureStorageInit(e.to_string()))?;
+
+    // iroh device-identity directory (0600 files, profile-suffixed). Computed
+    // here — ahead of the db pool — because the staged-import bridge migrates
+    // the identity as *files* into this dir (not as a secret), and the
+    // config-migration adapter below reads its fingerprint from this same dir.
+    // `apply_profile_suffix` matches the `iroh-blobs` rule for multi-profile dev
+    // isolation; `create_dir_all` ensures `FileSecureStorage::with_base_dir`
+    // never fails on first identity write.
+    let iroh_identity_dir = apply_profile_suffix(app_data_root.join("iroh-identity"));
+    std::fs::create_dir_all(&iroh_identity_dir).map_err(|e| {
+        WiringError::SecureStorageInit(format!(
+            "failed to create iroh-identity dir {}: {e}",
+            iroh_identity_dir.display()
+        ))
+    })?;
+
+    // Apply a pending staged import (if `pending-import.json` exists): write
+    // staged secrets into the current backend, then copy db/vault/settings and
+    // the iroh-identity files into their live locations, then clear staging.
+    // Idempotent and crash-safe (secrets-first); the common no-marker case is a
+    // cheap existence check.
+    crate::pending_import::apply_pending_import(
+        &app_data_root,
+        &db_path,
+        &vault_path,
+        &settings_path,
+        &iroh_identity_dir,
+        &secure_storage,
+    )
+    .map_err(|e| WiringError::PendingImport(e.to_string()))?;
+
+    let db_pool = create_db_pool(&db_path)?;
+    // Clone pool before infra layer consumes it — search bundle needs the same pool.
+    let db_pool_for_search = db_pool.clone();
+    // Config-migration export produces a consistent db snapshot via `VACUUM INTO`
+    // off its own pooled connection; clone before infra consumes the pool.
+    let db_pool_for_config_migration = db_pool.clone();
 
     let infra = create_infra_layer(
         db_pool,
@@ -1094,17 +1135,11 @@ pub fn wire_dependencies(
     let clipboard_event_reader_repo_for_wiring = Arc::clone(&infra.clipboard_event_reader_repo);
     let iroh_blob_store_dir_for_wiring =
         apply_profile_suffix(paths.app_data_root_dir.join("iroh-blobs"));
-    // iroh 设备身份的文件存储目录。先 mkdir,确保 `FileSecureStorage::with_base_dir`
-    // 在首次写身份时不会因目录不存在而失败。`apply_profile_suffix` 与
-    // `iroh_blob_store_dir` 用同一规则,保证 multi-profile dev 隔离。
-    let iroh_identity_dir_for_wiring =
-        apply_profile_suffix(paths.app_data_root_dir.join("iroh-identity"));
-    std::fs::create_dir_all(&iroh_identity_dir_for_wiring).map_err(|e| {
-        WiringError::SecureStorageInit(format!(
-            "failed to create iroh-identity dir {}: {e}",
-            iroh_identity_dir_for_wiring.display()
-        ))
-    })?;
+    // iroh device-identity dir was resolved (and created) once near the
+    // secure-storage setup above so the staged-import bridge could migrate its
+    // files. Reuse that single resolution here for `WiredDependencies` /
+    // space_setup instead of recomputing it (avoids divergence).
+    let iroh_identity_dir_for_wiring = iroh_identity_dir.clone();
 
     // Switch-space migration ports for SpaceSetupFacade. Same WiredDependencies
     // bypass pattern as `peer_addr_repo` — consumer lives in uc-application.
@@ -1132,6 +1167,58 @@ pub fn wire_dependencies(
         ));
 
     let system_clipboard_wiring = platform.system_clipboard_wiring;
+
+    // Whole-installation configuration migration (export / import preview /
+    // staged import). The adapter is assembled here because its inputs
+    // (`secure_storage`, the db pool, the local-identity port, the resolved
+    // filesystem layout, and the current profile) are only available in this
+    // synchronous wiring context — `build_app_facade_from_deps` sees only the
+    // abstract `AppDeps` ports and cannot reconstruct them. The composed facade
+    // therefore travels on `AppDeps` (see its `config_migration` field).
+    //
+    // The `local_identity` port reads the device fingerprint for the export
+    // manifest. The iroh identity lives in the *file* backend under
+    // `iroh_identity_dir` (a 0600 file dir), NOT in `platform.secure_storage`
+    // (Credential Manager / Keychain on installer builds). So bind it to a
+    // `FileSecureStorage` pointed at that dir — otherwise the fingerprint would
+    // read empty. This is best-effort (a missing identity only blanks the
+    // manifest fingerprint), so no `MigratingSecureStorage` is needed.
+    // `migratable_secret_keys` still enumerates the KEK from the current backend.
+    // Single-user mode pins the profile to `default` (the same value
+    // `DefaultCurrentProfile` and the pending-import bridge use); resolving it
+    // through the async `CurrentProfilePort` is impossible from this sync path.
+    let config_migration_profile = ProfileId::from("default");
+    let config_migration_local_identity: Arc<dyn LocalIdentityPort> =
+        Arc::new(IrohIdentityStore::new(
+            Arc::new(
+                uc_platform::file_secure_storage::FileSecureStorage::with_base_dir(
+                    iroh_identity_dir.clone(),
+                ),
+            ),
+            Arc::new(Sha256IdentityFingerprintFactory),
+        ));
+    let config_migration_adapter = Arc::new(ConfigMigrationAdapter::new(
+        platform.secure_storage.clone(),
+        db_pool_for_config_migration,
+        config_migration_local_identity,
+        infra.clock.clone(),
+        ConfigMigrationPaths {
+            db_path: db_path.clone(),
+            vault_dir: vault_path.clone(),
+            settings_path: settings_path.clone(),
+            app_data_root: app_data_root.clone(),
+            iroh_identity_dir: iroh_identity_dir.clone(),
+        },
+        config_migration_profile,
+    ));
+    let config_migration = Arc::new(ConfigMigrationFacade::new(ConfigMigrationDeps {
+        export_bundle: config_migration_adapter.clone(),
+        preview_import: config_migration_adapter.clone(),
+        stage_import: config_migration_adapter.clone(),
+        setup_status: infra.setup_status.clone(),
+        is_unlocked: space_access_ports.is_unlocked.clone(),
+    }));
+
     let deps = AppDeps {
         clipboard: ClipboardPorts {
             clipboard: platform.clipboard,
@@ -1164,6 +1251,7 @@ pub fn wire_dependencies(
             member_repo: infra.member_repo,
         },
         setup_status: infra.setup_status,
+        config_migration,
         app_version_state: infra.app_version_state,
         first_sync_state: infra.first_sync_state,
         storage: StoragePorts {
