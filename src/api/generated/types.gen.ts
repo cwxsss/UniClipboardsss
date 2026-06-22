@@ -407,8 +407,8 @@ export type DispatchOutcomeEnvelope = {
  */
 export type DispatchOutcomeResponse = {
     atMs: number;
-    contentHash: string;
     perTarget: Array<PerTargetOutcomeDto>;
+    snapshotHash: string;
     totalAccepted: number;
     totalDuplicate: number;
     totalErrored: number;
@@ -2558,12 +2558,14 @@ export type SyncSettingsDto = {
     autoSync: boolean;
     contentTypes: ContentTypesDto;
     syncFrequency: SyncFrequencyDto;
+    syncOnRestore: boolean;
 };
 
 export type SyncSettingsPatchDto = {
     autoSync?: boolean | null;
     contentTypes?: ContentTypesPatchDto | null;
     syncFrequency?: SyncFrequencyDto | null;
+    syncOnRestore?: boolean | null;
 };
 
 export type ThemeDto = 'light' | 'dark' | 'system';

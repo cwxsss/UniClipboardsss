@@ -20,8 +20,13 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use uc_application::clipboard_write::ClipboardWriteCoordinator;
-use uc_application::facade::{AppFacade, AppPaths, FileTransferFacade};
+use uc_application::clipboard_write::{
+    ClipboardWriteCoordinator, RestoreBroadcastRequest, RestoreBroadcastTrigger,
+};
+use uc_application::facade::{
+    ActiveClipboardReconcileDeps, ActiveClipboardReconcileFacade, AppFacade, AppPaths,
+    ClipboardSnapshotDeps, FileTransferFacade,
+};
 use uc_bootstrap::assembly::WiredDependencies;
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 
@@ -130,11 +135,20 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         let file_transfer_lifecycle = background.file_transfer_lifecycle.clone();
         let file_transfer_facade = wired.file_transfer_facade.clone();
 
+        // Restore-broadcast channel (issue #1017 PR4): the restore use cases
+        // (inside the AppFacade below) hold the sender; the active-clipboard
+        // facade's worker (spawned in `start_in_process` once space setup is
+        // assembled) drains the receiver.
+        let (restore_broadcast_tx, restore_broadcast_rx) =
+            tokio::sync::mpsc::unbounded_channel::<RestoreBroadcastRequest>();
+        let restore_broadcast_trigger = RestoreBroadcastTrigger::new(restore_broadcast_tx);
+
         let runtime = DaemonProcessRuntime::new(
             wired.deps.clone(),
             storage_paths.clone(),
             clipboard_write_coordinator.clone(),
             file_transfer_facade.clone(),
+            restore_broadcast_trigger,
         );
         let app_facade = Arc::clone(runtime.app_facade());
 
@@ -156,7 +170,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
             file_transfer_lifecycle,
             file_transfer_facade,
         };
-        let handle = start_in_process(run_mode, app_facade, handles).await?;
+        let handle = start_in_process(run_mode, app_facade, handles, restore_broadcast_rx).await?;
         let result = handle.wait().await;
         drop(runtime);
         result
@@ -197,6 +211,7 @@ pub async fn start_in_process(
     run_mode: DaemonRunMode,
     app_facade: Arc<AppFacade>,
     handles: ProcessRuntimeHandles,
+    restore_broadcast_rx: tokio::sync::mpsc::UnboundedReceiver<RestoreBroadcastRequest>,
 ) -> anyhow::Result<DaemonHandle> {
     let cancel = CancellationToken::new();
 
@@ -224,10 +239,44 @@ pub async fn start_in_process(
         }
     }
 
+    // Reconcile the persisted active-clipboard register against the live OS
+    // clipboard before any active-clipboard worker is spawned (issue #1017 PR6,
+    // D8). The persisted row is only an untrusted baseline: if it no longer
+    // matches the OS clipboard it is cleared, so a stale activation can neither
+    // win LWW nor be broadcast by the inbound / peer-online-resync workers that
+    // `build_daemon_bootstrap_assembly` spawns next. Best-effort: never writes
+    // the OS clipboard, never broadcasts, never fails startup.
+    {
+        let clipboard = &handles.wired.deps.clipboard;
+        let reconcile = ActiveClipboardReconcileFacade::new(ActiveClipboardReconcileDeps {
+            system_clipboard: clipboard.system_clipboard.clone(),
+            load_register: clipboard.active_register_load.clone(),
+            reset_register: clipboard.active_register_reset.clone(),
+            // Reconstruction ports so reconcile can rebuild the stored entry and
+            // compare it like-for-like against the live OS read.
+            snapshot: ClipboardSnapshotDeps {
+                entry_repo: clipboard.entry_ports.get.clone(),
+                selection_repo: clipboard.selection_repo.clone(),
+                representation_repo: clipboard.representation_ports.get.clone(),
+                rep_processing_repo: clipboard
+                    .representation_ports
+                    .update_processing_result
+                    .clone(),
+                payload_resolver: clipboard.payload_resolver.clone(),
+                blob_store: handles.wired.deps.storage.blob_store.clone(),
+            },
+        });
+        let outcome = reconcile.reconcile().await;
+        tracing::debug!(
+            ?outcome,
+            "active-clipboard register startup reconcile complete"
+        );
+    }
+
     let DaemonBootstrapAssembly {
         clipboard_sync_facade,
         blob_transfer_facade,
-        space_setup_assembly,
+        mut space_setup_assembly,
         mobile_sync_endpoint_info,
     } = build_daemon_bootstrap_assembly(&handles.wired).await?;
 
@@ -238,6 +287,12 @@ pub async fn start_in_process(
         file_transfer_lifecycle,
         file_transfer_facade,
     } = handles;
+
+    // Start draining the restore-broadcast channel now that the
+    // active-clipboard facade exists. The worker debounces + gates restores
+    // before announcing them to peers; its lifetime is tracked by the
+    // assembly so shutdown aborts it (issue #1017 PR4).
+    space_setup_assembly.attach_restore_broadcast(restore_broadcast_rx);
 
     let deps = wired.deps;
     let host_event_bus = wired.host_event_bus;
@@ -293,7 +348,7 @@ pub async fn start_in_process(
             clipboard_outbound: runtime_workers.clipboard_outbound.clone(),
             lan_lifecycle: Arc::clone(&mobile_lan_lifecycle)
                 as Arc<dyn uc_core::ports::MobileLanLifecyclePort>,
-            clipboard_restore: app_facade.clipboard_restore.clone(),
+            clipboard_write_coordinator: clipboard_write_coordinator.clone(),
         });
 
     app_facade.install_daemon_lifecycle(lifecycle_facades);

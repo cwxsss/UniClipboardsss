@@ -181,6 +181,11 @@ pub struct WiredDependencies {
     /// Slice 3 Phase 1:iroh-blobs store 目录。由 `SpaceSetupAssembly`
     /// 装配 iroh blob handler 时使用。
     pub iroh_blob_store_dir: PathBuf,
+    /// Local cache directory for inbound blob materialization. The
+    /// active-clipboard pull store (issue #1017 PR8) reuses the same inbound
+    /// apply pipeline as the bulk path, whose blob materializer fetches
+    /// free-standing files into `<file_cache_dir>/iroh-blobs/<entry_id>/`.
+    pub file_cache_dir: PathBuf,
     /// iroh 长期 Ed25519 设备身份的文件存储根目录(`<app_data>/iroh-identity[_<profile>]/`)。
     ///
     /// 与 KEK 的系统 keychain 隔离:iroh 设备身份是网络栈的"我是哪台机器"
@@ -232,6 +237,14 @@ pub struct WiredDependencies {
     /// `<app_data>/analytics/`, sharing storage with the global
     /// EventContext set up by `compose_event_context`.
     pub analytics_facade: Arc<dyn AnalyticsFacade>,
+    /// Single write boundary for all programmatic clipboard writes (the same
+    /// `Arc` carried on [`BackgroundRuntimeDeps`]). Threaded onto
+    /// `WiredDependencies` so `build_space_setup_assembly` can hand the
+    /// active-clipboard inbound worker the *shared* coordinator — a separate
+    /// instance would split the circuit-breaker + origin-guard state from the
+    /// restore/capture write path.
+    pub clipboard_write_coordinator:
+        Arc<uc_application::clipboard_write::ClipboardWriteCoordinator>,
 }
 
 /// Infrastructure layer implementations
@@ -248,6 +261,11 @@ struct InfraLayer {
     entry_delivery_repo: Arc<dyn uc_core::ports::EntryDeliveryRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationStore>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
+
+    // Cross-device active-clipboard LWW register (single-row table).
+    active_clipboard_register: Arc<dyn uc_core::ports::clipboard::AdvanceActiveClipboardPort>,
+    active_clipboard_register_load: Arc<dyn uc_core::ports::clipboard::LoadActiveClipboardPort>,
+    active_clipboard_register_reset: Arc<dyn uc_core::ports::clipboard::ResetActiveClipboardPort>,
 
     // Membership repository (phase 4b PR-4 起成为唯一持久成员层).
     member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
@@ -433,7 +451,8 @@ fn create_infra_layer(
         save: entry_repo_arc.clone(),
         touch: entry_repo_arc.clone(),
         delete: entry_repo_arc.clone(),
-        find_by_snapshot_hash: entry_repo_arc,
+        find_by_snapshot_hash: entry_repo_arc.clone(),
+        get_snapshot_hash: entry_repo_arc,
     };
 
     let event_row_mapper = ClipboardEventRowMapper;
@@ -530,6 +549,23 @@ fn create_infra_layer(
     let selection_repo_impl = DieselClipboardSelectionRepository::new(Arc::clone(&db_executor));
     let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = Arc::new(selection_repo_impl);
 
+    // One Diesel adapter implements the write (advance / SQL CAS), read (load),
+    // and reset (unconditional clear) sides of the single-row register; coerce
+    // it into each so every consumer holds only its slice (ports.md §8.3).
+    let active_clipboard_register_impl = Arc::new(
+        uc_infra::db::repositories::DieselActiveClipboardRegisterRepository::new(Arc::clone(
+            &db_executor,
+        )),
+    );
+    let active_clipboard_register: Arc<dyn uc_core::ports::clipboard::AdvanceActiveClipboardPort> =
+        Arc::clone(&active_clipboard_register_impl) as _;
+    let active_clipboard_register_load: Arc<
+        dyn uc_core::ports::clipboard::LoadActiveClipboardPort,
+    > = Arc::clone(&active_clipboard_register_impl) as _;
+    let active_clipboard_register_reset: Arc<
+        dyn uc_core::ports::clipboard::ResetActiveClipboardPort,
+    > = active_clipboard_register_impl as _;
+
     // One Diesel adapter implements all five receiver-side projection intent
     // ports; coerce it into each so every consumer holds only its slice.
     let file_transfer_adapter =
@@ -576,6 +612,9 @@ fn create_infra_layer(
         entry_delivery_repo,
         representation_repo,
         selection_repo,
+        active_clipboard_register,
+        active_clipboard_register_load,
+        active_clipboard_register_reset,
         member_repo,
         trusted_peer_repo,
         peer_addr_repo,
@@ -1235,6 +1274,9 @@ pub fn wire_dependencies(
             clipboard_change_origin,
             worker_tx,
             payload_resolver,
+            active_register: infra.active_clipboard_register,
+            active_register_load: infra.active_clipboard_register_load,
+            active_register_reset: infra.active_clipboard_register_reset,
         },
         security: SecurityPorts {
             current_profile: platform.current_profile,
@@ -1338,6 +1380,8 @@ pub fn wire_dependencies(
         host_event_bus,
         file_transfer_facade,
         analytics_facade,
+        clipboard_write_coordinator: Arc::clone(&clipboard_write_coordinator),
+        file_cache_dir: paths.file_cache_dir.clone(),
     };
     let background = BackgroundRuntimeDeps {
         representation_cache,

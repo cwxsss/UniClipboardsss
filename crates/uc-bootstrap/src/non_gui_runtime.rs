@@ -13,20 +13,21 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use uc_application::clipboard_capture::CaptureClipboardUseCase;
+use uc_application::clipboard_write::ClipboardWriteCoordinator;
 use uc_application::deps::AppDeps;
 use uc_application::facade::settings::{RelayDiagnosticPort, RelayProbeError, RelayProbeReport};
 use uc_application::facade::space_setup::SpaceSetupFacade;
 use uc_application::facade::{
-    AppFacade, AppFacadeParts, AppPaths, BlobTransferFacade, ClipboardHistoryFacade,
-    ClipboardHistoryFacadeDeps, ClipboardOutboundDeps, ClipboardOutboundFacade,
-    ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, ClipboardSyncFacade, DeviceFacade,
-    DiagnosticsFacade, DiagnosticsFacadeDeps, EmitError, EncryptionFacade, EncryptionFacadeDeps,
-    FileTransferFacade, HostEvent, HostEventBus, HostEventEmitterPort, InMemoryLifecycleStatus,
-    IncomingMobileBuffer, LifecycleFacade, LifecycleFacadeDeps, LifecycleStatusGateway,
-    MemberRosterFacade, MobileSyncFacade, MobileSyncFacadeDeps, MobileSyncSnapshotPorts,
-    ResourceFacade, ResourceFacadeDeps, SearchCoordinator, SearchCoordinatorDeps, SearchFacade,
-    SearchFacadeDeps, SettingsFacade, StorageFacade, StorageFacadeDeps, UpgradeFacade,
-    UpgradeFacadeDeps,
+    ActiveClipboardFacade, AppFacade, AppFacadeParts, AppPaths, BlobTransferFacade,
+    ClipboardHistoryFacade, ClipboardHistoryFacadeDeps, ClipboardOutboundDeps,
+    ClipboardOutboundFacade, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps,
+    ClipboardSyncFacade, DeviceFacade, DiagnosticsFacade, DiagnosticsFacadeDeps, EmitError,
+    EncryptionFacade, EncryptionFacadeDeps, FileTransferFacade, HostEvent, HostEventBus,
+    HostEventEmitterPort, InMemoryLifecycleStatus, IncomingMobileBuffer, LifecycleFacade,
+    LifecycleFacadeDeps, LifecycleStatusGateway, MemberRosterFacade, MobileSyncFacade,
+    MobileSyncFacadeDeps, MobileSyncSnapshotPorts, ResourceFacade, ResourceFacadeDeps,
+    SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade,
+    StorageFacade, StorageFacadeDeps, UpgradeFacade, UpgradeFacadeDeps,
 };
 use uc_application::{
     ApplyInboundClipboardUseCase, InboundCapture as ApplyInboundCapture,
@@ -172,6 +173,10 @@ pub fn build_non_gui_bundle(
 pub struct ClipboardRestoreAssembly {
     pub write_coordinator: Arc<uc_application::clipboard_write::ClipboardWriteCoordinator>,
     pub integration_mode: ClipboardIntegrationMode,
+    /// Optional restore-broadcast trigger (issue #1017). When present, a
+    /// successful restore announces the activation to peers (gated). `None`
+    /// for entry points without a network broadcast stack (CLI fallback).
+    pub restore_broadcast: Option<uc_application::clipboard_write::RestoreBroadcastTrigger>,
 }
 
 // ── mobile_sync PUT 路径的 fallback adapters ────────────────────────────
@@ -209,11 +214,14 @@ fn build_fallback_apply_inbound(deps: &AppDeps) -> Arc<ApplyInboundClipboardUseC
     ));
     let capture: Arc<dyn ApplyInboundCapture> = capture_uc;
     let write: Arc<dyn ApplyInboundWrite> = Arc::new(NoopInboundWrite);
-    Arc::new(ApplyInboundClipboardUseCase::new(
-        deps.clipboard.entry_ports.find_by_snapshot_hash.clone(),
-        capture,
-        write,
-    ))
+    Arc::new(
+        ApplyInboundClipboardUseCase::new(
+            deps.clipboard.entry_ports.find_by_snapshot_hash.clone(),
+            capture,
+            write,
+        )
+        .with_active_register(deps.clipboard.active_register.clone()),
+    )
 }
 
 /// `InboundWrite` 的 NoOp 实装。
@@ -260,7 +268,13 @@ pub fn build_mobile_sync_facade(
     // CLI fallback / 不接 P2P 出站的入口传 `None`, mobile 上传仅落地本机,
     // 不传播。
     clipboard_outbound: Option<Arc<ClipboardOutboundFacade>>,
-    clipboard_restore: Option<Arc<ClipboardRestoreFacade>>,
+    // Mobile-activation announce (issue #1017 PR7): the shared write boundary
+    // (re-write OS on a duplicate hit) + the active-clipboard facade (advance
+    // register + send-gated 0xC3 fan-out). daemon 装配两者都传 `Some(...)`;
+    // CLI fallback / 不接 active-clipboard 的入口传 `None`,移动端上传仅落地
+    // 本机, 不向对端收敛。两者必须同时 `Some` 才装 announce adapter。
+    write_coordinator: Option<Arc<ClipboardWriteCoordinator>>,
+    active_clipboard: Option<Arc<ActiveClipboardFacade>>,
 ) -> Arc<MobileSyncFacade> {
     Arc::new(MobileSyncFacade::new(MobileSyncFacadeDeps {
         clock: deps.system.clock.clone(),
@@ -290,7 +304,8 @@ pub fn build_mobile_sync_facade(
         // sink。bootstrap 已把 GatedAnalyticsSink 包好，runtime 切换 noop / 真
         // 实 sink 是 sink 自身职责，不在此装配。
         analytics: deps.analytics.clone(),
-        clipboard_restore,
+        write_coordinator,
+        active_clipboard,
     }))
 }
 
@@ -391,7 +406,10 @@ pub fn build_app_facade_from_deps(
                 // `Some(clipboard_outbound)` 装入完整 fan-out 能力(含文件 blob
                 // 发布)。
                 None,
-                // CLI fallback 不接 restore (无 OS clipboard 写能力)。
+                // CLI fallback 不接 active-clipboard 收敛 (无 OS clipboard 写
+                // 边界 / 无 active-clipboard facade) —— write_coordinator +
+                // active_clipboard 都留 None, mobile 上传仅落地本机。
+                None,
                 None,
             )
         });
@@ -404,6 +422,9 @@ pub fn build_app_facade_from_deps(
             payload_resolver: deps.clipboard.payload_resolver.clone(),
             blob_store: deps.storage.blob_store.clone(),
             clock: deps.system.clock.clone(),
+            device_identity: deps.device.device_identity.clone(),
+            active_register: deps.clipboard.active_register.clone(),
+            restore_broadcast: restore.restore_broadcast,
             write_coordinator: restore.write_coordinator,
             integration_mode: restore.integration_mode,
         }))

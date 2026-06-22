@@ -43,25 +43,35 @@ use tracing::debug;
 /// 最终状态,不会因为正好落在 cooldown 窗口里被丢掉。
 const TRANSLATOR_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(200);
 
+use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::facade::{
-    BlobTransferDeps, BlobTransferFacade, ClipboardSyncDeps, ClipboardSyncFacade, HostEvent,
-    HostEventBus, IngestHandle, MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps,
-    SpaceSetupFacade, TransferHostEvent,
+    build_active_clipboard_pull_serve_port, ActiveClipboardDeps, ActiveClipboardFacade,
+    ActiveClipboardHandle, ActiveClipboardPeerOnlineResyncHandle,
+    ActiveClipboardPullServeFacadeDeps, ActiveClipboardRestoreBroadcastHandle,
+    ActiveClipboardResurfaceHandle, BlobTransferDeps, BlobTransferFacade, ClipboardSnapshotDeps,
+    ClipboardSyncDeps, ClipboardSyncFacade, HostEvent, HostEventBus, InboundClipboardApplyPort,
+    IngestHandle, MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps, SpaceSetupFacade,
+    TransferHostEvent,
 };
 use uc_application::proof::HmacProofAdapter;
+use uc_application::{
+    ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
+    InboundWrite as ApplyInboundWrite,
+};
 use uc_core::file_transfer::{
     FileTransferCancellationReason, FileTransferDirection, OutboundProgressStatus,
 };
 use uc_core::ports::blob::{BlobReferenceRepositoryPort, BlobTransferPort};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::{
-    ClipboardDispatchPort, ClipboardReceiverPort, ConnectionChannelPort, LocalIdentityPort,
-    PresencePort,
+    ActiveClipboardDispatchPort, ActiveClipboardReceiverPort, ClipboardDispatchPort,
+    ClipboardReceiverPort, ConnectionChannelPort, LocalIdentityPort, PresencePort,
 };
 use uc_infra::network::iroh::transfer_progress_adapter::InboundProgressEvent;
 use uc_infra::network::iroh::{
-    BlobHandlers, ClipboardHandlers, IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError,
-    TransferProgressHandlers, IDENTITY_STORE_KEY,
+    ActiveClipboardHandlers, ActiveClipboardPullHandlers, BlobHandlers, ClipboardHandlers,
+    IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError, TransferProgressHandlers,
+    IDENTITY_STORE_KEY,
 };
 // Re-exported so external callers can parametrise the assembly without
 // having to `use uc_infra` themselves.
@@ -102,6 +112,20 @@ pub struct SpaceSetupAssembly {
     /// 也需要直接订阅事件流,所以这里再 clone 一份对外暴露,避免门面层
     /// 多包一道 subscribe 转发。
     pub presence: Arc<dyn PresencePort>,
+    /// Inbound active-clipboard state stream. The 0xC3 accept handler is
+    /// installed on the shared iroh node during assembly so the ALPN is
+    /// reachable; this port exposes the broadcast of inbound observations for
+    /// a downstream consumer to drive register convergence. Held here as the
+    /// single subscription seam, mirroring how `clipboard_sync` owns the bulk
+    /// inbound stream.
+    pub active_clipboard_receiver: Arc<dyn ActiveClipboardReceiverPort>,
+    /// Active-clipboard register convergence facade (issue #1017). Owns the
+    /// inbound 0xC3 state use case (lifetime tracked by
+    /// `active_clipboard_inbound_handle`) and the outbound peer-online resync
+    /// worker (`active_clipboard_peer_online_resync_handle`). Held so the
+    /// remaining outbound-origination edit-site (restore broadcast) can reach
+    /// it via `attach_restore_broadcast`.
+    pub active_clipboard: Arc<ActiveClipboardFacade>,
     /// The shared iroh node. Held privately so callers can't bind a second
     /// node or install additional handlers after `spawn` — that would
     /// fragment peer identity (§"共用网络栈" decision, Slice 1 planning).
@@ -112,6 +136,24 @@ pub struct SpaceSetupAssembly {
     /// 出 `RecvError::Closed`)。`shutdown` 显式 abort 一次走在 router
     /// 关闭之前,加快进程退出。
     ingest_handle: IngestHandle,
+    /// Inbound active-clipboard (0xC3) convergence loop handle (issue #1017).
+    /// Same lifetime as `ingest_handle`: exits on its own when the
+    /// active-clipboard receiver adapter's broadcast senders drop at router
+    /// shutdown; `shutdown` aborts it explicitly first.
+    active_clipboard_inbound_handle: ActiveClipboardHandle,
+    /// Outbound peer-online resync worker handle (issue #1017 PR5). Subscribes
+    /// to presence transitions and resends the current register to peers that
+    /// come back online (debounced ~1.5s, full outbound gate). Spawned at
+    /// assembly; exits on its own when the presence subscription closes at
+    /// router shutdown, and `shutdown` aborts it explicitly first.
+    active_clipboard_peer_online_resync_handle: ActiveClipboardPeerOnlineResyncHandle,
+    /// Outbound restore-broadcast worker handle (issue #1017 PR4). Attached by
+    /// the daemon entry point once the restore-broadcast channel is wired
+    /// (the sender side lives in the restore use cases). `None` for entry
+    /// points that don't originate restore broadcasts. Aborted on shutdown
+    /// like the inbound handle.
+    active_clipboard_resurface_handle: ActiveClipboardResurfaceHandle,
+    restore_broadcast_handle: Option<ActiveClipboardRestoreBroadcastHandle>,
     /// 反向"传输进度"翻译 worker 的 join handle。订阅
     /// `IrohTransferProgressAdapter` 的 inbound 流,将每帧 progress 翻译
     /// 为 `HostEvent::Transfer { direction: Sending, ... }` 并发到 emitter。
@@ -120,6 +162,21 @@ pub struct SpaceSetupAssembly {
 }
 
 impl SpaceSetupAssembly {
+    /// Spawn the outbound restore-broadcast worker on the active-clipboard
+    /// facade and retain its handle for coordinated teardown. `rx` is the
+    /// receiving end of the restore-broadcast channel whose sender the restore
+    /// use cases hold. Call once, after assembly, from the entry point that
+    /// created the channel.
+    pub fn attach_restore_broadcast(
+        &mut self,
+        rx: tokio::sync::mpsc::UnboundedReceiver<
+            uc_application::clipboard_write::RestoreBroadcastRequest,
+        >,
+    ) {
+        let handle = self.active_clipboard.spawn_restore_broadcast(rx);
+        self.restore_broadcast_handle = Some(handle);
+    }
+
     /// Coordinated teardown. Order matters:
     ///
     /// 1. [`SpaceSetupFacade::on_shutdown`] aborts the sponsor-side inbound
@@ -136,6 +193,12 @@ impl SpaceSetupAssembly {
         // same when `self` falls out of scope; the explicit call only
         // shaves a tick off teardown latency and makes ordering obvious.
         self.ingest_handle.abort();
+        self.active_clipboard_inbound_handle.abort();
+        self.active_clipboard_peer_online_resync_handle.abort();
+        self.active_clipboard_resurface_handle.abort();
+        if let Some(handle) = &self.restore_broadcast_handle {
+            handle.abort();
+        }
         self.outbound_progress_translator.abort();
         self.facade.on_shutdown().await;
         self.iroh_node.shutdown().await;
@@ -242,6 +305,21 @@ fn spawn_outbound_progress_translator(
             }
         }
     })
+}
+
+/// No-op `InboundWrite` for the active-clipboard pull store path (issue #1017
+/// PR8). The store only needs to persist a pulled entry; the active-clipboard
+/// convergence tail (`spawn_write_then_converge`) does the authoritative OS
+/// write whose success couples the register advance + re-broadcast. Doing an
+/// OS write here too would be a redundant best-effort write before the real
+/// one, so this returns `Ok(())` without touching the OS clipboard.
+struct NoopPullStoreWrite;
+
+#[async_trait::async_trait]
+impl ApplyInboundWrite for NoopPullStoreWrite {
+    async fn write(&self, _snapshot: uc_core::SystemClipboardSnapshot) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Failures during Slice 1 assembly. Bootstrap callers surface these as
@@ -355,6 +433,23 @@ pub async fn build_space_setup_assembly(
     );
     let clipboard_dispatch: Arc<dyn ClipboardDispatchPort> = clipboard_dispatch;
     let clipboard_receiver: Arc<dyn ClipboardReceiverPort> = clipboard_receiver;
+    // Install the active-clipboard state ALPN (0xC3) as an independent
+    // sibling on the same node. A lone `.accept()` deeper in the node would
+    // not be reachable from here — the handler has to be installed on this
+    // builder before `spawn()`, so the seam is threaded through here. Produces
+    // both the inbound receiver (broadcast of peer observations) and the
+    // outbound dispatch port (re-broadcast of converged state), sharing the
+    // endpoint + peer_addr_repo like install_clipboard.
+    let ActiveClipboardHandlers {
+        dispatch: active_clipboard_dispatch,
+        receiver: active_clipboard_receiver,
+    } = builder.install_active_clipboard(
+        Arc::clone(&wired.peer_addr_repo),
+        Arc::clone(&deps.device.member_repo),
+        Arc::clone(&deps.security.fingerprint),
+    );
+    let active_clipboard_dispatch: Arc<dyn ActiveClipboardDispatchPort> = active_clipboard_dispatch;
+    let active_clipboard_receiver: Arc<dyn ActiveClipboardReceiverPort> = active_clipboard_receiver;
     // 反向"传输进度"通道(receiver → sender):同一节点装第四个 ALPN。
     // 装在 install_blobs 之前是为了让 `IrohTransferProgressAdapter` 的
     // reporter 能在 BlobTransferDeps 构造时一起接入 facade。inbound_events
@@ -373,6 +468,61 @@ pub async fn build_space_setup_assembly(
     let BlobHandlers { blob_transfer } = builder
         .install_blobs(wired.iroh_blob_store_dir.clone())
         .await?;
+
+    // Build the blob transfer facade now (before `spawn()`) so the
+    // active-clipboard pull serve port can reuse it: the serve side publishes
+    // large/image reps + free-standing files through it, re-issuing tickets
+    // pinned to this device (D3). All of its deps are already available.
+    let blob = Arc::new(BlobTransferFacade::new(BlobTransferDeps {
+        hash: Arc::clone(&deps.system.hash),
+        blob_transfer: Arc::clone(&blob_transfer),
+        blob_reference: Arc::clone(&wired.blob_reference_repo),
+        // 共享同一根 host_event_bus —— daemon bootstrap 注册自己的 WS
+        // emitter 之后, fetch_blob 自动开始向前端 fan-out progress 事件;
+        // CLI 装配走同一 bus 但只挂着 logging emitter, 事件被静默打 log,
+        // 不影响行为。状态切换(transferring / completed / failed)走
+        // file_transfer lifecycle, 由 `FileTransferHostEventPublisher`
+        // 统一发出。
+        host_event_emitter: Some(Arc::clone(&wired.host_event_bus)),
+        // 反向进度上报端口:接收端 fetch 进度通过新 ALPN 推回 sender。
+        outbound_progress_reporter: Some(outbound_progress_reporter),
+        // file_transfer lifecycle facade —— iroh 路径每次 fetch 通过它落
+        // `Started` / `Completed` / `Failed` 事件,让 file_transfer 表的
+        // 状态投影与 sweep / reconcile workers 真正发挥作用。
+        file_transfer: Some(Arc::clone(&wired.file_transfer_facade)),
+    }));
+
+    // Install the active-clipboard pull ALPN (0xC2, issue #1017 PR8) as a
+    // further independent sibling, before `spawn()`. The serve port reuses the
+    // resend crypto chain (reconstruct → publish blobs re-signing self-pinned
+    // tickets, D3 → encode V3 → encrypt, D4); the returned client port drives
+    // the inbound seam's on-demand pull.
+    let active_clipboard_pull_serve =
+        build_active_clipboard_pull_serve_port(ActiveClipboardPullServeFacadeDeps {
+            entry_lookup: Arc::clone(&deps.clipboard.entry_ports.find_by_snapshot_hash),
+            settings: Arc::clone(&deps.settings),
+            transfer_cipher: Arc::clone(&deps.security.transfer_cipher),
+            blob_publisher: Arc::clone(&blob),
+            snapshot: ClipboardSnapshotDeps {
+                entry_repo: Arc::clone(&deps.clipboard.entry_ports.get),
+                selection_repo: Arc::clone(&deps.clipboard.selection_repo),
+                representation_repo: Arc::clone(&deps.clipboard.representation_ports.get),
+                rep_processing_repo: Arc::clone(
+                    &deps.clipboard.representation_ports.update_processing_result,
+                ),
+                payload_resolver: Arc::clone(&deps.clipboard.payload_resolver),
+                blob_store: Arc::clone(&deps.storage.blob_store),
+            },
+        });
+    let ActiveClipboardPullHandlers {
+        client: active_clipboard_pull_client,
+    } = builder.install_active_clipboard_pull(
+        Arc::clone(&wired.peer_addr_repo),
+        Arc::clone(&deps.device.member_repo),
+        Arc::clone(&deps.security.fingerprint),
+        active_clipboard_pull_serve,
+    );
+
     let iroh_node = builder.spawn();
 
     // Translator worker:从 sender 端的反向通道收 InboundProgressEvent,
@@ -474,24 +624,93 @@ pub async fn build_space_setup_assembly(
         host_event_bus: Arc::clone(&wired.host_event_bus),
     }));
     let ingest_handle = clipboard_sync.spawn_ingest_loop();
-    let blob = Arc::new(BlobTransferFacade::new(BlobTransferDeps {
-        hash: Arc::clone(&deps.system.hash),
-        blob_transfer: Arc::clone(&blob_transfer),
-        blob_reference: Arc::clone(&wired.blob_reference_repo),
-        // 共享同一根 host_event_bus —— daemon bootstrap 注册自己的 WS
-        // emitter 之后, fetch_blob 自动开始向前端 fan-out progress 事件;
-        // CLI 装配走同一 bus 但只挂着 logging emitter, 事件被静默打 log,
-        // 不影响行为。状态切换(transferring / completed / failed)走
-        // file_transfer lifecycle, 由 `FileTransferHostEventPublisher`
-        // 统一发出。
-        host_event_emitter: Some(Arc::clone(&wired.host_event_bus)),
-        // 反向进度上报端口:接收端 fetch 进度通过新 ALPN 推回 sender。
-        outbound_progress_reporter: Some(outbound_progress_reporter),
-        // file_transfer lifecycle facade —— iroh 路径每次 fetch 通过它落
-        // `Started` / `Completed` / `Failed` 事件,让 file_transfer 表的
-        // 状态投影与 sweep / reconcile workers 真正发挥作用。
-        file_transfer: Some(Arc::clone(&wired.file_transfer_facade)),
+
+    // Store-only inbound apply path for pulled content (issue #1017 PR8). It
+    // reuses the same inbound pipeline the bulk 0xC1 path uses (decode V3 →
+    // materialize blobs → capture) but **without** `with_active_register`: the
+    // active-clipboard convergence tail owns the register advance (coupled to
+    // OS-write success), so a capture-commit advance here would race it with a
+    // newer reconstruct timestamp and starve the correct same-key advance.
+    let pull_store_capture = Arc::new(CaptureClipboardUseCase::new(
+        Arc::clone(&deps.clipboard.entry_ports.save),
+        Arc::clone(&deps.clipboard.entry_ports.touch),
+        Arc::clone(&deps.clipboard.entry_ports.find_by_snapshot_hash),
+        Arc::clone(&deps.clipboard.clipboard_event_repo),
+        Arc::clone(&deps.clipboard.representation_policy),
+        Arc::clone(&deps.clipboard.representation_normalizer),
+        Arc::clone(&deps.device.device_identity),
+        Arc::clone(&deps.clipboard.representation_cache),
+        Arc::clone(&deps.clipboard.spool_queue),
+        Arc::clone(&deps.storage.blob_writer),
+        Arc::clone(&deps.analytics),
+    ));
+    let pull_store_materializer = Arc::new(FileCacheBlobMaterializer::new(
+        blob.clone() as Arc<dyn uc_application::InboundBlobFetcher>,
+        wired.file_cache_dir.clone(),
+    ));
+    let pull_store_apply: Arc<dyn InboundClipboardApplyPort> = Arc::new(
+        ApplyInboundClipboardUseCase::new(
+            Arc::clone(&deps.clipboard.entry_ports.find_by_snapshot_hash),
+            pull_store_capture as Arc<dyn ApplyInboundCapture>,
+            // The store only persists; the convergence tail does the
+            // authoritative OS write, so this path's OS write is a no-op.
+            Arc::new(NoopPullStoreWrite) as Arc<dyn ApplyInboundWrite>,
+        )
+        .with_blob_materializer(pull_store_materializer)
+        .with_host_event_emitter(Arc::clone(&wired.host_event_bus)),
+    );
+
+    // Active-clipboard register convergence (issue #1017). The inbound worker
+    // subscribes to the 0xC3 receiver and drives the LWW register: locked /
+    // gate / LWW checks → reconstruct the locally-held content → detached OS
+    // write → on success advance the register + re-broadcast the same-key
+    // state to allowed peers. Spawned here with `ingest_handle`'s lifetime —
+    // the loop exits when the receiver adapter's broadcast senders drop on
+    // router shutdown, and `SpaceSetupAssembly::shutdown` aborts it explicitly
+    // to shave a tick off teardown.
+    let active_clipboard = Arc::new(ActiveClipboardFacade::new(ActiveClipboardDeps {
+        receiver: Arc::clone(&active_clipboard_receiver),
+        dispatch: active_clipboard_dispatch,
+        is_unlocked: Arc::clone(&deps.security.space_access_ports.is_unlocked),
+        load_register: Arc::clone(&deps.clipboard.active_register_load),
+        advance_register: Arc::clone(&deps.clipboard.active_register),
+        member_repo: Arc::clone(&deps.device.member_repo),
+        peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
+        presence: Arc::clone(&presence),
+        entry_lookup: Arc::clone(&deps.clipboard.entry_ports.find_by_snapshot_hash),
+        coordinator: Arc::clone(&wired.clipboard_write_coordinator),
+        clock: Arc::clone(&deps.system.clock),
+        device_identity: Arc::clone(&deps.device.device_identity),
+        settings: Arc::clone(&deps.settings),
+        snapshot: ClipboardSnapshotDeps {
+            entry_repo: Arc::clone(&deps.clipboard.entry_ports.get),
+            selection_repo: Arc::clone(&deps.clipboard.selection_repo),
+            representation_repo: Arc::clone(&deps.clipboard.representation_ports.get),
+            rep_processing_repo: Arc::clone(
+                &deps.clipboard.representation_ports.update_processing_result,
+            ),
+            payload_resolver: Arc::clone(&deps.clipboard.payload_resolver),
+            blob_store: Arc::clone(&deps.storage.blob_store),
+        },
+        // On-demand pull subsystem (PR8): when the observed content is not held
+        // locally, pull it from the reporting peer (10s deadline), decrypt +
+        // store it via the store-only apply path, then converge.
+        transfer_cipher: Arc::clone(&deps.security.transfer_cipher),
+        pull_client: Some(active_clipboard_pull_client),
+        pull_apply: Some(pull_store_apply),
+        touch_entry: Arc::clone(&deps.clipboard.entry_ports.touch),
+        host_event_emitter: Arc::clone(&wired.host_event_bus),
+        resurface_clock: Arc::clone(&deps.system.clock),
     }));
+    let active_clipboard_inbound_handle = active_clipboard.spawn_inbound_loop();
+    // Peer-online resync (issue #1017 PR5, D10). Subscribes to presence and,
+    // when a directly-connected peer comes online, resends this device's
+    // current register to it (debounced ~1.5s) so both ends converge under
+    // LWW. Symmetric: the peer runs the same worker and resends to us, no ack.
+    // Same lifetime as the inbound loop — exits when the presence
+    // subscription closes at router shutdown; aborted explicitly in `shutdown`.
+    let active_clipboard_peer_online_resync_handle = active_clipboard.spawn_peer_online_resync();
+    let active_clipboard_resurface_handle = active_clipboard.spawn_resurface_worker();
 
     info!("Slice 2/3 SpaceSetupFacade + MemberRosterFacade + ClipboardSyncFacade + BlobTransferFacade assembled");
     Ok(SpaceSetupAssembly {
@@ -502,8 +721,14 @@ pub async fn build_space_setup_assembly(
         blob_transfer,
         blob_reference: Arc::clone(&wired.blob_reference_repo),
         presence,
+        active_clipboard,
+        active_clipboard_receiver,
         iroh_node,
         ingest_handle,
+        active_clipboard_inbound_handle,
+        active_clipboard_peer_online_resync_handle,
+        active_clipboard_resurface_handle,
+        restore_broadcast_handle: None,
         outbound_progress_translator,
     })
 }
