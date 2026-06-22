@@ -376,8 +376,11 @@ export type DebugStatusEnvelope = {
 
 /**
  * Failure reason. i18n key convention: `delivery.failureReason.<variant>`.
+ *
+ * Note: "peer offline" is NOT in this enum — it is represented as
+ * `EntryDeliveryStatusDto::Unreachable` (a separate status, not a failure).
  */
-export type DeliveryFailureReasonDto = 'offline' | 'localPolicy' | 'peerRejected' | 'io' | 'internal';
+export type DeliveryFailureReasonDto = 'localPolicy' | 'peerRejected' | 'io' | 'internal';
 
 /**
  * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
@@ -503,6 +506,8 @@ export type EntryDeliveryStatusDto = {
     tag: 'delivered';
 } | {
     tag: 'duplicate';
+} | {
+    tag: 'unreachable';
 } | {
     reason: DeliveryFailureReasonDto;
     tag: 'failed';
