@@ -274,6 +274,7 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                 // guards against a future caller holding another reference.
                 let dispatch_snapshot =
                     Arc::try_unwrap(outbound_snapshot).unwrap_or_else(|shared| (*shared).clone());
+
                 let clipboard_outbound = Arc::clone(&self.clipboard_outbound);
                 let entry_id_for_outbound = entry_id.to_string();
                 tokio::spawn(
