@@ -427,7 +427,7 @@ pub struct SyncDeferredProps {
 
 #### transport_type 口径（实际连接路径 + unknown）
 
-`transport_type` 反映**本次发送实际走的连接路径**，由 dispatch adapter 在
+`transport_type` 反映 **本次发送实际走的连接路径**，由 dispatch adapter 在
 send/ack settle 后探测 iroh `remote_info` 的活跃 QUIC path 得出（IP 直连记
 `p2p_direct`，走 relay 记 `relay`）。在引入本口径之前该字段被硬编码为
 `p2p_direct`，PostHog 上的 transport 分布全是假数据；上线后才产生真实数据，
@@ -442,7 +442,7 @@ send/ack settle 后探测 iroh `remote_info` 的活跃 QUIC path 得出（IP 直
 - `first_clipboard_sync_succeeded` / `first_file_sync_succeeded`：同 succeeded，
   携带真实路径。
 
-`unknown` 表示**采集时刻无法解析出活跃路径**：dial 在建立任何 path 之前就失败
+`unknown` 表示 **采集时刻无法解析出活跃路径**：dial 在建立任何 path 之前就失败
 （归 `Offline`），或快照恰好取在握手 / path 切换中途。它与具体的 `p2p_direct`
 / `relay` 区分开，让 `unknown` 占比成为可见的独立切片——占比偏高是连接探测时
 机的数据质量信号，值得排查，而不是被静默并入 `p2p_direct`。

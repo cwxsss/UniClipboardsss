@@ -1,13 +1,11 @@
 //! # Non-GUI Runtime Helpers
 //!
-//! Provides [`LoggingHostEventEmitter`] and [`build_non_gui_bundle()`] for
-//! non-GUI entry points (daemon, CLI). D16-2 retired the legacy `CoreRuntime`
-//! wrapper; helpers here now return a flat [`NonGuiBundle`] that the caller
-//! destructures into independent locals.
+//! Provides [`build_non_gui_bundle()`] for non-GUI entry points (daemon, CLI).
+//! D16-2 retired the legacy `CoreRuntime` wrapper; helpers here now return a
+//! flat [`NonGuiBundle`] that the caller destructures into independent locals.
 //!
-//! [`LoggingHostEventEmitter`] logs event type names via `tracing::debug!`
-//! without printing inner payloads (which may contain sensitive data like
-//! clipboard content, pairing codes, or file paths).
+//! The default host-event transport for these processes,
+//! `LoggingHostEventEmitter`, lives in `crate::observability::host_event`.
 
 use std::sync::Arc;
 
@@ -21,13 +19,12 @@ use uc_application::facade::{
     ActiveClipboardFacade, AppFacade, AppFacadeParts, AppPaths, BlobTransferFacade,
     ClipboardHistoryFacade, ClipboardHistoryFacadeDeps, ClipboardOutboundDeps,
     ClipboardOutboundFacade, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps,
-    ClipboardSyncFacade, DeviceFacade, DiagnosticsFacade, DiagnosticsFacadeDeps, EmitError,
-    EncryptionFacade, EncryptionFacadeDeps, FileTransferFacade, HostEvent, HostEventBus,
-    HostEventEmitterPort, InMemoryLifecycleStatus, IncomingMobileBuffer, LifecycleFacade,
-    LifecycleFacadeDeps, LifecycleStatusGateway, MemberRosterFacade, MobileSyncFacade,
-    MobileSyncFacadeDeps, MobileSyncSnapshotPorts, ResourceFacade, ResourceFacadeDeps,
-    SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade,
-    StorageFacade, StorageFacadeDeps, UpgradeFacade, UpgradeFacadeDeps,
+    ClipboardSyncFacade, DeviceFacade, DiagnosticsFacade, DiagnosticsFacadeDeps, EncryptionFacade,
+    EncryptionFacadeDeps, FileTransferFacade, InMemoryLifecycleStatus, IncomingMobileBuffer,
+    LifecycleFacade, LifecycleFacadeDeps, LifecycleStatusGateway, MemberRosterFacade,
+    MobileSyncFacade, MobileSyncFacadeDeps, MobileSyncSnapshotPorts, ResourceFacade,
+    ResourceFacadeDeps, SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps,
+    SettingsFacade, StorageFacade, StorageFacadeDeps, UpgradeFacade, UpgradeFacadeDeps,
 };
 use uc_application::{
     ApplyInboundClipboardUseCase, InboundCapture as ApplyInboundCapture,
@@ -41,40 +38,8 @@ use uc_infra::mobile_sync::{
 };
 use uc_infra::network::iroh::{IrohRelayProbeAdapter, IrohRelayProbeError, IrohRelayProbeReport};
 
-use crate::assembly::get_storage_paths;
-use crate::space_setup::{build_space_setup_assembly, SpaceSetupAssembly};
-use crate::task_registry::TaskRegistry;
-
-// ---------------------------------------------------------------------------
-// LoggingHostEventEmitter
-// ---------------------------------------------------------------------------
-
-/// Event emitter that logs event type names via `tracing::debug!`.
-///
-/// Always returns `Ok(())` — infallible by design. Inner event payloads are
-/// NOT logged because they may contain sensitive data (clipboard content,
-/// pairing codes/fingerprints, transfer file paths).
-pub struct LoggingHostEventEmitter;
-
-impl HostEventEmitterPort for LoggingHostEventEmitter {
-    fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
-        match event {
-            HostEvent::Clipboard(_) => {
-                tracing::debug!(event_type = "clipboard", "host event (non-gui)");
-            }
-            HostEvent::Transfer(_) => {
-                tracing::debug!(event_type = "transfer", "host event (non-gui)");
-            }
-            HostEvent::Delivery(_) => {
-                // delivery 事件不包含明文,可直接打 event_type;后续如要细化
-                // 子状态(Delivered / Failed)再扩展,目前只关心"事件经过了
-                // emitter"这一可观测性事实。
-                tracing::debug!(event_type = "delivery", "host event (non-gui)");
-            }
-        }
-        Ok(())
-    }
-}
+use crate::layer::paths::get_storage_paths;
+use crate::subsystem::sync_engine::{build_sync_engine_assembly, SyncEngineAssembly};
 
 // ---------------------------------------------------------------------------
 // IrohRelayDiagnosticAdapter
@@ -123,47 +88,6 @@ fn map_relay_probe_error(err: IrohRelayProbeError) -> RelayProbeError {
         IrohRelayProbeError::Timeout => RelayProbeError::Timeout,
         IrohRelayProbeError::Other(msg) => RelayProbeError::Other(msg),
     }
-}
-
-// ---------------------------------------------------------------------------
-// NonGuiBundle
-// ---------------------------------------------------------------------------
-
-/// Flat bundle of bootstrap-built handles consumed by daemon entry points.
-///
-/// Replaces the retired `CoreRuntime` wrapper. Composition-root code
-/// destructures the bundle into independent locals (`deps`, `task_registry`,
-/// `lifecycle_status`, etc.) and feeds them into facade construction.
-pub struct NonGuiBundle {
-    pub deps: AppDeps,
-    pub storage_paths: AppPaths,
-    pub host_event_bus: Arc<HostEventBus>,
-    pub lifecycle_status: Arc<dyn LifecycleStatusGateway>,
-    pub task_registry: Arc<TaskRegistry>,
-    pub clipboard_integration_mode: ClipboardIntegrationMode,
-}
-
-/// Construct a [`NonGuiBundle`] for non-GUI entry points with an explicit
-/// shared host-event bus. Daemon uses this so its `DaemonApiEventEmitter`
-/// can be registered on the bus after construction.
-pub fn build_non_gui_bundle(
-    deps: AppDeps,
-    storage_paths: AppPaths,
-    host_event_bus: Arc<HostEventBus>,
-) -> anyhow::Result<NonGuiBundle> {
-    let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
-        Arc::new(InMemoryLifecycleStatus::new());
-    let task_registry = Arc::new(TaskRegistry::new());
-    let clipboard_integration_mode = resolve_clipboard_integration_mode();
-
-    Ok(NonGuiBundle {
-        deps,
-        storage_paths,
-        host_event_bus,
-        lifecycle_status,
-        task_registry,
-        clipboard_integration_mode,
-    })
 }
 
 /// `ClipboardRestoreFacade` 的可选装配输入。
@@ -533,54 +457,13 @@ pub fn build_app_facade_from_deps(
     }))
 }
 
-/// Construct an [`AppFacade`] for CLI entry points.
-///
-/// CLI commands need a stable application-layer
-/// entry point per `uc-application/AGENTS.md` §11.4. This helper assembles
-/// the facade subset CLI cares about (encryption / settings / device /
-/// clipboard_history / search / lifecycle / storage / resource) and leaves
-/// the daemon-only fields (`space_setup`, `member_roster`, `clipboard_restore`)
-/// as `None`.
-///
-/// # Arguments
-///
-/// * `log_profile` — Log profile override (e.g., `Some(LogProfile::Cli)`).
-pub async fn build_cli_app_facade(
-    log_profile: Option<uc_observability::LogProfile>,
-) -> anyhow::Result<Arc<AppFacade>> {
-    let ctx = crate::builders::build_cli_context_with_profile(log_profile).await?;
-    let storage_paths = crate::assembly::get_storage_paths(&ctx.config)?;
-    let deps = ctx.deps;
-    let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
-        Arc::new(InMemoryLifecycleStatus::new());
-
-    let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
-        deps.search.search_index.clone(),
-        deps.search.search_key_derivation.clone(),
-        deps.search.search_pipeline.clone(),
-        deps.clipboard.entry_ports.list.clone(),
-        deps.clipboard.representation_ports.list_for_event.clone(),
-        deps.clipboard.selection_repo.clone(),
-    )));
-
-    Ok(build_app_facade_from_deps(
-        &deps,
-        &storage_paths,
-        lifecycle_status,
-        AppFacadeAssemblyOptions {
-            search_coordinator: Some(search_coordinator),
-            ..Default::default()
-        },
-    ))
-}
-
 /// CLI 进程内 application runtime。
 ///
 /// 业务命令只通过 `app_facade` 进入 application 层。需要 iroh 网络栈的
-/// 命令持有 `space_setup_assembly`,退出前调用 [`Self::shutdown`] 收口。
+/// 命令持有 `sync_engine_assembly`,退出前调用 [`Self::shutdown`] 收口。
 pub struct CliAppRuntime {
     pub app_facade: Arc<AppFacade>,
-    space_setup_assembly: Option<SpaceSetupAssembly>,
+    sync_engine_assembly: Option<SyncEngineAssembly>,
 }
 
 impl CliAppRuntime {
@@ -589,7 +472,7 @@ impl CliAppRuntime {
     }
 
     pub async fn shutdown(mut self) {
-        if let Some(assembly) = self.space_setup_assembly.take() {
+        if let Some(assembly) = self.sync_engine_assembly.take() {
             assembly.shutdown().await;
         }
     }
@@ -600,7 +483,7 @@ impl CliAppRuntime {
 pub async fn build_cli_app_runtime(
     log_profile: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<CliAppRuntime> {
-    let (config, wired) = crate::builders::build_cli_wiring_context(log_profile).await?;
+    let (config, wired) = crate::entrypoint::cli::build_cli_wiring_context(log_profile).await?;
     let storage_paths = get_storage_paths(&config)?;
 
     // Phase 94 NETSET-03：与 builders.rs 同模式（D-B1 选项 B 现状决策 — 见
@@ -618,7 +501,7 @@ pub async fn build_cli_app_runtime(
 
     // 【checker BLOCKER 4 — 单一取反点铁律】见 builders.rs 同处注释。
     // 不在此处内联 `let disable_relays = !allow_relay_fallback;`。
-    let mut iroh_config = crate::network_policy::relay_policy_to_iroh_config(
+    let mut iroh_config = crate::wiring::network_policy::relay_policy_to_iroh_config(
         allow_relay_fallback,
         allow_overlay_network_addrs,
         custom_relay_urls,
@@ -626,9 +509,9 @@ pub async fn build_cli_app_runtime(
         None,
     );
     // #900：从 env 读取直连可达性（固定 UDP 端口 + 广播公网地址）并写入。
-    // 必须在 `build_space_setup_assembly`（首次 endpoint 快照/配对交换）之前。
-    crate::network_policy::apply_iroh_direct_reachability_from_env(&mut iroh_config);
-    crate::network_policy::apply_congestion_controller_from_env(&mut iroh_config);
+    // 必须在 `build_sync_engine_assembly`（首次 endpoint 快照/配对交换）之前。
+    crate::wiring::network_policy::apply_iroh_direct_reachability_from_env(&mut iroh_config);
+    crate::wiring::network_policy::apply_congestion_controller_from_env(&mut iroh_config);
 
     tracing::info!(
         target: "settings.network",
@@ -645,9 +528,10 @@ pub async fn build_cli_app_runtime(
         iroh_config.congestion_controller,
     );
 
-    let assembly = build_space_setup_assembly(&wired, iroh_config)
-        .await
-        .map_err(|err| anyhow::anyhow!("failed to bind iroh endpoint: {err}"))?;
+    let assembly =
+        build_sync_engine_assembly(&wired.deps, &wired.sync_engine, &wired.shared, iroh_config)
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to bind iroh endpoint: {err}"))?;
     let deps = &wired.deps;
 
     let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
@@ -677,7 +561,7 @@ pub async fn build_cli_app_runtime(
         clipboard_sync: assembly.clipboard_sync.clone(),
         blob_transfer: assembly.blob.clone(),
         entry_repo: deps.clipboard.entry_ports.get.clone(),
-        event_repo: wired.clipboard_event_reader_repo.clone(),
+        event_repo: wired.shared.clipboard_event_reader_repo.clone(),
         selection_repo: deps.clipboard.selection_repo.clone(),
         representation_repo: deps.clipboard.representation_ports.get.clone(),
         rep_processing_repo: deps
@@ -687,8 +571,8 @@ pub async fn build_cli_app_runtime(
             .clone(),
         payload_resolver: deps.clipboard.payload_resolver.clone(),
         blob_store: deps.storage.blob_store.clone(),
-        entry_delivery_repo: wired.entry_delivery_repo.clone(),
-        trusted_peer_repo: wired.trusted_peer_repo.clone(),
+        entry_delivery_repo: wired.shared.entry_delivery_repo.clone(),
+        trusted_peer_repo: wired.shared.trusted_peer_repo.clone(),
         device_identity: deps.device.device_identity.clone(),
     }));
 
@@ -703,7 +587,7 @@ pub async fn build_cli_app_runtime(
             blob_transfer: Some(assembly.blob.clone()),
             blob_transfer_port: Some(Arc::clone(&assembly.blob_transfer)),
             clipboard_outbound: Some(clipboard_outbound),
-            file_transfer: Some(wired.file_transfer_facade.clone()),
+            file_transfer: Some(wired.shared.file_transfer_facade.clone()),
             search_coordinator: Some(search_coordinator),
             mobile_sync_apply_inbound: Some(mobile_sync_apply_inbound),
             ..Default::default()
@@ -712,7 +596,7 @@ pub async fn build_cli_app_runtime(
 
     Ok(CliAppRuntime {
         app_facade,
-        space_setup_assembly: Some(assembly),
+        sync_engine_assembly: Some(assembly),
     })
 }
 

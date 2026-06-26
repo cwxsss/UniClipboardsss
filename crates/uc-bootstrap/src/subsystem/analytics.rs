@@ -52,7 +52,7 @@ use uc_observability::analytics::{
 /// 已经有 context 注册时本函数直接返回 `Ok(())`，**不**触发第二次
 /// `load_or_create_ids` / member_repo / setup_status 调用。ADR-008 P3-3 (B2'-3)
 /// 后 GUI 已是纯客户端、不再进程内拉起 daemon,也不调本函数
-/// （`build_gui_client_context` 不 compose EventContext）——每进程只剩一条触达
+/// （`uc_desktop::gui_wiring::build_gui_client_context` 不 compose EventContext）——每进程只剩一条触达
 /// 路径（daemon 进程的 `build_process_runtime` 调一次）。幂等 guard 保留作防御:
 /// 避免任何未来重复调用拿到"IDs 已存在"状态、把 `is_first_run` 翻成 `false`
 /// 而丢失"首次激活"信号。
@@ -234,7 +234,7 @@ async fn read_space_id_hash(deps: &AppDeps) -> Option<String> {
 /// key 注入策略与 SENTRY_DSN 同位（见 `uc-bootstrap/src/tracing.rs:155-170`）：
 /// 运行时 env 让 dev / 自部署用户能覆盖；`option_env!` 让 CI release build
 /// 把 secret 烤进 binary（终端用户机器上没人会设这个 env）。
-pub fn build_analytics_sink() -> Arc<dyn AnalyticsPort> {
+pub(crate) fn build_analytics_sink() -> Arc<dyn AnalyticsPort> {
     let inner: Arc<dyn AnalyticsPort> = if cfg!(debug_assertions) {
         Arc::new(StdoutSink::new())
     } else {
