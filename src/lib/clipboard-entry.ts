@@ -14,6 +14,12 @@ export interface ClipboardTextItem {
   /** Whether full content is available for detail fetch (preview is truncated). */
   has_detail: boolean
   size: number
+  /**
+   * Full character count of the text content. `display_text` is a preview capped
+   * at 200 chars, so the card's size label reads this when present and falls back
+   * to `display_text.length` otherwise. Absent when the count is unknown.
+   */
+  char_count?: number
 }
 
 export interface ClipboardImageItem {
@@ -52,9 +58,17 @@ export interface ClipboardLinkItem {
 
 export interface ClipboardCodeItem {
   code: string
+  /**
+   * Full character count of the code content. `code` may be a preview capped at
+   * 200 chars, so the card's size label reads this when present and falls back to
+   * `code.length` otherwise. Absent when the count is unknown.
+   */
+  char_count?: number
 }
 
 export type ClipboardEntryType = 'text' | 'image' | 'link' | 'code' | 'file' | 'unknown'
+
+export type ClipboardEntryTag = 'link' | 'code'
 
 export type ClipboardEntryContent =
   | ClipboardTextItem
@@ -67,6 +81,11 @@ export interface ClipboardEntry {
   id: string
   /** Display type; discriminates how `content` should be interpreted. */
   type: ClipboardEntryType
+  /**
+   * Cross-cutting presentation tags for textual content. `link` and `code` are
+   * tags over text, while `type` remains the renderer discriminator.
+   */
+  contentTags?: ClipboardEntryTag[]
   content: ClipboardEntryContent | null
   /** Capture timestamp (epoch ms). */
   createdAt: number
@@ -95,6 +114,7 @@ export interface ClipboardEntry {
 export interface DisplayClipboardItem {
   id: string
   type: ClipboardEntryType
+  contentTags?: ClipboardEntryTag[]
   content: ClipboardEntryContent | null
   activeTime: number
   isFavorited?: boolean

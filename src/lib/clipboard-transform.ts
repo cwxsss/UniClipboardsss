@@ -11,6 +11,7 @@ import type { SearchResultDto } from '@/api/daemon/search'
 import type {
   ClipboardEntry,
   ClipboardEntryContent,
+  ClipboardEntryTag,
   ClipboardEntryType,
   DisplayClipboardItem,
 } from '@/lib/clipboard-entry'
@@ -25,6 +26,10 @@ export function projectClipboardEntry(dto: ClipboardEntryDto): ClipboardEntry {
   const isFile = isFileContentType(dto.contentType)
   const isImage = !isFile && isImageContentType(dto.contentType)
   const isLink = !isFile && !isImage && (dto.linkUrls?.length ?? 0) > 0
+  const contentTags = entryTags({
+    contentType: dto.contentType,
+    hasLink: isLink,
+  })
 
   let type: ClipboardEntryType
   let content: ClipboardEntryContent | null
@@ -63,6 +68,7 @@ export function projectClipboardEntry(dto: ClipboardEntryDto): ClipboardEntry {
   return {
     id: dto.id,
     type,
+    ...(contentTags.length > 0 ? { contentTags } : {}),
     content,
     createdAt: dto.capturedAt,
     updatedAt: dto.updatedAt,
@@ -89,6 +95,25 @@ function searchContentTypeToDisplayType(ft: SearchResultDto['contentType']): Cli
   }
 }
 
+function entryTags({
+  contentType,
+  hasLink,
+  tags = [],
+}: {
+  contentType: string
+  hasLink: boolean
+  tags?: string[]
+}): ClipboardEntryTag[] {
+  const out: ClipboardEntryTag[] = []
+  if (hasLink || tags.includes('link')) out.push('link')
+  // Honor the backend `code` tag too: source-like plain text is tagged `code`
+  // server-side even though its MIME type is text/plain, so deriving `code` only
+  // from HTML would drop the code pill on those hits.
+  if (contentType === 'html' || contentType === 'text/html' || tags.includes('code'))
+    out.push('code')
+  return out
+}
+
 /**
  * Project a search hit into a renderable history card — the search-side analogue
  * of {@link projectClipboardEntry}, and the single place search DTOs become
@@ -104,6 +129,11 @@ export function searchResultToDisplayItem(r: SearchResultDto): DisplayClipboardI
   const hasLink = r.linkUrls.length > 0
   let type = searchContentTypeToDisplayType(r.contentType)
   if (type === 'text' && hasLink) type = 'link'
+  const contentTags = entryTags({
+    contentType: r.contentType,
+    hasLink,
+    tags: r.tags,
+  })
 
   let content: ClipboardEntryContent | null
   switch (type) {
@@ -118,11 +148,19 @@ export function searchResultToDisplayItem(r: SearchResultDto): DisplayClipboardI
       content = null
       break
     case 'code':
-      content = r.textPreview != null ? { code: r.textPreview } : null
+      content =
+        r.textPreview != null ? { code: r.textPreview, char_count: r.charCount ?? undefined } : null
       break
     case 'text':
       content =
-        r.textPreview != null ? { display_text: r.textPreview, has_detail: false, size: 0 } : null
+        r.textPreview != null
+          ? {
+              display_text: r.textPreview,
+              has_detail: false,
+              size: 0,
+              char_count: r.charCount ?? undefined,
+            }
+          : null
       break
     default:
       content = null
@@ -131,6 +169,7 @@ export function searchResultToDisplayItem(r: SearchResultDto): DisplayClipboardI
   return {
     id: r.entryId,
     type,
+    ...(contentTags.length > 0 ? { contentTags } : {}),
     content,
     activeTime: r.activeTimeMs,
     isFavorited: r.tags.includes('favorited'),
