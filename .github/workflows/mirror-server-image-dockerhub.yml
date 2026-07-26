@@ -8,7 +8,7 @@ on:
         description: 'Source image to mirror'
         required: true
         type: string
-        default: 'ghcr.io/uniclipboard/uniclipboard-server:v0.20.0-alpha.2'
+        default: 'ghcr.io/uniclipboard/uniclipboard-server:0.20.0-alpha.2'
       target_repo:
         description: 'Docker Hub repository'
         required: true
