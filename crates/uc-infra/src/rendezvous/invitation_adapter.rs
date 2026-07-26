@@ -18,7 +18,7 @@
 //! point the conditional disappears.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -307,15 +307,52 @@ impl RendezvousPairingInvitationAdapter {
 }
 
 /// Re-encode the cloud-channel JSON ticket as `hex(postcard(EndpointAddr))`
-/// for mDNS publishing. Compact enough to fit in a single TXT attribute
-/// (under 254 bytes total including the `tk=` key) for realistic
-/// EndpointAddrs (up to ~4 IPs + relay URL).
+/// for mDNS publishing. mDNS carries one preferred LAN IPv4 address only:
+/// cloud tickets retain the full address set for cross-network dialing.
 fn encode_mdns_ticket(ticket_json: &str) -> Result<String, String> {
     let addr: EndpointAddr = serde_json::from_str(ticket_json)
         .map_err(|err| format!("ticket JSON decode for mDNS re-encode: {err}"))?;
+    let addr = compact_mdns_endpoint_addr(addr)?;
     let bytes = postcard::to_allocvec(&addr)
         .map_err(|err| format!("ticket postcard encode for mDNS: {err}"))?;
-    Ok(hex::encode(bytes))
+    let ticket_hex = hex::encode(bytes);
+    const TXT_TICKET_KEY_LEN: usize = 2;
+    const TXT_ATTRIBUTE_MAX_LEN: usize = 254;
+    if TXT_TICKET_KEY_LEN + 1 + ticket_hex.len() >= TXT_ATTRIBUTE_MAX_LEN {
+        return Err(format!(
+            "mDNS ticket exceeds TXT attribute limit: {} bytes",
+            TXT_TICKET_KEY_LEN + 1 + ticket_hex.len()
+        ));
+    }
+    Ok(ticket_hex)
+}
+
+fn compact_mdns_endpoint_addr(addr: EndpointAddr) -> Result<EndpointAddr, String> {
+    let addr = filter_endpoint_addr(addr, false);
+    let EndpointAddr { id, addrs } = addr;
+    let selected = addrs
+        .into_iter()
+        .filter_map(|addr| match addr {
+            TransportAddr::Ip(socket) => match socket.ip() {
+                IpAddr::V4(ip) if ip.is_private() => Some((lan_v4_priority(ip), socket)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .min_by_key(|(priority, socket)| (*priority, *socket))
+        .map(|(_, socket)| TransportAddr::Ip(socket))
+        .ok_or_else(|| "mDNS ticket has no eligible LAN IPv4 address".to_string())?;
+    Ok(EndpointAddr::from_parts(id, [selected]))
+}
+
+fn lan_v4_priority(ip: Ipv4Addr) -> u8 {
+    let octets = ip.octets();
+    match octets {
+        [192, 168, _, _] => 0,
+        [10, _, _, _] => 1,
+        [172, 16..=31, _, _] => 2,
+        _ => 3,
+    }
 }
 
 /// Cloud-side errors we treat as "try LAN-only instead." Transport
@@ -730,6 +767,58 @@ mod tests {
                 "192.168.31.72:61743".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn encode_mdns_ticket_keeps_only_preferred_lan_ipv4() {
+        let addr = EndpointAddr::from_parts(
+            SecretKey::generate().public(),
+            [
+                TransportAddr::Ip("203.0.113.10:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("172.17.0.2:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("192.168.31.72:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("100.79.191.42:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("[fd7a:115c:a1e0::1]:42999".parse::<SocketAddr>().unwrap()),
+            ],
+        );
+        let cloud_ticket = serde_json::to_string(&addr).expect("serialize cloud ticket");
+
+        let ticket_hex = encode_mdns_ticket(&cloud_ticket).expect("encode mDNS ticket");
+        let ticket_bytes = hex::decode(&ticket_hex).expect("decode ticket hex");
+        let decoded: EndpointAddr = postcard::from_bytes(&ticket_bytes).expect("decode ticket");
+        let sockets: Vec<SocketAddr> = decoded.ip_addrs().copied().collect();
+
+        assert_eq!(
+            sockets,
+            vec!["192.168.31.72:42999".parse::<SocketAddr>().unwrap()]
+        );
+        assert!(
+            "tk=".len() + ticket_hex.len() < 254,
+            "mDNS TXT attribute must fit within the 254 byte limit"
+        );
+        assert_eq!(
+            serde_json::from_str::<EndpointAddr>(&cloud_ticket).expect("decode cloud ticket"),
+            addr,
+            "mDNS compaction must not mutate the cloud ticket"
+        );
+    }
+
+    #[test]
+    fn encode_mdns_ticket_rejects_addresses_without_lan_ipv4() {
+        let addr = EndpointAddr::from_parts(
+            SecretKey::generate().public(),
+            [
+                TransportAddr::Ip("203.0.113.10:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("100.79.191.42:42999".parse::<SocketAddr>().unwrap()),
+                TransportAddr::Ip("[fd7a:115c:a1e0::1]:42999".parse::<SocketAddr>().unwrap()),
+            ],
+        );
+        let cloud_ticket = serde_json::to_string(&addr).expect("serialize cloud ticket");
+
+        let err =
+            encode_mdns_ticket(&cloud_ticket).expect_err("mDNS ticket should require LAN IPv4");
+
+        assert!(err.contains("LAN IPv4"), "unexpected error: {err}");
     }
 
     #[tokio::test]
