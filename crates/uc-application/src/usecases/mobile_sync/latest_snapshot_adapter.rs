@@ -32,7 +32,10 @@
 //!   representation) → return `Ok(None)`; the facade translates it to
 //!   `NotFound` → route 404.
 //! - **An underlying port errors** (repo failure / blob unreadable / corrupt
-//!   payload_state) → return `Err(Resolution(...))`, route 500.
+//!   payload_state) → return `Err(Resolution(...))`, route 500. The sole
+//!   exception is an unreadable encrypted representation: it is historical
+//!   data that cannot be recovered with the current space key, so it is
+//!   treated as absent rather than breaking the mobile read path.
 //! - This policy matches the existing NotFound-vs-Port split in
 //!   [`crate::usecases::mobile_sync::get_latest_doc`] /
 //!   [`crate::usecases::mobile_sync::get_file`] — the use-case layer no longer
@@ -48,6 +51,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use uc_core::blob::ports::BlobReaderPort;
 use uc_core::clipboard::{
@@ -151,18 +155,31 @@ impl LatestClipboardSnapshotAdapter {
         Ok(Some((entry, decision, reference.snapshot_hash)))
     }
 
-    /// Step 3:按 (event_id, rep_id) 取出 representation,把 port 错统一翻成
-    /// `Resolution`。
+    /// Step 3: read the representation by `(event_id, rep_id)`. An unreadable
+    /// encrypted representation is treated as absent; all other port errors
+    /// become `Resolution`.
     async fn fetch_representation(
         &self,
         event_id: &EventId,
         rep_id: &RepresentationId,
     ) -> Result<Option<PersistedClipboardRepresentation>, LatestClipboardSnapshotError> {
-        self.ports
+        match self
+            .ports
             .representation_repo
             .get_representation(event_id, rep_id)
             .await
-            .map_err(|e| LatestClipboardSnapshotError::Resolution(e.to_string()))
+        {
+            Ok(representation) => Ok(representation),
+            Err(uc_core::clipboard::ClipboardRepositoryError::UnreadableEncryptedData(reason)) => {
+                warn!(
+                    representation_id = %rep_id,
+                    reason = %reason,
+                    "mobile snapshot skipped unreadable encrypted representation"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(LatestClipboardSnapshotError::Resolution(error.to_string())),
+        }
     }
 
     /// Step 4-6:把 representation 解析成 `LatestPasteRepresentation`(物化
@@ -742,6 +759,29 @@ mod tests {
         );
         let err = adapter.latest_paste_representation().await.unwrap_err();
         assert!(matches!(err, LatestClipboardSnapshotError::Resolution(_)));
+    }
+
+    #[tokio::test]
+    async fn unreadable_encrypted_preview_is_treated_as_absent() {
+        let adapter = build_adapter(
+            FakeSource::with_entry(entry("e1", "ev1")),
+            Arc::new(FakeSelectionRepo::ok(Some(selection("e1", "r1")))),
+            Arc::new(FakeRepRepo {
+                next: Mutex::new(Some(Err(
+                    ClipboardRepositoryError::UnreadableEncryptedData(
+                        "authentication failed".to_string(),
+                    ),
+                ))),
+            }),
+            dummy_resolver(),
+            dummy_blob_reader(),
+        );
+
+        assert!(adapter
+            .latest_preview_representation()
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
