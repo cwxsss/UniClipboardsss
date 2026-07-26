@@ -71,4 +71,8 @@ if [ -n "${UC_MOBILE_LABEL:-}" ] && [ ! -f "${MOBILE_MARKER}" ]; then
   touch "${MOBILE_MARKER}"
 fi
 
+# Provisioning commands may leave a transient Oneshot daemon alive briefly.
+# Wait for it to stop before the foreground daemon becomes the container's PID 1.
+uniclip stop
+
 exec uniclip start --server --foreground

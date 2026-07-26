@@ -39,7 +39,15 @@ Assert-Contains -Path $entrypoint -Pattern "setup is still incomplete; set UC_AU
 Assert-Contains -Path $entrypoint -Pattern "uniclip mobile network set"
 Assert-Contains -Path $entrypoint -Pattern "--url"
 Assert-Contains -Path $entrypoint -Pattern "uniclip mobile add --label"
+Assert-Contains -Path $entrypoint -Pattern "uniclip stop"
 Assert-Contains -Path $entrypoint -Pattern "exec uniclip start --server --foreground"
+
+$entrypointContent = Get-Content -Raw -Path $entrypoint
+$stopIndex = $entrypointContent.IndexOf("uniclip stop")
+$foregroundStartIndex = $entrypointContent.IndexOf("exec uniclip start --server --foreground")
+if ($stopIndex -lt 0 -or $foregroundStartIndex -lt 0 -or $stopIndex -gt $foregroundStartIndex) {
+    throw "Expected the transient daemon to stop before foreground server startup"
+}
 
 Assert-Contains -Path $dockerfile -Pattern 'FROM ${BASE_IMAGE}'
 Assert-Contains -Path $dockerfile -Pattern "uniclipboard-server-entrypoint"
