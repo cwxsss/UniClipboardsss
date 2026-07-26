@@ -6,7 +6,9 @@
 use clap::Args;
 use serde::Serialize;
 
-use uc_daemon_contract::api::dto::mobile_sync::RegisterMobileDeviceRequest;
+use uc_daemon_contract::api::dto::mobile_sync::{
+    RegisterMobileDeviceRequest, UpdateMobileDeviceRequest,
+};
 
 use crate::commands::mobile_sync::shared;
 use crate::exit_codes;
@@ -29,6 +31,16 @@ pub struct AddArgs {
     pub password_stdin: bool,
 }
 
+#[derive(Args)]
+pub struct RotatePasswordArgs {
+    /// Device id printed by `mobile status`.
+    pub device_id: String,
+    /// Read the replacement password from one line of stdin. Leave unset to
+    /// auto-mint a new password.
+    #[arg(long)]
+    pub password_stdin: bool,
+}
+
 // ── add (top-level `mobile-sync add`) ───────────────────────────────────
 
 #[derive(Serialize)]
@@ -39,6 +51,9 @@ struct AddDeviceDto {
     username: String,
     password: String,
     install_url: String,
+    install_qr_code_png_base64: String,
+    connect_uri: String,
+    qr_code_png_base64: String,
     qr_code_ascii: String,
 }
 
@@ -91,6 +106,9 @@ pub(crate) async fn add(args: AddArgs, json: bool, verbose: bool) -> i32 {
                     username: out.username.clone(),
                     password: out.password.clone(),
                     install_url: out.install_url.clone(),
+                    install_qr_code_png_base64: out.install_qr_code_png_base64.clone(),
+                    connect_uri: out.connect_uri.clone(),
+                    qr_code_png_base64: out.qr_code_png_base64.clone(),
                     qr_code_ascii: out.qr_code_ascii.clone(),
                 };
                 shared::finish_daemon_json(ctx, &dto).await
@@ -133,6 +151,13 @@ struct RevokeResult {
     revoked: bool,
 }
 
+#[derive(Serialize)]
+struct RotatePasswordResult {
+    device_id: String,
+    username: String,
+    password: String,
+}
+
 pub(crate) async fn revoke(device_id: Option<String>, json: bool, verbose: bool) -> i32 {
     let ctx = match shared::enter("Revoke iPhone device", json, verbose).await {
         Ok(c) => c,
@@ -168,6 +193,68 @@ pub(crate) async fn revoke(device_id: Option<String>, json: bool, verbose: bool)
             } else {
                 ui::success(&format!("Revoked device {target}."));
                 ui::info("note", "Next request from that device returns 401.");
+                shared::finish_daemon(ctx, exit_codes::EXIT_SUCCESS).await
+            }
+        }
+        Err(err) => {
+            ui::error(&err.to_string());
+            shared::finish_daemon(ctx, exit_codes::EXIT_ERROR).await
+        }
+    }
+}
+
+pub(crate) async fn rotate_password(
+    args: RotatePasswordArgs,
+    json: bool,
+    verbose: bool,
+) -> i32 {
+    let replacement = if args.password_stdin {
+        match shared::read_password_stdin() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                ui::error(&format!("Failed to read password from stdin: {e}"));
+                return exit_codes::EXIT_ERROR;
+            }
+        }
+    } else {
+        None
+    };
+
+    let ctx = match shared::enter("Rotate iPhone password", json, verbose).await {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+
+    let result = ctx
+        .client
+        .update_device(
+            &args.device_id,
+            &UpdateMobileDeviceRequest {
+                label: None,
+                username: None,
+                password: Some(replacement),
+            },
+        )
+        .await;
+
+    match result {
+        Ok(out) => {
+            let Some(password) = out.password else {
+                ui::error("Password rotation did not return a plaintext password.");
+                return shared::finish_daemon(ctx, exit_codes::EXIT_ERROR).await;
+            };
+            if json {
+                let dto = RotatePasswordResult {
+                    device_id: out.device_id,
+                    username: out.username,
+                    password,
+                };
+                shared::finish_daemon_json(ctx, &dto).await
+            } else {
+                ui::success(&format!("Rotated password for device {}.", out.device_id));
+                ui::info("username", &out.username);
+                ui::info("password (one-time)", &password);
+                ui::warn("The password above will NOT be shown again. Copy it now.");
                 shared::finish_daemon(ctx, exit_codes::EXIT_SUCCESS).await
             }
         }

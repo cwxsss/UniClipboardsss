@@ -798,6 +798,30 @@ mod tests {
     }
 
     #[test]
+    fn mobile_sync_rotate_password_requires_device_id() {
+        let missing = Cli::try_parse_from(["uniclip", "mobile-sync", "rotate-password"]);
+        assert!(
+            missing.is_err(),
+            "expected `rotate-password` to require <device-id>"
+        );
+
+        let auto = Cli::try_parse_from(["uniclip", "mobile-sync", "rotate-password", "did_abc"]);
+        assert!(auto.is_ok(), "expected auto password rotation to parse");
+
+        let custom = Cli::try_parse_from([
+            "uniclip",
+            "mobile-sync",
+            "rotate-password",
+            "did_abc",
+            "--password-stdin",
+        ]);
+        assert!(
+            custom.is_ok(),
+            "expected custom password rotation through stdin to parse"
+        );
+    }
+
+    #[test]
     fn mobile_sync_legacy_command_groups_are_removed() {
         // 干净删除(无 deprecation 周期):旧分组 `lan` / `devices` /
         // `settings` 已不再解析 —— 改用 `network` / 顶层 `add`·`revoke` /

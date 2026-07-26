@@ -45,6 +45,9 @@ pub enum MobileSyncCommands {
         /// Device id printed by `status` (e.g. `did_<32hex>`).
         device_id: Option<String>,
     },
+    /// Reissue one device's Basic Auth password. The plaintext password is
+    /// printed once; the old password is invalidated immediately.
+    RotatePassword(devices::RotatePasswordArgs),
     /// Combined status view: feature + LAN settings + paired devices +
     /// install methods. Daemon-running tolerant.
     Status,
@@ -78,6 +81,9 @@ pub async fn run(command: MobileSyncCommands, json: bool, verbose: bool) -> i32 
         MobileSyncCommands::Setup(args) => setup::run(args, json, verbose).await,
         MobileSyncCommands::Add(args) => devices::add(args, json, verbose).await,
         MobileSyncCommands::Revoke { device_id } => devices::revoke(device_id, json, verbose).await,
+        MobileSyncCommands::RotatePassword(args) => {
+            devices::rotate_password(args, json, verbose).await
+        }
         MobileSyncCommands::Status => status::run(json, verbose).await,
         MobileSyncCommands::Disable => disable::run(json, verbose).await,
         MobileSyncCommands::Network { subcommand } => network::run(subcommand, json, verbose).await,

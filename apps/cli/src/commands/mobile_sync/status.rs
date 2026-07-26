@@ -30,7 +30,13 @@ struct StatusDto {
 struct DeviceLineDto {
     device_id: String,
     label: String,
+    client_type: String,
+    username: String,
+    created_at_ms: i64,
     last_seen_at_ms: Option<i64>,
+    last_seen_ip: Option<String>,
+    reported_name: Option<String>,
+    reported_os: Option<String>,
 }
 
 impl From<&MobileDeviceViewDto> for DeviceLineDto {
@@ -38,7 +44,13 @@ impl From<&MobileDeviceViewDto> for DeviceLineDto {
         Self {
             device_id: s.device_id.clone(),
             label: s.label.clone(),
+            client_type: s.client_type.clone(),
+            username: s.username.clone(),
+            created_at_ms: s.created_at_ms,
             last_seen_at_ms: s.last_seen_at_ms,
+            last_seen_ip: s.last_seen_ip.clone(),
+            reported_name: s.reported_name.clone(),
+            reported_os: s.reported_os.clone(),
         }
     }
 }
