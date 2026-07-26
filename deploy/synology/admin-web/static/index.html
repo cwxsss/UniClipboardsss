@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UniClipboard 管理</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section id="loginView" class="panel login-panel">
+        <h1>UniClipboard 管理</h1>
+        <form id="loginForm" class="form">
+          <label>
+            管理密码
+            <input id="adminPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">登录</button>
+        </form>
+      </section>
+
+      <section id="appView" class="hidden">
+        <header class="topbar">
+          <div>
+            <h1>UniClipboard 管理</h1>
+            <p id="statusText">正在读取状态</p>
+          </div>
+          <div class="actions">
+            <button id="refreshButton" type="button">刷新</button>
+            <button id="logoutButton" type="button" class="ghost">退出</button>
+          </div>
+        </header>
+
+        <div id="message" class="message hidden"></div>
+
+        <section class="grid">
+          <form id="createForm" class="panel form">
+            <h2>生成连接信息</h2>
+            <label>
+              设备名称
+              <input id="deviceLabel" type="text" placeholder="例如 iPhone 15" required />
+            </label>
+            <label>
+              自定义账号
+              <input id="deviceUsername" type="text" placeholder="留空自动生成" />
+            </label>
+            <label>
+              自定义密码
+              <input id="devicePassword" type="text" placeholder="留空自动生成" />
+            </label>
+            <button type="submit">生成二维码和账号密码</button>
+          </form>
+
+          <section id="resultPanel" class="panel hidden">
+            <h2>连接信息</h2>
+            <div class="qr-row">
+              <div>
+                <h3>连接二维码</h3>
+                <img id="connectQr" alt="连接二维码" />
+              </div>
+              <div>
+                <h3>快捷指令二维码</h3>
+                <img id="installQr" alt="快捷指令二维码" />
+              </div>
+            </div>
+            <dl class="kv">
+              <dt>地址</dt>
+              <dd><code id="baseUrl"></code><button data-copy="baseUrl" type="button">复制</button></dd>
+              <dt>账号</dt>
+              <dd><code id="username"></code><button data-copy="username" type="button">复制</button></dd>
+              <dt>一次性密码</dt>
+              <dd><code id="password"></code><button data-copy="password" type="button">复制</button></dd>
+            </dl>
+            <p class="hint">一次性密码只会在本次生成结果中显示。</p>
+          </section>
+        </section>
+
+        <section class="panel">
+          <div class="section-title">
+            <h2>已登记设备</h2>
+            <span id="deviceCount">0 台</span>
+          </div>
+          <div id="devices" class="devices"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

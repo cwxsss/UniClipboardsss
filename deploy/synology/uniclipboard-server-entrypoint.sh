@@ -4,6 +4,7 @@ set -eu
 CONFIG_FILE="${UC_SERVER_CONFIG:-/data/uniclipboard-server.env}"
 BOOTSTRAP_DIR="${UC_SERVER_BOOTSTRAP_DIR:-/data/.uniclipboard-server-bootstrap}"
 MOBILE_MARKER="${BOOTSTRAP_DIR}/mobile-device-added"
+ADMIN_WEB_PID=""
 
 if [ -f "${CONFIG_FILE}" ]; then
   # shellcheck disable=SC1090
@@ -21,12 +22,43 @@ UC_SPACE_PASSPHRASE="$(strip_outer_quotes "${UC_SPACE_PASSPHRASE:-}")"
 UC_DEVICE_NAME="$(strip_outer_quotes "${UC_DEVICE_NAME:-Synology Server}")"
 UC_MOBILE_PUBLIC_URL="$(strip_outer_quotes "${UC_MOBILE_PUBLIC_URL:-}")"
 UC_MOBILE_LABEL="$(strip_outer_quotes "${UC_MOBILE_LABEL:-}")"
+UC_ADMIN_WEB="$(strip_outer_quotes "${UC_ADMIN_WEB:-0}")"
+UC_ADMIN_PORT="$(strip_outer_quotes "${UC_ADMIN_PORT:-42888}")"
+UC_ADMIN_PASSWORD="$(strip_outer_quotes "${UC_ADMIN_PASSWORD:-}")"
+
+export UC_ADMIN_PORT
+export UC_ADMIN_PASSWORD
 
 auto_init_enabled() {
   case "${UC_AUTO_INIT}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+admin_web_enabled() {
+  case "${UC_ADMIN_WEB}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_admin_web() {
+  if [ -n "${ADMIN_WEB_PID:-}" ]; then
+    kill "${ADMIN_WEB_PID}" 2>/dev/null || true
+    wait "${ADMIN_WEB_PID}" 2>/dev/null || true
+  fi
+}
+
+start_admin_web() {
+  if [ -z "${UC_ADMIN_PASSWORD:-}" ]; then
+    echo "UC_ADMIN_WEB=1 requires UC_ADMIN_PASSWORD" >&2
+    exit 1
+  fi
+
+  uniclipboard-admin-web &
+  ADMIN_WEB_PID="$!"
+  trap stop_admin_web INT TERM EXIT
 }
 
 is_setup_complete() {
@@ -69,6 +101,10 @@ fi
 if [ -n "${UC_MOBILE_LABEL:-}" ] && [ ! -f "${MOBILE_MARKER}" ]; then
   uniclip mobile add --label "${UC_MOBILE_LABEL}"
   touch "${MOBILE_MARKER}"
+fi
+
+if admin_web_enabled; then
+  start_admin_web
 fi
 
 # Provisioning commands may leave a transient Oneshot daemon alive briefly.
