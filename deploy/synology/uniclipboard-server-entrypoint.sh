@@ -25,6 +25,7 @@ UC_MOBILE_LABEL="$(strip_outer_quotes "${UC_MOBILE_LABEL:-}")"
 UC_ADMIN_WEB="$(strip_outer_quotes "${UC_ADMIN_WEB:-0}")"
 UC_ADMIN_PORT="$(strip_outer_quotes "${UC_ADMIN_PORT:-42888}")"
 UC_ADMIN_PASSWORD="$(strip_outer_quotes "${UC_ADMIN_PASSWORD:-}")"
+UC_ADMIN_SHOW_SPACE_PASSPHRASE="$(strip_outer_quotes "${UC_ADMIN_SHOW_SPACE_PASSPHRASE:-0}")"
 
 export UC_ADMIN_PORT
 export UC_ADMIN_PASSWORD
@@ -56,7 +57,9 @@ start_admin_web() {
     exit 1
   fi
 
-  uniclipboard-admin-web &
+  UC_ADMIN_SHOW_SPACE_PASSPHRASE="${UC_ADMIN_SHOW_SPACE_PASSPHRASE}" \
+    UC_SPACE_PASSPHRASE="${UC_SPACE_PASSPHRASE}" \
+    uniclipboard-admin-web &
   ADMIN_WEB_PID="$!"
   trap stop_admin_web INT TERM EXIT
 }

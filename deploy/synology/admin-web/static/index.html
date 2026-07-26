@@ -75,6 +75,24 @@
           </section>
         </section>
 
+        <section id="desktopInvitePanel" class="panel desktop-invite">
+          <div>
+            <h2>桌面端连接</h2>
+            <p class="hint">给 Windows、macOS 或 Linux 客户端加入同一个 Space。生成后请尽快在桌面端执行命令。</p>
+          </div>
+          <div class="desktop-actions">
+            <button id="createDesktopInviteButton" type="button">生成桌面端邀请</button>
+          </div>
+          <dl id="desktopInviteResult" class="kv hidden">
+            <dt>邀请码</dt>
+            <dd><code id="desktopInviteCode"></code><button data-copy="desktopInviteCode" type="button">复制</button></dd>
+            <dt>加入命令</dt>
+            <dd><code id="desktopJoinCommand"></code><button data-copy="desktopJoinCommand" type="button">复制</button></dd>
+            <dt>空间口令</dt>
+            <dd><code id="desktopPassphraseState"></code></dd>
+          </dl>
+        </section>
+
         <section class="panel">
           <div class="section-title">
             <h2>已登记设备</h2>

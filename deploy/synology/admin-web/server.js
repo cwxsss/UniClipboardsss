@@ -15,19 +15,27 @@ const ROUTES = [
   'POST /api/devices',
   'DELETE /api/devices/',
   'POST /api/devices/{deviceId}/rotate-password',
+  'POST /api/desktop-invite',
 ];
 
 const port = parseInt(process.env.UC_ADMIN_PORT || '42888', 10);
 const password = process.env.UC_ADMIN_PASSWORD || '';
 const publicUrl = process.env.UC_MOBILE_PUBLIC_URL || '';
 const uniclipBin = process.env.UC_UNICLIP_BIN || 'uniclip';
+const spacePassphrase = process.env.UC_SPACE_PASSPHRASE || '';
+const showSpacePassphrase = truthy(process.env.UC_ADMIN_SHOW_SPACE_PASSPHRASE || '0');
 const staticDir = path.join(__dirname, 'static');
 const sessions = new Map();
 const sessionTtlMs = 12 * 60 * 60 * 1000;
+let activeDesktopInvite = null;
 
 if (!password) {
   console.error('UC_ADMIN_WEB=1 requires UC_ADMIN_PASSWORD');
   process.exit(1);
+}
+
+function truthy(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
 }
 
 function json(res, status, body, headers = {}) {
@@ -143,6 +151,94 @@ function runUniclip(args, stdinText) {
   });
 }
 
+function cleanupDesktopInvite() {
+  if (!activeDesktopInvite) return;
+  const { child } = activeDesktopInvite;
+  activeDesktopInvite = null;
+  if (child.exitCode == null && !child.killed) {
+    child.kill('SIGTERM');
+  }
+}
+
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildJoinCommand(code, passphrase) {
+  const renderedPassphrase = passphrase || '<你的空间口令>';
+  return `uniclip join --code ${shellQuote(code)} --passphrase ${shellQuote(renderedPassphrase)}`;
+}
+
+function startDesktopInvite() {
+  cleanupDesktopInvite();
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(uniclipBin, ['invite'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+      shell: process.platform === 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let code = '';
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanupDesktopInvite();
+      reject(new Error('timed out waiting for invitation code'));
+    }, 30000);
+
+    activeDesktopInvite = { child, startedAt: Date.now() };
+
+    function finishWithCode(nextCode) {
+      if (settled) return;
+      settled = true;
+      code = nextCode;
+      clearTimeout(timeout);
+      const includePassphrase = showSpacePassphrase && Boolean(spacePassphrase);
+      resolve({
+        code,
+        expiresAtMs: null,
+        passphraseIncluded: includePassphrase,
+        passphrase: includePassphrase ? spacePassphrase : '',
+        command: buildJoinCommand(code, includePassphrase ? spacePassphrase : ''),
+      });
+    }
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      stdout += chunk;
+      const match = stdout.match(/INVITATION_CODE=([^\r\n]+)/);
+      if (match) finishWithCode(match[1].trim());
+    });
+    child.stderr.on('data', chunk => {
+      stderr += chunk;
+    });
+    child.on('error', err => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        activeDesktopInvite = null;
+        reject(err);
+      }
+    });
+    child.on('close', exitCode => {
+      clearTimeout(timeout);
+      if (activeDesktopInvite && activeDesktopInvite.child === child) {
+        activeDesktopInvite = null;
+      }
+      if (!settled) {
+        settled = true;
+        reject(new Error(stderr.trim() || `uniclip invite exited with code ${exitCode}`));
+      }
+    });
+  });
+}
+
 function normalizeDevice(device) {
   return {
     deviceId: device.device_id || device.deviceId,
@@ -232,6 +328,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/api/devices') {
       const status = await mobileStatus();
       ok(res, status.devices);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/desktop-invite') {
+      ok(res, await startDesktopInvite());
       return;
     }
 
@@ -325,4 +426,14 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`UniClipboard admin web listening on ${port}; password (redacted); routes: ${ROUTES.length}`);
+});
+
+process.on('SIGINT', () => {
+  cleanupDesktopInvite();
+  process.exit(130);
+});
+
+process.on('SIGTERM', () => {
+  cleanupDesktopInvite();
+  process.exit(143);
 });

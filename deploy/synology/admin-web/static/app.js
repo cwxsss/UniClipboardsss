@@ -59,6 +59,15 @@ function setRegistrationResult(data) {
   document.querySelector('#password').textContent = data.password || '';
 }
 
+function setDesktopInviteResult(data) {
+  document.querySelector('#desktopInviteResult').classList.remove('hidden');
+  document.querySelector('#desktopInviteCode').textContent = data.code || '';
+  document.querySelector('#desktopJoinCommand').textContent = data.command || '';
+  document.querySelector('#desktopPassphraseState').textContent = data.passphraseIncluded
+    ? '已包含在加入命令中'
+    : '未显示；请在桌面端输入你的 Space 空间口令';
+}
+
 function renderDevices(devices) {
   document.querySelector('#deviceCount').textContent = `${devices.length} 台`;
   if (devices.length === 0) {
@@ -149,6 +158,24 @@ document.querySelector('#createForm').addEventListener('submit', async event => 
     await refresh();
   } catch (err) {
     showMessage(err.message);
+  }
+});
+
+document.querySelector('#createDesktopInviteButton').addEventListener('click', async () => {
+  hideMessage();
+  const button = document.querySelector('#createDesktopInviteButton');
+  button.disabled = true;
+  try {
+    const result = await api('/api/desktop-invite', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    setDesktopInviteResult(result);
+    showMessage('桌面端邀请已生成。新邀请会替换旧邀请。', 'success');
+  } catch (err) {
+    showMessage(err.message);
+  } finally {
+    button.disabled = false;
   }
 });
 
