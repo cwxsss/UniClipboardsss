@@ -24,6 +24,8 @@ const publicUrl = process.env.UC_MOBILE_PUBLIC_URL || '';
 const uniclipBin = process.env.UC_UNICLIP_BIN || 'uniclip';
 const spacePassphrase = process.env.UC_SPACE_PASSPHRASE || '';
 const showSpacePassphrase = truthy(process.env.UC_ADMIN_SHOW_SPACE_PASSPHRASE || '0');
+const secureAdminCookie = truthy(process.env.UC_ADMIN_COOKIE_SECURE || '0');
+const maxCommandOutputBytes = positiveInteger(process.env.UC_ADMIN_OUTPUT_MAX_BYTES, 64 * 1024);
 const staticDir = path.join(__dirname, 'static');
 const sessions = new Map();
 const sessionTtlMs = 12 * 60 * 60 * 1000;
@@ -36,6 +38,11 @@ if (!password) {
 
 function truthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function json(res, status, body, headers = {}) {
@@ -53,6 +60,32 @@ function ok(res, data, headers) {
 
 function fail(res, status, code, message) {
   json(res, status, { ok: false, error: { code, message } });
+}
+
+function sessionCookie(value, maxAge) {
+  const attributes = [
+    `uc_admin_session=${encodeURIComponent(value)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+  ];
+  if (maxAge != null) attributes.push(`Max-Age=${maxAge}`);
+  if (secureAdminCookie) attributes.push('Secure');
+  return attributes.join('; ');
+}
+
+function createCommandOutputAppender() {
+  let outputBytes = 0;
+  return (current, chunk) => {
+    const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+    if (outputBytes + chunkBytes > maxCommandOutputBytes) {
+      const err = new Error('uniclip command output exceeded the configured limit');
+      err.code = 'COMMAND_OUTPUT_TOO_LARGE';
+      throw err;
+    }
+    outputBytes += chunkBytes;
+    return current + chunk;
+  };
 }
 
 function parseCookies(req) {
@@ -122,16 +155,39 @@ function runUniclip(args, stdinText) {
     });
     let stdout = '';
     let stderr = '';
+    let outputError = null;
+    const appendOutput = createCommandOutputAppender();
+
+    function rejectOversizedOutput(err) {
+      if (outputError) return;
+      outputError = err;
+      if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+    }
+
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => {
-      stdout += chunk;
+      if (outputError) return;
+      try {
+        stdout = appendOutput(stdout, chunk);
+      } catch (err) {
+        rejectOversizedOutput(err);
+      }
     });
     child.stderr.on('data', chunk => {
-      stderr += chunk;
+      if (outputError) return;
+      try {
+        stderr = appendOutput(stderr, chunk);
+      } catch (err) {
+        rejectOversizedOutput(err);
+      }
     });
     child.on('error', reject);
     child.on('close', code => {
+      if (outputError) {
+        reject(outputError);
+        return;
+      }
       if (code !== 0) {
         const message = stderr.trim() || `uniclip exited with code ${code}`;
         reject(new Error(message));
@@ -188,15 +244,6 @@ function buildHarmonyJoinUri(code, passphrase) {
 
 function startDesktopInvite(options = {}) {
   const deviceName = String(options.deviceName || '').trim();
-  const customCode = String(options.customCode || '').trim();
-  const requestedPassphrase = String(options.passphrase || '').trim();
-
-  if (customCode) {
-    const err = new Error('当前底层 uniclip invite 不支持自定义邀请码，请留空随机生成。');
-    err.status = 422;
-    err.code = 'CUSTOM_DESKTOP_CODE_UNSUPPORTED';
-    throw err;
-  }
 
   cleanupDesktopInvite();
 
@@ -210,6 +257,15 @@ function startDesktopInvite(options = {}) {
     let stderr = '';
     let settled = false;
     let code = '';
+    const appendOutput = createCommandOutputAppender();
+
+    function failInvite(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      cleanupDesktopInvite();
+      reject(err);
+    }
 
     const timeout = setTimeout(() => {
       if (settled) return;
@@ -225,7 +281,7 @@ function startDesktopInvite(options = {}) {
       settled = true;
       code = nextCode;
       clearTimeout(timeout);
-      const commandPassphrase = requestedPassphrase || (showSpacePassphrase ? spacePassphrase : '');
+      const commandPassphrase = showSpacePassphrase ? spacePassphrase : '';
       const includePassphrase = Boolean(commandPassphrase);
       resolve({
         code,
@@ -241,12 +297,23 @@ function startDesktopInvite(options = {}) {
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => {
-      stdout += chunk;
+      if (settled) return;
+      try {
+        stdout = appendOutput(stdout, chunk);
+      } catch (err) {
+        failInvite(err);
+        return;
+      }
       const match = stdout.match(/INVITATION_CODE=([^\r\n]+)/);
       if (match) finishWithCode(match[1].trim());
     });
     child.stderr.on('data', chunk => {
-      stderr += chunk;
+      if (settled) return;
+      try {
+        stderr = appendOutput(stderr, chunk);
+      } catch (err) {
+        failInvite(err);
+      }
     });
     child.on('error', err => {
       if (!settled) {
@@ -330,7 +397,7 @@ async function handleApi(req, res, url) {
     const sessionId = crypto.randomBytes(32).toString('base64url');
     sessions.set(sessionId, Date.now());
     ok(res, { authenticated: true }, {
-      'Set-Cookie': `uc_admin_session=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Strict`,
+      'Set-Cookie': sessionCookie(sessionId),
     });
     return;
   }
@@ -345,7 +412,7 @@ async function handleApi(req, res, url) {
       const id = parseCookies(req).uc_admin_session;
       if (id) sessions.delete(id);
       ok(res, { authenticated: false }, {
-        'Set-Cookie': 'uc_admin_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+        'Set-Cookie': sessionCookie('', 0),
       });
       return;
     }
@@ -459,6 +526,8 @@ const server = http.createServer((req, res) => {
   }
   serveStatic(req, res, url);
 });
+
+module.exports = { server };
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`UniClipboard admin web listening on ${port}; password (redacted); routes: ${ROUTES.length}`);

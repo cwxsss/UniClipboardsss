@@ -102,13 +102,17 @@ UC_ADMIN_PASSWORD=换成你的管理页密码
 ```text
 UC_MOBILE_LABEL=meta60
 UC_ADMIN_SHOW_SPACE_PASSPHRASE=0
+UC_ADMIN_COOKIE_SECURE=0
+UC_ADMIN_OUTPUT_MAX_BYTES=65536
 UC_SERVER_CONFIG=/data/uniclipboard-server.env
 ```
 
 说明：
 
 - `UC_MOBILE_LABEL`：容器第一次启动时自动创建一个手机设备，值就是设备显示名。现在已经有 Web 管理页，一般可以不填。
-- `UC_ADMIN_SHOW_SPACE_PASSPHRASE=1`：Web 管理页生成桌面端连接命令时，是否把 Space 口令直接写进命令。默认不显示，安全一些。
+- `UC_ADMIN_SHOW_SPACE_PASSPHRASE=1`：Web 管理页生成桌面端连接命令和鸿蒙新版二维码时，是否包含 Space 口令。默认不显示；关闭时请在客户端手动输入口令。
+- `UC_ADMIN_COOKIE_SECURE=1`：仅当管理页通过 HTTPS 反向代理访问时启用。直接通过群晖内网 HTTP 访问时保持 `0`，否则浏览器不会发送登录 Cookie。
+- `UC_ADMIN_OUTPUT_MAX_BYTES=65536`：管理页单次调用 `uniclip` 时允许读取的最大输出字节数，超出后会终止该调用，避免异常输出长期占用内存。
 - `UC_SERVER_CONFIG`：可选配置文件路径。默认会读取 `/data/uniclipboard-server.env`。群晖环境变量和这个文件二选一即可；如果两边都写，实际效果取决于启动脚本读取后的变量值。
 
 ## 群晖图形化部署
@@ -185,7 +189,7 @@ uniclip join --code <邀请码> --passphrase <你的空间口令>
 UC_ADMIN_SHOW_SPACE_PASSPHRASE=1
 ```
 
-页面会把 `UC_SPACE_PASSPHRASE` 写进完整命令。否则页面只显示命令模板，你需要手动输入 Space 口令。
+页面会把 `UC_SPACE_PASSPHRASE` 写进完整命令，并生成可供鸿蒙新版客户端扫描的 Space 二维码。否则页面只显示命令模板，不显示鸿蒙二维码；请在桌面端或鸿蒙客户端手动输入 Space 口令。
 
 注意：同一时间只保留一个桌面端邀请。生成新邀请会替换旧邀请。
 
@@ -237,6 +241,8 @@ UC_ADMIN_WEB=1
 UC_ADMIN_PORT=42888
 UC_ADMIN_PASSWORD=replace-with-your-admin-password
 UC_ADMIN_SHOW_SPACE_PASSPHRASE=0
+UC_ADMIN_COOKIE_SECURE=0
+UC_ADMIN_OUTPUT_MAX_BYTES=65536
 ```
 
 注意：`.env` 文件每一行都是 `KEY=value`，不要写成说明文字，也不要写中文冒号。

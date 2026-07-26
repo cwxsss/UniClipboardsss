@@ -224,8 +224,6 @@ document.querySelector('#desktopInviteForm').addEventListener('submit', async ev
   button.disabled = true;
   const body = {
     deviceName: document.querySelector('#desktopDeviceName').value,
-    customCode: document.querySelector('#desktopCustomCode').value,
-    passphrase: document.querySelector('#desktopPassphrase').value,
   };
   try {
     const result = await api('/api/desktop-invite', {
