@@ -1,4 +1,4 @@
-ARG RUST_IMAGE=rust:1.85-bookworm
+ARG RUST_IMAGE=rust:1.91-bookworm
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG DEBIAN_MIRROR=mirrors.aliyun.com
 ARG CARGO_REGISTRY=sparse+https://rsproxy.cn/index/
