@@ -12,6 +12,23 @@ fi
 
 mkdir -p "${BOOTSTRAP_DIR}"
 
+strip_outer_quotes() {
+  printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+}
+
+UC_AUTO_INIT="$(strip_outer_quotes "${UC_AUTO_INIT:-0}")"
+UC_SPACE_PASSPHRASE="$(strip_outer_quotes "${UC_SPACE_PASSPHRASE:-}")"
+UC_DEVICE_NAME="$(strip_outer_quotes "${UC_DEVICE_NAME:-Synology Server}")"
+UC_MOBILE_PUBLIC_URL="$(strip_outer_quotes "${UC_MOBILE_PUBLIC_URL:-}")"
+UC_MOBILE_LABEL="$(strip_outer_quotes "${UC_MOBILE_LABEL:-}")"
+
+auto_init_enabled() {
+  case "${UC_AUTO_INIT}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_setup_complete() {
   status_file="${HOME:-/data}/.local/share/app.uniclipboard.desktop/vault/.setup_status"
   legacy_marker="${HOME:-/data}/.local/share/app.uniclipboard.desktop/vault/.initialized_encryption"
@@ -27,7 +44,7 @@ is_setup_complete() {
   return 1
 }
 
-if [ "${UC_AUTO_INIT:-0}" = "1" ] && ! is_setup_complete; then
+if auto_init_enabled && ! is_setup_complete; then
   if [ -z "${UC_SPACE_PASSPHRASE:-}" ]; then
     echo "UC_AUTO_INIT=1 requires UC_SPACE_PASSPHRASE in ${CONFIG_FILE}" >&2
     exit 1
@@ -35,7 +52,12 @@ if [ "${UC_AUTO_INIT:-0}" = "1" ] && ! is_setup_complete; then
 
   uniclip init \
     --passphrase "${UC_SPACE_PASSPHRASE}" \
-    --device-name "${UC_DEVICE_NAME:-Synology Server}"
+    --device-name "${UC_DEVICE_NAME}"
+fi
+
+if ! is_setup_complete; then
+  echo "setup is still incomplete; set UC_AUTO_INIT=1 and UC_SPACE_PASSPHRASE, or run uniclip init/join against /data first" >&2
+  exit 1
 fi
 
 if [ -n "${UC_MOBILE_PUBLIC_URL:-}" ]; then
