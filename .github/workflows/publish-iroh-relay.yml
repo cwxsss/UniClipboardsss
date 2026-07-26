@@ -1,0 +1,60 @@
+name: Publish iroh relay image
+run-name: "publish-iroh-relay-${{ github.run_number }}"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/relay/Dockerfile
+      - .github/workflows/publish-iroh-relay.yml
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Docker Hub image tag
+        required: true
+        type: string
+        default: 1.0.0-rc.1
+
+env:
+  IMAGE_NAME: chuais/iroh-relay
+  IMAGE_TAG: 1.0.0-rc.1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set image tag
+        id: image
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: echo "tag=${INPUT_TAG:-${IMAGE_TAG}}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || 'chuais' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/relay/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            IROH_RELAY_VERSION=1.0.0-rc.1
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Inspect published image
+        run: docker buildx imagetools inspect "${IMAGE_NAME}:${{ steps.image.outputs.tag }}"

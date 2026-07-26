@@ -6,16 +6,16 @@
 
 ## 版本策略
 
-iroh 的 relay 协议需要与客户端使用的 iroh 版本匹配。本仓库当前使用 `iroh 1.0.0-rc.1`，因此 Compose 默认从 `v1.0.0-rc.1` 源码构建 relay，而不是拉取不确定是否兼容的 `latest` 镜像。
+iroh 的 relay 协议需要与客户端使用的 iroh 版本匹配。本仓库当前使用 `iroh 1.0.0-rc.1`。推荐使用由 GitHub Actions 发布的 `chuais/iroh-relay:1.0.0-rc.1`，避免在部署 VPS 上下载 Rust 依赖和编译源码。
 
 更新 UniClipboard 的 iroh 依赖时，必须同步更新 `IROH_RELAY_VERSION`，并重新构建 relay：
 
 ```bash
-docker compose build --no-cache
-docker compose up -d
+IROH_RELAY_IMAGE=chuais/iroh-relay:1.0.0-rc.1 docker compose pull
+IROH_RELAY_IMAGE=chuais/iroh-relay:1.0.0-rc.1 docker compose up -d --no-build
 ```
 
-确认某个预构建镜像与客户端兼容后，也可以通过 `IROH_RELAY_IMAGE` 覆盖默认镜像名；Compose 仍会在显式执行 `docker compose build` 时构建本地镜像。
+默认 Compose 保留本地源码构建能力。通过 `IROH_RELAY_IMAGE` 设置镜像名并使用 `--no-build`，即可仅拉取预构建镜像。
 
 ## 前置条件
 
@@ -42,7 +42,8 @@ contact = "admin@example.com"
 域名的 A/AAAA 记录必须在启动前解析到此服务器。然后构建并启动：
 
 ```bash
-docker compose up -d --build
+IROH_RELAY_IMAGE=chuais/iroh-relay:1.0.0-rc.1 docker compose pull
+IROH_RELAY_IMAGE=chuais/iroh-relay:1.0.0-rc.1 docker compose up -d --no-build
 docker compose logs -f relay
 ```
 
