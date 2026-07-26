@@ -11,4 +11,8 @@ pub enum ClipboardRepositoryError {
     /// The persistence layer failed to complete the operation.
     #[error("storage failure: {0}")]
     Storage(String),
+    /// The persisted payload was encrypted with material that is no longer
+    /// available to this space. The ciphertext must never be treated as data.
+    #[error("encrypted clipboard payload is unreadable: {0}")]
+    UnreadableEncryptedData(String),
 }
