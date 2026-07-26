@@ -98,18 +98,18 @@ h3 {
 .desktop-invite {
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
   margin-bottom: 1rem;
 }
 
-.desktop-actions {
-  align-items: start;
-  display: flex;
-  justify-content: flex-end;
+.desktop-invite .kv {
+  margin-top: 1rem;
 }
 
-.desktop-invite .kv {
-  grid-column: 1 / -1;
+.harmony-invite {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
 }
 
 .form {
@@ -152,6 +152,7 @@ input {
 }
 
 .qr-row img,
+.harmony-invite img,
 .qr-svg {
   aspect-ratio: 1;
   background: #f8fafc;
@@ -248,9 +249,6 @@ code {
     justify-content: flex-start;
   }
 
-  .desktop-actions {
-    justify-content: flex-start;
-  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -267,6 +265,7 @@ code {
   input,
   .device,
   .qr-row img,
+  .harmony-invite img,
   .qr-svg {
     background: #0f172a;
     border-color: #334155;

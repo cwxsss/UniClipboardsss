@@ -75,22 +75,44 @@
           </section>
         </section>
 
-        <section id="desktopInvitePanel" class="panel desktop-invite">
-          <div>
+        <section id="desktopInvitePanel" class="desktop-invite">
+          <form id="desktopInviteForm" class="panel form">
             <h2>桌面端连接</h2>
-            <p class="hint">给 Windows、macOS 或 Linux 客户端加入同一个 Space。生成后请尽快在桌面端执行命令。</p>
-          </div>
-          <div class="desktop-actions">
-            <button id="createDesktopInviteButton" type="button">生成桌面端邀请</button>
-          </div>
-          <dl id="desktopInviteResult" class="kv hidden">
-            <dt>邀请码</dt>
-            <dd><code id="desktopInviteCode"></code><button data-copy="desktopInviteCode" type="button">复制</button></dd>
-            <dt>加入命令</dt>
-            <dd><code id="desktopJoinCommand"></code><button data-copy="desktopJoinCommand" type="button">复制</button></dd>
-            <dt>空间口令</dt>
-            <dd><code id="desktopPassphraseState"></code></dd>
-          </dl>
+            <label>
+              设备名称
+              <input id="desktopDeviceName" type="text" placeholder="例如 Windows PC" />
+            </label>
+            <label>
+              自定义邀请码
+              <input id="desktopCustomCode" type="text" placeholder="留空随机生成" />
+            </label>
+            <label>
+              空间口令
+              <input id="desktopPassphrase" type="text" placeholder="留空后在桌面端手动输入" />
+            </label>
+            <button id="createDesktopInviteButton" type="submit">生成桌面端邀请</button>
+          </form>
+
+          <section id="desktopInviteResult" class="panel hidden">
+            <div id="harmonyInviteBlock" class="harmony-invite hidden">
+              <h3>鸿蒙端加入空间二维码</h3>
+              <img id="harmonyInviteQr" alt="鸿蒙端加入空间二维码" />
+              <p class="hint">鸿蒙客户端进入“设置 - 加入空间”后扫码。</p>
+            </div>
+            <p id="harmonyInviteMissing" class="hint hidden">需要填写空间口令后才会生成鸿蒙端二维码。</p>
+            <h2>桌面端连接信息</h2>
+            <dl class="kv">
+              <dt>邀请码</dt>
+              <dd><code id="desktopInviteCode"></code><button data-copy="desktopInviteCode" type="button">复制</button></dd>
+              <dt>鸿蒙链接</dt>
+              <dd><code id="harmonyJoinUri"></code><button data-copy="harmonyJoinUri" type="button">复制</button></dd>
+              <dt>加入命令</dt>
+              <dd><code id="desktopJoinCommand"></code><button data-copy="desktopJoinCommand" type="button">复制</button></dd>
+              <dt>空间口令</dt>
+              <dd><code id="desktopPassphraseState"></code></dd>
+            </dl>
+            <p class="hint">邀请码生成后请尽快在桌面端执行加入命令。生成新邀请会替换旧邀请。</p>
+          </section>
         </section>
 
         <section class="panel">

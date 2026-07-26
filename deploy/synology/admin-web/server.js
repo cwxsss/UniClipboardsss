@@ -165,12 +165,39 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function buildJoinCommand(code, passphrase) {
+function buildJoinCommand(code, passphrase, deviceName) {
   const renderedPassphrase = passphrase || '<你的空间口令>';
-  return `uniclip join --code ${shellQuote(code)} --passphrase ${shellQuote(renderedPassphrase)}`;
+  const parts = [
+    'uniclip',
+    'join',
+    '--code',
+    shellQuote(code),
+    '--passphrase',
+    shellQuote(renderedPassphrase),
+  ];
+  if (deviceName) {
+    parts.push('--device-name', shellQuote(deviceName));
+  }
+  return parts.join(' ');
 }
 
-function startDesktopInvite() {
+function buildHarmonyJoinUri(code, passphrase) {
+  if (!code || !passphrase) return '';
+  return `uniclipboard://join-space?v=1&code=${encodeURIComponent(code)}&pwd=${encodeURIComponent(passphrase)}`;
+}
+
+function startDesktopInvite(options = {}) {
+  const deviceName = String(options.deviceName || '').trim();
+  const customCode = String(options.customCode || '').trim();
+  const requestedPassphrase = String(options.passphrase || '').trim();
+
+  if (customCode) {
+    const err = new Error('当前底层 uniclip invite 不支持自定义邀请码，请留空随机生成。');
+    err.status = 422;
+    err.code = 'CUSTOM_DESKTOP_CODE_UNSUPPORTED';
+    throw err;
+  }
+
   cleanupDesktopInvite();
 
   return new Promise((resolve, reject) => {
@@ -198,13 +225,16 @@ function startDesktopInvite() {
       settled = true;
       code = nextCode;
       clearTimeout(timeout);
-      const includePassphrase = showSpacePassphrase && Boolean(spacePassphrase);
+      const commandPassphrase = requestedPassphrase || (showSpacePassphrase ? spacePassphrase : '');
+      const includePassphrase = Boolean(commandPassphrase);
       resolve({
         code,
         expiresAtMs: null,
         passphraseIncluded: includePassphrase,
-        passphrase: includePassphrase ? spacePassphrase : '',
-        command: buildJoinCommand(code, includePassphrase ? spacePassphrase : ''),
+        passphrase: includePassphrase ? commandPassphrase : '',
+        harmonyJoinUri: buildHarmonyJoinUri(code, commandPassphrase),
+        deviceName,
+        command: buildJoinCommand(code, commandPassphrase, deviceName),
       });
     }
 
@@ -332,7 +362,8 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/desktop-invite') {
-      ok(res, await startDesktopInvite());
+      const body = await readBody(req);
+      ok(res, await startDesktopInvite(body));
       return;
     }
 
@@ -384,7 +415,12 @@ async function handleApi(req, res, url) {
 
     fail(res, 404, 'NOT_FOUND', 'not found');
   } catch (err) {
-    fail(res, 502, 'DAEMON_UNAVAILABLE', err.message || 'daemon is not ready');
+    fail(
+      res,
+      err.status || 502,
+      err.code || 'DAEMON_UNAVAILABLE',
+      err.message || 'daemon is not ready',
+    );
   }
 }
 

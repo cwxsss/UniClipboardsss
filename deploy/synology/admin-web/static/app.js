@@ -104,6 +104,24 @@ function setDesktopInviteResult(data) {
   document.querySelector('#desktopPassphraseState').textContent = data.passphraseIncluded
     ? '已包含在加入命令中'
     : '未显示；请在桌面端输入你的 Space 空间口令';
+  renderHarmonyInviteResult(data);
+}
+
+function renderHarmonyInviteResult(data) {
+  const harmonyBlock = document.querySelector('#harmonyInviteBlock');
+  const harmonyMissing = document.querySelector('#harmonyInviteMissing');
+  if (data.harmonyJoinUri) {
+    harmonyBlock.classList.remove('hidden');
+    harmonyMissing.classList.add('hidden');
+    setQrImage('harmonyInviteQr', '', data.harmonyJoinUri, 'HarmonyOS join-space QR');
+    document.querySelector('#harmonyJoinUri').textContent = data.harmonyJoinUri;
+  } else {
+    harmonyBlock.classList.add('hidden');
+    harmonyMissing.classList.remove('hidden');
+    document.querySelector('#harmonyJoinUri').textContent = '';
+    document.querySelector('#harmonyInviteQr').removeAttribute('src');
+    document.querySelector('#harmonyInviteQr').parentElement.querySelector('.qr-svg')?.remove();
+  }
 }
 
 function renderDevices(devices) {
@@ -199,14 +217,20 @@ document.querySelector('#createForm').addEventListener('submit', async event => 
   }
 });
 
-document.querySelector('#createDesktopInviteButton').addEventListener('click', async () => {
+document.querySelector('#desktopInviteForm').addEventListener('submit', async event => {
+  event.preventDefault();
   hideMessage();
   const button = document.querySelector('#createDesktopInviteButton');
   button.disabled = true;
+  const body = {
+    deviceName: document.querySelector('#desktopDeviceName').value,
+    customCode: document.querySelector('#desktopCustomCode').value,
+    passphrase: document.querySelector('#desktopPassphrase').value,
+  };
   try {
     const result = await api('/api/desktop-invite', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     });
     setDesktopInviteResult(result);
     showMessage('桌面端邀请已生成。新邀请会替换旧邀请。', 'success');
