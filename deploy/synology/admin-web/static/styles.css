@@ -151,7 +151,8 @@ input {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.qr-row img {
+.qr-row img,
+.qr-svg {
   aspect-ratio: 1;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -159,6 +160,12 @@ input {
   display: block;
   margin-top: 0.5rem;
   max-width: 220px;
+  width: 100%;
+}
+
+.qr-svg svg {
+  display: block;
+  height: 100%;
   width: 100%;
 }
 
@@ -259,7 +266,8 @@ code {
 
   input,
   .device,
-  .qr-row img {
+  .qr-row img,
+  .qr-svg {
     background: #0f172a;
     border-color: #334155;
     color: #e5e7eb;

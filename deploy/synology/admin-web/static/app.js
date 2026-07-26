@@ -50,10 +50,48 @@ function formatTime(ms) {
   return new Date(ms).toLocaleString();
 }
 
+function makeQrSvg(value, altText) {
+  if (!value || typeof qrcode !== 'function') return '';
+  const qr = qrcode(0, 'M');
+  qr.addData(value);
+  qr.make();
+  return qr.createSvgTag({
+    cellSize: 6,
+    margin: 12,
+    alt: altText,
+    title: altText,
+  });
+}
+
+function setQrImage(targetId, pngBase64, fallbackValue, altText) {
+  const img = document.querySelector(`#${targetId}`);
+  const holder = img.parentElement;
+  holder.querySelector('.qr-svg')?.remove();
+  img.removeAttribute('src');
+  img.classList.remove('hidden');
+
+  if (pngBase64) {
+    img.src = `data:image/png;base64,${pngBase64}`;
+    return;
+  }
+
+  const svg = makeQrSvg(fallbackValue, altText);
+  if (!svg) {
+    img.alt = `${altText}生成失败`;
+    return;
+  }
+
+  img.classList.add('hidden');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'qr-svg';
+  wrapper.innerHTML = svg;
+  holder.appendChild(wrapper);
+}
+
 function setRegistrationResult(data) {
   resultPanel.classList.remove('hidden');
-  document.querySelector('#connectQr').src = `data:image/png;base64,${data.qrCodePngBase64}`;
-  document.querySelector('#installQr').src = `data:image/png;base64,${data.installQrCodePngBase64}`;
+  setQrImage('connectQr', data.qrCodePngBase64, data.connectUri, '连接二维码');
+  setQrImage('installQr', data.installQrCodePngBase64, data.installUrl, '快捷指令二维码');
   document.querySelector('#baseUrl').textContent = data.baseUrl || '';
   document.querySelector('#username').textContent = data.username || '';
   document.querySelector('#password').textContent = data.password || '';
@@ -210,6 +248,8 @@ document.body.addEventListener('click', async event => {
       resultPanel.classList.remove('hidden');
       document.querySelector('#connectQr').removeAttribute('src');
       document.querySelector('#installQr').removeAttribute('src');
+      document.querySelector('#connectQr').parentElement.querySelector('.qr-svg')?.remove();
+      document.querySelector('#installQr').parentElement.querySelector('.qr-svg')?.remove();
       document.querySelector('#baseUrl').textContent = '';
       document.querySelector('#username').textContent = result.username || '';
       document.querySelector('#password').textContent = result.password || '';

@@ -9,6 +9,7 @@ $adminServer = Join-Path $root "deploy/synology/admin-web/server.js"
 $adminIndex = Join-Path $root "deploy/synology/admin-web/static/index.html"
 $adminApp = Join-Path $root "deploy/synology/admin-web/static/app.js"
 $adminStyles = Join-Path $root "deploy/synology/admin-web/static/styles.css"
+$adminQrVendor = Join-Path $root "deploy/synology/admin-web/static/lib/qrcode-generator-1.4.4.js"
 
 function Assert-Contains {
     param(
@@ -73,7 +74,7 @@ Assert-Contains -Path $dockerfile -Pattern "ln -s /opt/uniclipboard-admin-web/se
 Assert-Contains -Path $dockerfile -Pattern "uniclipboard-server-entrypoint"
 Assert-Contains -Path $dockerfile -Pattern "CMD [""uniclipboard-server-entrypoint""]"
 
-foreach ($path in @($adminServer, $adminIndex, $adminApp, $adminStyles)) {
+foreach ($path in @($adminServer, $adminIndex, $adminApp, $adminStyles, $adminQrVendor)) {
     if (-not (Test-Path $path)) {
         throw "Missing Synology admin web file: $path"
     }
@@ -93,12 +94,18 @@ Assert-Contains -Path $adminServer -Pattern "rotate-password"
 Assert-Contains -Path $adminServer -Pattern "HttpOnly"
 Assert-Contains -Path $adminServer -Pattern "SameSite=Strict"
 Assert-Contains -Path $adminServer -Pattern "password (redacted)"
+Assert-Contains -Path $adminQrVendor -Pattern "QR Code Generator for JavaScript"
+Assert-Contains -Path $adminQrVendor -Pattern "Licensed under the MIT license"
 Assert-Contains -Path $adminApp -Pattern "qrCodePngBase64"
 Assert-Contains -Path $adminApp -Pattern "installQrCodePngBase64"
+Assert-Contains -Path $adminApp -Pattern "makeQrSvg"
+Assert-Contains -Path $adminApp -Pattern "setQrImage"
 Assert-Contains -Path $adminApp -Pattern "/api/desktop-invite"
 Assert-Contains -Path $adminApp -Pattern "desktopInviteCode"
 Assert-Contains -Path $adminIndex -Pattern "desktopInvitePanel"
+Assert-Contains -Path $adminIndex -Pattern "qrcode-generator-1.4.4.js"
 Assert-Contains -Path $adminStyles -Pattern ".desktop-invite"
+Assert-Contains -Path $adminStyles -Pattern ".qr-svg"
 Assert-Contains -Path $adminIndex -Pattern "loginView"
 
 Assert-Contains -Path $workflow -Pattern "docker/build-push-action"
