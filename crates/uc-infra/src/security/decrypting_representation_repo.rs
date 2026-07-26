@@ -5,7 +5,7 @@
 //! Slice 3 起通过 BlobCipherPort 加解密——见 decrypting_clipboard_event_repo
 //! 的 wire format 兼容性说明。
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{debug, trace};
@@ -26,6 +26,12 @@ use uc_core::{
     ports::{security::BlobCipherPort, ClipboardRepresentationStore},
     BlobId,
 };
+
+#[derive(Debug, thiserror::Error)]
+#[error("failed to decrypt inline_data: {reason}")]
+struct UnreadableInlineData {
+    reason: String,
+}
 
 /// Decorator that decrypts representation inline_data on read.
 pub struct DecryptingClipboardRepresentationRepository {
@@ -70,7 +76,9 @@ impl ClipboardRepresentationStore for DecryptingClipboardRepresentationRepositor
                 .blob_cipher
                 .decrypt(&active, &ciphertext, &Aad::from(aad.as_slice()))
                 .await
-                .context("failed to decrypt inline_data")?;
+                .map_err(|error| UnreadableInlineData {
+                    reason: error.to_string(),
+                })?;
 
             trace!(
                 representation_id = %representation_id.as_ref(),
@@ -248,7 +256,11 @@ impl ClipboardRepresentationStore for DecryptingClipboardRepresentationRepositor
 // translates the storage error into the typed domain error.
 
 fn to_repo_err(e: anyhow::Error) -> ClipboardRepositoryError {
-    ClipboardRepositoryError::Storage(e.to_string())
+    if let Some(error) = e.downcast_ref::<UnreadableInlineData>() {
+        ClipboardRepositoryError::UnreadableEncryptedData(error.reason.clone())
+    } else {
+        ClipboardRepositoryError::Storage(e.to_string())
+    }
 }
 
 #[async_trait]
@@ -368,5 +380,33 @@ impl ListRepresentationIdsByStatePort for DecryptingClipboardRepresentationRepos
         ClipboardRepresentationStore::list_ids_by_payload_state(self, states)
             .await
             .map_err(to_repo_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_inline_data_maps_to_dedicated_repository_error() {
+        let error = anyhow::Error::new(UnreadableInlineData {
+            reason: "authentication failed".to_string(),
+        });
+
+        assert!(matches!(
+            to_repo_err(error),
+            ClipboardRepositoryError::UnreadableEncryptedData(reason)
+                if reason == "authentication failed"
+        ));
+    }
+
+    #[test]
+    fn other_errors_remain_storage_failures() {
+        let error = anyhow::anyhow!("database unavailable");
+
+        assert!(matches!(
+            to_repo_err(error),
+            ClipboardRepositoryError::Storage(reason) if reason == "database unavailable"
+        ));
     }
 }
