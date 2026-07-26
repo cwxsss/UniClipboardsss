@@ -1,319 +1,151 @@
-# UniClipboard 群晖 Docker 部署说明
+# UniClipboard 群晖 Headless 节点
 
-本文档说明当前 Docker 镜像的用途、端口、环境变量、群晖图形化部署方式，以及手机端和桌面端如何接入。
+这个镜像运行的是**持久在线 Space 成员**：它加入一个 UniClipboard Space，接收和发送桌面端的 iroh 同步事件，并提供移动端 `mobile-sync` 网关和内网管理页面。
 
-## 项目说明
+它不是 iroh relay，也不保存其他设备离线时等待转发的剪贴板。需要自建 relay 时，使用仓库中的 [`deploy/relay/`](../relay/README_ZH.md)；两种服务必须分开部署。
 
-UniClipboard 是一个跨设备剪贴板同步工具。桌面端之间使用 Space 成员关系和 iroh 网络同步；手机端当前通过 `mobile-sync` HTTP 网关兼容 SyncClipboard 协议。
-
-本目录维护的是面向群晖的封装镜像，不是重写 UniClipboard 主程序。它在官方 headless server 镜像基础上增加了：
-
-- 容器启动时自动初始化 Space。
-- 容器启动时自动配置手机同步公网地址。
-- 同一个容器内启动一个轻量 Web 管理页。
-- Web 管理页生成手机端二维码、账号和一次性密码。
-- Web 管理页查看、删除手机端设备，重置手机端密码。
-- Web 管理页生成桌面端 Space 邀请码和 `uniclip join` 命令。
-
-## 镜像
-
-推荐使用：
+## 镜像与数据目录
 
 ```text
 chuais/uniclipboard-server:latest
 ```
 
-也可以固定当前版本：
-
-```text
-chuais/uniclipboard-server:0.20.0-alpha.2
-```
-
-该镜像支持：
-
-- `linux/amd64`
-- `linux/arm64`
-
-## 数据目录
-
-容器内数据目录是：
-
-```text
-/data
-```
-
-群晖上建议映射到一个持久目录，例如：
+将群晖的持久化目录映射到容器 `/data`，例如：
 
 ```text
 /volume1/docker/uniclipboard/data -> /data
 ```
 
-这个目录会保存 Space 身份、数据库、密钥材料和移动端设备凭据。删除该目录等于重建一个新的 UniClipboard 节点。
+`/data` 包含节点身份、Space 成员资格、密钥材料、加密数据库和移动端凭据。备份它；删除它会让节点成为一个全新的设备。
 
 ## 端口
 
 | 容器端口 | 建议映射 | 用途 |
 | --- | --- | --- |
-| `42720/tcp` | `20221 -> 42720` 或只给 Nginx 内网反代 | 手机端 `mobile-sync` 网关 |
-| `42888/tcp` | `42888 -> 42888` | Web 管理页 |
+| `42720/tcp` | `20221 -> 42720`，或只给 Nginx 反向代理 | 移动端 `mobile-sync` 网关 |
+| `42888/tcp` | `42888 -> 42888`，仅内网 | 管理页面 |
 
-管理页端口只建议内网访问，不建议暴露到公网。
+若为这个节点配置固定 iroh 直连端口，另行映射和放行对应的 **UDP** 端口。它不是 relay 的 `7842/udp`。
 
-手机端公网访问建议用 Nginx / 群晖反向代理把域名转发到容器的 `42720`，例如：
+## 首次启动：二选一
 
-```text
-https://clip.example.com:20221 -> http://群晖内网IP:20221
-```
+首次启动时，入口脚本只接受 `UC_SPACE_BOOTSTRAP_MODE` 的两种值：`init` 或 `join`。容器检查到 `/data` 已完成设置后，不会再次创建或加入 Space，因此重启时不需要保留邀请码和 Space 口令。
 
-如果你直接把群晖宿主机的 `20221` 映射到容器 `42720`，反代上游就是：
+不要配置旧的自动初始化变量；它们不会触发任何自动操作。
 
-```text
-http://127.0.0.1:20221
-```
+### 路径一：创建新 Space
 
-## 必填环境变量
-
-最小可用配置：
+适用于你想让群晖节点创建一个全新的 Space，再从管理页或已有客户端邀请其他设备。
 
 ```text
 HOME=/data
-UC_AUTO_INIT=1
-UC_SPACE_PASSPHRASE=换成你的空间口令
+UC_SPACE_BOOTSTRAP_MODE=init
+UC_SPACE_PASSPHRASE=自行设置的强口令
 UC_DEVICE_NAME=Synology Server
-UC_MOBILE_PUBLIC_URL=https://你的域名:端口
+UC_MOBILE_PUBLIC_URL=https://clip.example.com:20221
 UC_ADMIN_WEB=1
 UC_ADMIN_PORT=42888
-UC_ADMIN_PASSWORD=换成你的管理页密码
+UC_ADMIN_PASSWORD=自行设置的管理页密码
 ```
 
-说明：
-
-- `HOME=/data`：让 UniClipboard 把配置和数据库写入持久目录。
-- `UC_AUTO_INIT=1`：如果 `/data` 里还没有 Space，就自动创建。
-- `UC_SPACE_PASSPHRASE`：Space 空间口令，桌面端加入时也需要用到。
-- `UC_DEVICE_NAME`：这个群晖 server 节点在 Space 里的设备名。
-- `UC_MOBILE_PUBLIC_URL`：手机端二维码里显示的访问地址，通常填你的域名和端口。
-- `UC_ADMIN_WEB=1`：启用 Web 管理页。
-- `UC_ADMIN_PORT=42888`：Web 管理页监听端口。
-- `UC_ADMIN_PASSWORD`：Web 管理页登录密码。
-
-## 可选环境变量
-
-```text
-UC_MOBILE_LABEL=meta60
-UC_ADMIN_SHOW_SPACE_PASSPHRASE=0
-UC_ADMIN_COOKIE_SECURE=0
-UC_ADMIN_OUTPUT_MAX_BYTES=65536
-UC_SERVER_CONFIG=/data/uniclipboard-server.env
-```
-
-说明：
-
-- `UC_MOBILE_LABEL`：容器第一次启动时自动创建一个手机设备，值就是设备显示名。现在已经有 Web 管理页，一般可以不填。
-- `UC_ADMIN_SHOW_SPACE_PASSPHRASE=1`：Web 管理页生成桌面端连接命令和鸿蒙新版二维码时，是否包含 Space 口令。默认不显示；关闭时请在客户端手动输入口令。
-- `UC_ADMIN_COOKIE_SECURE=1`：仅当管理页通过 HTTPS 反向代理访问时启用。直接通过群晖内网 HTTP 访问时保持 `0`，否则浏览器不会发送登录 Cookie。
-- `UC_ADMIN_OUTPUT_MAX_BYTES=65536`：管理页单次调用 `uniclip` 时允许读取的最大输出字节数，超出后会终止该调用，避免异常输出长期占用内存。
-- `UC_SERVER_CONFIG`：可选配置文件路径。默认会读取 `/data/uniclipboard-server.env`。群晖环境变量和这个文件二选一即可；如果两边都写，实际效果取决于启动脚本读取后的变量值。
-
-## 群晖图形化部署
-
-1. 打开 Container Manager。
-2. 注册表里搜索或手动拉取镜像：
-
-```text
-chuais/uniclipboard-server:latest
-```
-
-3. 创建容器。
-4. 卷映射：
-
-```text
-/volume1/docker/uniclipboard/data -> /data
-```
-
-5. 端口映射：
-
-```text
-20221 -> 42720
-42888 -> 42888
-```
-
-6. 环境变量填入最小可用配置。
-7. 启动容器。
-8. 打开管理页：
-
-```text
-http://群晖内网IP:42888
-```
-
-## 手机端连接
-
-1. 打开 Web 管理页。
-2. 登录管理密码。
-3. 在“生成连接信息”里输入手机名称。
-4. 点击生成二维码和账号密码。
-5. 手机扫描“连接二维码”。
-
-生成的手机端连接信息只适用于 mobile-sync 客户端。它包含：
-
-```text
-服务器 URL
-mobile 用户名
-一次性密码
-```
-
-手机实际访问的是：
-
-```text
-https://你的域名:端口/SyncClipboard.json
-```
-
-## 桌面端连接
-
-桌面端不能使用手机端二维码。桌面端需要加入同一个 Space。
-
-操作方式：
-
-1. 打开 Web 管理页。
-2. 找到“桌面端连接”。
-3. 点击“生成桌面端邀请”。
-4. 在新桌面设备上执行页面显示的命令：
+首次启动会执行：
 
 ```bash
-uniclip join --code <邀请码> --passphrase <你的空间口令>
+uniclip init --passphrase "$UC_SPACE_PASSPHRASE" --device-name "$UC_DEVICE_NAME"
 ```
 
-如果设置：
+### 路径二：加入已有 Space
+
+适用于已有一台桌面端已经在目标 Space 中。先在那台已加入的桌面端生成邀请码，然后把邀请码和**同一个 Space 口令**写入群晖环境变量或 `/data/uniclipboard-server.env`。
 
 ```text
-UC_ADMIN_SHOW_SPACE_PASSPHRASE=1
-```
-
-页面会把 `UC_SPACE_PASSPHRASE` 写进完整命令，并生成可供鸿蒙新版客户端扫描的 Space 二维码。否则页面只显示命令模板，不显示鸿蒙二维码；请在桌面端或鸿蒙客户端手动输入 Space 口令。
-
-注意：同一时间只保留一个桌面端邀请。生成新邀请会替换旧邀请。
-
-## Nginx 反向代理建议
-
-只反代手机端网关，不要把管理页暴露公网。
-
-手机端反代目标：
-
-```text
-http://群晖内网IP:20221
-```
-
-外部访问地址填入：
-
-```text
-UC_MOBILE_PUBLIC_URL=https://你的域名:端口
-```
-
-如果你的外部地址是标准 HTTPS 443 端口，可以不写端口：
-
-```text
-UC_MOBILE_PUBLIC_URL=https://clip.example.com
-```
-
-如果你使用非标准端口，例如 `20221`，必须写端口：
-
-```text
+HOME=/data
+UC_SPACE_BOOTSTRAP_MODE=join
+UC_SPACE_INVITE_CODE=从已有成员生成的邀请码
+UC_SPACE_PASSPHRASE=已有 Space 的口令
+UC_DEVICE_NAME=Synology Server
 UC_MOBILE_PUBLIC_URL=https://clip.example.com:20221
+UC_ADMIN_WEB=1
+UC_ADMIN_PORT=42888
+UC_ADMIN_PASSWORD=自行设置的管理页密码
 ```
 
-## 配置文件方式
+首次启动会执行：
 
-除了群晖图形界面环境变量，也可以把配置写入：
+```bash
+uniclip join --code "$UC_SPACE_INVITE_CODE" --passphrase "$UC_SPACE_PASSPHRASE" --device-name "$UC_DEVICE_NAME"
+```
+
+这条路径不需要进入容器，也不需要在容器运行后手动执行 `join`。邀请码和口令仅用于首次置备；成功后应从群晖环境变量或配置文件中移除，避免长期暴露。
+
+## 使用配置文件
+
+群晖图形界面中的环境变量与配置文件二选一。配置文件默认路径为：
 
 ```text
 /data/uniclipboard-server.env
 ```
 
-示例：
+每行必须是 `KEY=value`。包含空格的值请用引号，例如：
 
 ```sh
-HOME=/data
-UC_AUTO_INIT=1
-UC_SPACE_PASSPHRASE=replace-with-your-space-passphrase
-UC_DEVICE_NAME=Synology Server
+UC_DEVICE_NAME="Synology Server"
+```
+
+可通过 `UC_SERVER_CONFIG` 指定另一个配置文件路径。配置文件在容器启动时加载，适合不希望每次编辑容器配置时重填环境变量的情况。
+
+## 移动端和管理页面
+
+`UC_MOBILE_PUBLIC_URL` 是写入移动端连接信息的公网地址，例如：
+
+```text
 UC_MOBILE_PUBLIC_URL=https://clip.example.com:20221
-UC_ADMIN_WEB=1
-UC_ADMIN_PORT=42888
-UC_ADMIN_PASSWORD=replace-with-your-admin-password
-UC_ADMIN_SHOW_SPACE_PASSPHRASE=0
-UC_ADMIN_COOKIE_SECURE=0
-UC_ADMIN_OUTPUT_MAX_BYTES=65536
 ```
 
-注意：`.env` 文件每一行都是 `KEY=value`，不要写成说明文字，也不要写中文冒号。
+它应指向 Nginx 反向代理后的移动端网关，而不是 iroh relay。Nginx 上游指向群晖宿主机映射的 `42720/tcp`；管理页面 `42888/tcp` 不应公开到互联网。
 
-## 常见问题
-
-### 报错 `setup not complete`
-
-通常是 `/data` 里没有初始化成功，或没有正确设置：
-
-```text
-HOME=/data
-UC_AUTO_INIT=1
-UC_SPACE_PASSPHRASE=你的空间口令
-```
-
-确认后删除错误初始化产生的空数据目录，再重新创建容器。
-
-### 报错 `/data/uniclipboard-server.env: line X: ... not found`
-
-配置文件格式错了。必须是：
-
-```sh
-KEY=value
-```
-
-不要写：
-
-```text
-UC_DEVICE_NAME=Synology Server 这个是设备名称
-```
-
-也不要写带空格的未引用命令式内容。
-
-### 手机扫描二维码连接不上
-
-按顺序检查：
-
-1. `UC_MOBILE_PUBLIC_URL` 是否是手机能访问的地址。
-2. URL 是否带了正确端口。
-3. Nginx 是否转发到容器 `42720`。
-4. 访问 `https://你的域名:端口/SyncClipboard.json` 是否返回 `401`。返回 `401` 说明服务通了，只是需要账号密码，这是正常现象。
-5. 如果返回超时或 502，说明反代或端口映射不通。
-
-### 桌面端加入失败
-
-桌面端加入需要：
-
-```text
-邀请码
-Space 空间口令
-```
-
-邀请码是临时的，生成后请尽快使用。如果失败，重新在 Web 管理页生成一个新的桌面端邀请。
-
-### 管理页打不开
-
-检查：
-
-```text
-UC_ADMIN_WEB=1
-UC_ADMIN_PASSWORD=已设置
-42888 -> 42888 端口映射存在
-```
-
-然后访问：
+启动后在内网访问：
 
 ```text
 http://群晖内网IP:42888
 ```
 
-### 要不要暴露 `42888` 到公网
+管理页面用于创建移动端凭据和桌面端邀请码。手机二维码只适用于 `mobile-sync` 客户端，桌面端和支持 Space 的鸿蒙客户端使用 Space 邀请码与口令。
 
-不建议。管理页能生成设备凭据和桌面端邀请，应该只在内网或 VPN 中访问。
+## 可选网络变量
+
+```text
+UC_IROH_BIND_PORT=42999
+UC_IROH_PUBLIC_ADDR=203.0.113.10:42999
+```
+
+这两个变量只用于让这个**节点**公布固定的 iroh UDP 直连地址。`UC_IROH_PUBLIC_ADDR` 当前只接受 `IPv4:端口` 或 `IPv6:端口`，不接受域名。它们不是自建 relay 的配置，未设置时 iroh 仍可使用默认的 NAT 穿透和 relay fallback。
+
+## 常见问题
+
+### `setup is incomplete`
+
+检查 `/data` 是否为空，以及首次启动是否填写了以下任一完整配置：
+
+```text
+UC_SPACE_BOOTSTRAP_MODE=init
+UC_SPACE_PASSPHRASE=...
+```
+
+或：
+
+```text
+UC_SPACE_BOOTSTRAP_MODE=join
+UC_SPACE_INVITE_CODE=...
+UC_SPACE_PASSPHRASE=...
+```
+
+不要在已存在的 `/data` 上尝试用另一套 Space 凭据覆盖加入。要切换 Space，应先备份并删除该节点的数据目录，再按 `join` 路径重新置备。
+
+### 移动端无法连接
+
+确认手机可访问 `UC_MOBILE_PUBLIC_URL`，并检查 Nginx 是否将请求转发到容器的 `42720`。从公网访问 `/SyncClipboard.json` 返回 `401` 表示网关可达但需要移动端凭据，这是正常状态。
+
+### 跨网络桌面端仍无法同步
+
+确认桌面端未开启 LAN-only 模式。需要使用私有 iroh relay 时，部署 [`deploy/relay/`](../relay/README_ZH.md)，再在每台支持自定义 relay 的客户端中填入 relay URL；只部署 relay 不会自动把 URL 下发给所有客户端。

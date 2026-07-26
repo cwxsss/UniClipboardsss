@@ -17,7 +17,8 @@ strip_outer_quotes() {
   printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
-UC_AUTO_INIT="$(strip_outer_quotes "${UC_AUTO_INIT:-0}")"
+UC_SPACE_BOOTSTRAP_MODE="$(strip_outer_quotes "${UC_SPACE_BOOTSTRAP_MODE:-}")"
+UC_SPACE_INVITE_CODE="$(strip_outer_quotes "${UC_SPACE_INVITE_CODE:-}")"
 UC_SPACE_PASSPHRASE="$(strip_outer_quotes "${UC_SPACE_PASSPHRASE:-}")"
 UC_DEVICE_NAME="$(strip_outer_quotes "${UC_DEVICE_NAME:-Synology Server}")"
 UC_MOBILE_PUBLIC_URL="$(strip_outer_quotes "${UC_MOBILE_PUBLIC_URL:-}")"
@@ -31,13 +32,6 @@ UC_ADMIN_OUTPUT_MAX_BYTES="$(strip_outer_quotes "${UC_ADMIN_OUTPUT_MAX_BYTES:-65
 
 export UC_ADMIN_PORT
 export UC_ADMIN_PASSWORD
-
-auto_init_enabled() {
-  case "${UC_AUTO_INIT}" in
-    1|true|TRUE|yes|YES|on|ON) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 admin_web_enabled() {
   case "${UC_ADMIN_WEB}" in
@@ -84,19 +78,42 @@ is_setup_complete() {
   return 1
 }
 
-if auto_init_enabled && ! is_setup_complete; then
-  if [ -z "${UC_SPACE_PASSPHRASE:-}" ]; then
-    echo "UC_AUTO_INIT=1 requires UC_SPACE_PASSPHRASE in ${CONFIG_FILE}" >&2
-    exit 1
-  fi
+bootstrap_space() {
+  case "${UC_SPACE_BOOTSTRAP_MODE}" in
+    init)
+      if [ -z "${UC_SPACE_PASSPHRASE}" ]; then
+        echo "UC_SPACE_BOOTSTRAP_MODE=init requires UC_SPACE_PASSPHRASE in ${CONFIG_FILE}" >&2
+        exit 1
+      fi
 
-  uniclip init \
-    --passphrase "${UC_SPACE_PASSPHRASE}" \
-    --device-name "${UC_DEVICE_NAME}"
+      uniclip init \
+        --passphrase "${UC_SPACE_PASSPHRASE}" \
+        --device-name "${UC_DEVICE_NAME}"
+      ;;
+    join)
+      if [ -z "${UC_SPACE_INVITE_CODE}" ] || [ -z "${UC_SPACE_PASSPHRASE}" ]; then
+        echo "UC_SPACE_BOOTSTRAP_MODE=join requires UC_SPACE_INVITE_CODE and UC_SPACE_PASSPHRASE in ${CONFIG_FILE}" >&2
+        exit 1
+      fi
+
+      uniclip join \
+        --code "${UC_SPACE_INVITE_CODE}" \
+        --passphrase "${UC_SPACE_PASSPHRASE}" \
+        --device-name "${UC_DEVICE_NAME}"
+      ;;
+    *)
+      echo "UC_SPACE_BOOTSTRAP_MODE must be init or join when setup is incomplete" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if ! is_setup_complete; then
+  bootstrap_space
 fi
 
 if ! is_setup_complete; then
-  echo "setup is still incomplete; set UC_AUTO_INIT=1 and UC_SPACE_PASSPHRASE, or run uniclip init/join against /data first" >&2
+  echo "setup is still incomplete after UC_SPACE_BOOTSTRAP_MODE=${UC_SPACE_BOOTSTRAP_MODE}" >&2
   exit 1
 fi
 

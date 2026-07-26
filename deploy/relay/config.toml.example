@@ -1,0 +1,10 @@
+# 启动 relay 前替换域名和联系邮箱。
+http_bind_addr = "[::]:80"
+enable_quic_addr_discovery = true
+
+[tls]
+hostname = "relay.example.com"
+cert_mode = "LetsEncrypt"
+contact = "admin@example.com"
+prod_tls = true
+cert_dir = "/var/lib/iroh-relay/certs"
