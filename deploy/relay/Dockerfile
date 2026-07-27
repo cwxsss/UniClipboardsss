@@ -11,7 +11,7 @@ ARG CARGO_REGISTRY
 RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/99network \
  && sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
  && apt-get update \
- && apt-get install --yes --no-install-recommends ca-certificates clang git pkg-config \
+ && apt-get install --yes --no-install-recommends ca-certificates clang git lld pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
