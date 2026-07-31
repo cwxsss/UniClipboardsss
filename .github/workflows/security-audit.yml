@@ -50,8 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
-      issues: write
 
     steps:
       - uses: actions/checkout@v4
@@ -62,9 +60,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit Rust dependencies
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit --file Cargo.lock
 
   bun-audit:
     name: bun audit (${{ matrix.project.directory }})
@@ -77,21 +73,24 @@ jobs:
         project:
           - directory: '.'
             name: root
-            ignore: ''
+            # The latest React Router release (7.18.2) is still affected;
+            # the advisory is fixed in the not-yet-published 8.3.0 release.
+            # Remove this exception as soon as that fixed release is available.
+            ignore: '--ignore=GHSA-qwww-vcr4-c8h2'
           - directory: 'docs-site'
             name: docs-site
-            # All 4 are transitive and pinned by upstream packages that
-            # haven't shipped a fixed version yet (mermaid's dompurify pin,
-            # next's internal postcss pin, fumadocs-mdx's esbuild pin,
-            # fumadocs-core/mdx/openapi's js-yaml pin). Tracked in #1226 —
-            # remove an --ignore entry once the corresponding upstream bump
-            # lands and `bun audit --production` no longer flags it.
+            # These are transitive dependencies without an upstream release
+            # that resolves the advisory yet (Mermaid, Next, and
+            # fumadocs-openapi). Remove an entry once its upstream release
+            # makes `bun audit --production` clean.
             ignore: >-
-              --ignore=GHSA-vxr8-fq34-vvx9
+              --ignore=GHSA-c2j3-45gr-mqc4
               --ignore=GHSA-cmwh-pvxp-8882
+              --ignore=GHSA-vxr8-fq34-vvx9
               --ignore=GHSA-qx2v-qp2m-jg93
-              --ignore=GHSA-g7r4-m6w7-qqqr
-              --ignore=GHSA-h67p-54hq-rp68
+              --ignore=GHSA-6g55-p6wh-862q
+              --ignore=GHSA-r28c-9q8g-f849
+              --ignore=GHSA-f88m-g3jw-g9cj
           - directory: 'workers/update-server'
             name: update-server
             ignore: ''
