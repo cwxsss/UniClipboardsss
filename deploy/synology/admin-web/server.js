@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-'use strict';
+'use strict'
 
-const crypto = require('crypto');
-const fs = require('fs');
-const http = require('http');
-const path = require('path');
-const { spawn } = require('child_process');
+const crypto = require('crypto')
+const fs = require('fs')
+const http = require('http')
+const path = require('path')
+const { spawn } = require('child_process')
 
 const ROUTES = [
   'POST /api/login',
@@ -16,33 +16,33 @@ const ROUTES = [
   'DELETE /api/devices/',
   'POST /api/devices/{deviceId}/rotate-password',
   'POST /api/desktop-invite',
-];
+]
 
-const port = parseInt(process.env.UC_ADMIN_PORT || '42888', 10);
-const password = process.env.UC_ADMIN_PASSWORD || '';
-const publicUrl = process.env.UC_MOBILE_PUBLIC_URL || '';
-const uniclipBin = process.env.UC_UNICLIP_BIN || 'uniclip';
-const spacePassphrase = process.env.UC_SPACE_PASSPHRASE || '';
-const showSpacePassphrase = truthy(process.env.UC_ADMIN_SHOW_SPACE_PASSPHRASE || '0');
-const secureAdminCookie = truthy(process.env.UC_ADMIN_COOKIE_SECURE || '0');
-const maxCommandOutputBytes = positiveInteger(process.env.UC_ADMIN_OUTPUT_MAX_BYTES, 64 * 1024);
-const staticDir = path.join(__dirname, 'static');
-const sessions = new Map();
-const sessionTtlMs = 12 * 60 * 60 * 1000;
-let activeDesktopInvite = null;
+const port = parseInt(process.env.UC_ADMIN_PORT || '42888', 10)
+const password = process.env.UC_ADMIN_PASSWORD || ''
+const publicUrl = process.env.UC_MOBILE_PUBLIC_URL || ''
+const uniclipBin = process.env.UC_UNICLIP_BIN || 'uniclip'
+const spacePassphrase = process.env.UC_SPACE_PASSPHRASE || ''
+const showSpacePassphrase = truthy(process.env.UC_ADMIN_SHOW_SPACE_PASSPHRASE || '0')
+const secureAdminCookie = truthy(process.env.UC_ADMIN_COOKIE_SECURE || '0')
+const maxCommandOutputBytes = positiveInteger(process.env.UC_ADMIN_OUTPUT_MAX_BYTES, 64 * 1024)
+const staticDir = path.join(__dirname, 'static')
+const sessions = new Map()
+const sessionTtlMs = 12 * 60 * 60 * 1000
+let activeDesktopInvite = null
 
 if (!password) {
-  console.error('UC_ADMIN_WEB=1 requires UC_ADMIN_PASSWORD');
-  process.exit(1);
+  console.error('UC_ADMIN_WEB=1 requires UC_ADMIN_PASSWORD')
+  process.exit(1)
 }
 
 function truthy(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim())
 }
 
 function positiveInteger(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  const parsed = Number.parseInt(value, 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
 function json(res, status, body, headers = {}) {
@@ -50,16 +50,16 @@ function json(res, status, body, headers = {}) {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     ...headers,
-  });
-  res.end(JSON.stringify(body));
+  })
+  res.end(JSON.stringify(body))
 }
 
 function ok(res, data, headers) {
-  json(res, 200, { ok: true, data }, headers);
+  json(res, 200, { ok: true, data }, headers)
 }
 
 function fail(res, status, code, message) {
-  json(res, status, { ok: false, error: { code, message } });
+  json(res, status, { ok: false, error: { code, message } })
 }
 
 function sessionCookie(value, maxAge) {
@@ -68,82 +68,82 @@ function sessionCookie(value, maxAge) {
     'Path=/',
     'HttpOnly',
     'SameSite=Strict',
-  ];
-  if (maxAge != null) attributes.push(`Max-Age=${maxAge}`);
-  if (secureAdminCookie) attributes.push('Secure');
-  return attributes.join('; ');
+  ]
+  if (maxAge != null) attributes.push(`Max-Age=${maxAge}`)
+  if (secureAdminCookie) attributes.push('Secure')
+  return attributes.join('; ')
 }
 
 function createCommandOutputAppender() {
-  let outputBytes = 0;
+  let outputBytes = 0
   return (current, chunk) => {
-    const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+    const chunkBytes = Buffer.byteLength(chunk, 'utf8')
     if (outputBytes + chunkBytes > maxCommandOutputBytes) {
-      const err = new Error('uniclip command output exceeded the configured limit');
-      err.code = 'COMMAND_OUTPUT_TOO_LARGE';
-      throw err;
+      const err = new Error('uniclip command output exceeded the configured limit')
+      err.code = 'COMMAND_OUTPUT_TOO_LARGE'
+      throw err
     }
-    outputBytes += chunkBytes;
-    return current + chunk;
-  };
+    outputBytes += chunkBytes
+    return current + chunk
+  }
 }
 
 function parseCookies(req) {
-  const raw = req.headers.cookie || '';
-  const out = {};
+  const raw = req.headers.cookie || ''
+  const out = {}
   for (const part of raw.split(';')) {
-    const index = part.indexOf('=');
-    if (index < 0) continue;
-    const key = part.slice(0, index).trim();
-    const value = part.slice(index + 1).trim();
-    if (key) out[key] = decodeURIComponent(value);
+    const index = part.indexOf('=')
+    if (index < 0) continue
+    const key = part.slice(0, index).trim()
+    const value = part.slice(index + 1).trim()
+    if (key) out[key] = decodeURIComponent(value)
   }
-  return out;
+  return out
 }
 
 function cleanupSessions(now = Date.now()) {
   for (const [id, createdAt] of sessions.entries()) {
-    if (now - createdAt > sessionTtlMs) sessions.delete(id);
+    if (now - createdAt > sessionTtlMs) sessions.delete(id)
   }
 }
 
 function hasSession(req) {
-  cleanupSessions();
-  const id = parseCookies(req).uc_admin_session;
-  return Boolean(id && sessions.has(id));
+  cleanupSessions()
+  const id = parseCookies(req).uc_admin_session
+  return Boolean(id && sessions.has(id))
 }
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = '';
-    req.setEncoding('utf8');
+    let raw = ''
+    req.setEncoding('utf8')
     req.on('data', chunk => {
-      raw += chunk;
+      raw += chunk
       if (raw.length > 1024 * 1024) {
-        reject(new Error('request body too large'));
-        req.destroy();
+        reject(new Error('request body too large'))
+        req.destroy()
       }
-    });
+    })
     req.on('end', () => {
       if (!raw) {
-        resolve({});
-        return;
+        resolve({})
+        return
       }
       try {
-        resolve(JSON.parse(raw));
+        resolve(JSON.parse(raw))
       } catch {
-        reject(new Error('invalid json'));
+        reject(new Error('invalid json'))
       }
-    });
-    req.on('error', reject);
-  });
+    })
+    req.on('error', reject)
+  })
 }
 
 function safePasswordEquals(input) {
-  const a = Buffer.from(String(input || ''));
-  const b = Buffer.from(password);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+  const a = Buffer.from(String(input || ''))
+  const b = Buffer.from(password)
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
 }
 
 function runUniclip(args, stdinText) {
@@ -152,77 +152,77 @@ function runUniclip(args, stdinText) {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
       shell: process.platform === 'win32',
-    });
-    let stdout = '';
-    let stderr = '';
-    let outputError = null;
-    const appendOutput = createCommandOutputAppender();
+    })
+    let stdout = ''
+    let stderr = ''
+    let outputError = null
+    const appendOutput = createCommandOutputAppender()
 
     function rejectOversizedOutput(err) {
-      if (outputError) return;
-      outputError = err;
-      if (child.exitCode == null && !child.killed) child.kill('SIGTERM');
+      if (outputError) return
+      outputError = err
+      if (child.exitCode == null && !child.killed) child.kill('SIGTERM')
     }
 
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
     child.stdout.on('data', chunk => {
-      if (outputError) return;
+      if (outputError) return
       try {
-        stdout = appendOutput(stdout, chunk);
+        stdout = appendOutput(stdout, chunk)
       } catch (err) {
-        rejectOversizedOutput(err);
+        rejectOversizedOutput(err)
       }
-    });
+    })
     child.stderr.on('data', chunk => {
-      if (outputError) return;
+      if (outputError) return
       try {
-        stderr = appendOutput(stderr, chunk);
+        stderr = appendOutput(stderr, chunk)
       } catch (err) {
-        rejectOversizedOutput(err);
+        rejectOversizedOutput(err)
       }
-    });
-    child.on('error', reject);
+    })
+    child.on('error', reject)
     child.on('close', code => {
       if (outputError) {
-        reject(outputError);
-        return;
+        reject(outputError)
+        return
       }
       if (code !== 0) {
-        const message = stderr.trim() || `uniclip exited with code ${code}`;
-        reject(new Error(message));
-        return;
+        const message = stderr.trim() || `uniclip exited with code ${code}`
+        reject(new Error(message))
+        return
       }
       try {
-        resolve(JSON.parse(stdout));
+        resolve(JSON.parse(stdout))
       } catch {
-        reject(new Error('uniclip returned invalid json'));
+        reject(new Error('uniclip returned invalid json'))
       }
-    });
+    })
     if (stdinText != null) {
-      child.stdin.end(`${stdinText}\n`);
+      child.stdin.end(`${stdinText}\n`)
     } else {
-      child.stdin.end();
+      child.stdin.end()
     }
-  });
+  })
 }
 
 function cleanupDesktopInvite() {
-  if (!activeDesktopInvite) return;
-  const { child } = activeDesktopInvite;
-  activeDesktopInvite = null;
+  if (!activeDesktopInvite) return
+  const { child } = activeDesktopInvite
+  activeDesktopInvite = null
   if (child.exitCode == null && !child.killed) {
-    child.kill('SIGTERM');
+    child.kill('SIGTERM')
   }
 }
 
 function shellQuote(value) {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value
+  return `'${String(value).replace(/'/g, `'\\''`)}'`
 }
 
 function buildJoinCommand(code, passphrase, deviceName) {
-  const renderedPassphrase = passphrase || '<你的空间口令>';
+  const renderedPassphrase = passphrase || '<你的空间口令>'
   const parts = [
     'uniclip',
     'join',
@@ -230,59 +230,59 @@ function buildJoinCommand(code, passphrase, deviceName) {
     shellQuote(code),
     '--passphrase',
     shellQuote(renderedPassphrase),
-  ];
+  ]
   if (deviceName) {
-    parts.push('--device-name', shellQuote(deviceName));
+    parts.push('--device-name', shellQuote(deviceName))
   }
-  return parts.join(' ');
+  return parts.join(' ')
 }
 
 function buildHarmonyJoinUri(code, passphrase) {
-  if (!code || !passphrase) return '';
-  return `uniclipboard://join-space?v=1&code=${encodeURIComponent(code)}&pwd=${encodeURIComponent(passphrase)}`;
+  if (!code || !passphrase) return ''
+  return `uniclipboard://join-space?v=1&code=${encodeURIComponent(code)}&pwd=${encodeURIComponent(passphrase)}`
 }
 
 function startDesktopInvite(options = {}) {
-  const deviceName = String(options.deviceName || '').trim();
+  const deviceName = String(options.deviceName || '').trim()
 
-  cleanupDesktopInvite();
+  cleanupDesktopInvite()
 
   return new Promise((resolve, reject) => {
     const child = spawn(uniclipBin, ['invite'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
       shell: process.platform === 'win32',
-    });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let code = '';
-    const appendOutput = createCommandOutputAppender();
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let code = ''
+    const appendOutput = createCommandOutputAppender()
 
     function failInvite(err) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      cleanupDesktopInvite();
-      reject(err);
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      cleanupDesktopInvite()
+      reject(err)
     }
 
     const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanupDesktopInvite();
-      reject(new Error('timed out waiting for invitation code'));
-    }, 30000);
+      if (settled) return
+      settled = true
+      cleanupDesktopInvite()
+      reject(new Error('timed out waiting for invitation code'))
+    }, 30000)
 
-    activeDesktopInvite = { child, startedAt: Date.now() };
+    activeDesktopInvite = { child, startedAt: Date.now() }
 
     function finishWithCode(nextCode) {
-      if (settled) return;
-      settled = true;
-      code = nextCode;
-      clearTimeout(timeout);
-      const commandPassphrase = showSpacePassphrase ? spacePassphrase : '';
-      const includePassphrase = Boolean(commandPassphrase);
+      if (settled) return
+      settled = true
+      code = nextCode
+      clearTimeout(timeout)
+      const commandPassphrase = showSpacePassphrase ? spacePassphrase : ''
+      const includePassphrase = Boolean(commandPassphrase)
       resolve({
         code,
         expiresAtMs: null,
@@ -291,49 +291,49 @@ function startDesktopInvite(options = {}) {
         harmonyJoinUri: buildHarmonyJoinUri(code, commandPassphrase),
         deviceName,
         command: buildJoinCommand(code, commandPassphrase, deviceName),
-      });
+      })
     }
 
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
     child.stdout.on('data', chunk => {
-      if (settled) return;
+      if (settled) return
       try {
-        stdout = appendOutput(stdout, chunk);
+        stdout = appendOutput(stdout, chunk)
       } catch (err) {
-        failInvite(err);
-        return;
+        failInvite(err)
+        return
       }
-      const match = stdout.match(/INVITATION_CODE=([^\r\n]+)/);
-      if (match) finishWithCode(match[1].trim());
-    });
+      const match = stdout.match(/INVITATION_CODE=([^\r\n]+)/)
+      if (match) finishWithCode(match[1].trim())
+    })
     child.stderr.on('data', chunk => {
-      if (settled) return;
+      if (settled) return
       try {
-        stderr = appendOutput(stderr, chunk);
+        stderr = appendOutput(stderr, chunk)
       } catch (err) {
-        failInvite(err);
+        failInvite(err)
       }
-    });
+    })
     child.on('error', err => {
       if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        activeDesktopInvite = null;
-        reject(err);
+        settled = true
+        clearTimeout(timeout)
+        activeDesktopInvite = null
+        reject(err)
       }
-    });
+    })
     child.on('close', exitCode => {
-      clearTimeout(timeout);
+      clearTimeout(timeout)
       if (activeDesktopInvite && activeDesktopInvite.child === child) {
-        activeDesktopInvite = null;
+        activeDesktopInvite = null
       }
       if (!settled) {
-        settled = true;
-        reject(new Error(stderr.trim() || `uniclip invite exited with code ${exitCode}`));
+        settled = true
+        reject(new Error(stderr.trim() || `uniclip invite exited with code ${exitCode}`))
       }
-    });
-  });
+    })
+  })
 }
 
 function normalizeDevice(device) {
@@ -347,7 +347,7 @@ function normalizeDevice(device) {
     lastSeenIp: device.last_seen_ip || device.lastSeenIp || null,
     reportedName: device.reported_name || device.reportedName || null,
     reportedOs: device.reported_os || device.reportedOs || null,
-  };
+  }
 }
 
 function normalizeRegistration(out) {
@@ -361,11 +361,11 @@ function normalizeRegistration(out) {
     installQrCodePngBase64: out.install_qr_code_png_base64 || out.installQrCodePngBase64,
     connectUri: out.connect_uri || out.connectUri,
     qrCodePngBase64: out.qr_code_png_base64 || out.qrCodePngBase64,
-  };
+  }
 }
 
 async function mobileStatus() {
-  const status = await runUniclip(['--json', 'mobile', 'status']);
+  const status = await runUniclip(['--json', 'mobile', 'status'])
   return {
     enabled: Boolean(status.enabled),
     lanListenEnabled: Boolean(status.lan_listen_enabled || status.lanListenEnabled),
@@ -378,167 +378,180 @@ async function mobileStatus() {
     publicUrl,
     deviceCount: status.device_count || status.deviceCount || 0,
     devices: Array.isArray(status.devices) ? status.devices.map(normalizeDevice) : [],
-  };
+  }
 }
 
 async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/login') {
-    let body;
+    let body
     try {
-      body = await readBody(req);
+      body = await readBody(req)
     } catch (err) {
-      fail(res, 400, 'BAD_REQUEST', err.message);
-      return;
+      fail(res, 400, 'BAD_REQUEST', err.message)
+      return
     }
     if (!safePasswordEquals(body.password)) {
-      fail(res, 401, 'UNAUTHORIZED', 'invalid password');
-      return;
+      fail(res, 401, 'UNAUTHORIZED', 'invalid password')
+      return
     }
-    const sessionId = crypto.randomBytes(32).toString('base64url');
-    sessions.set(sessionId, Date.now());
-    ok(res, { authenticated: true }, {
-      'Set-Cookie': sessionCookie(sessionId),
-    });
-    return;
+    const sessionId = crypto.randomBytes(32).toString('base64url')
+    sessions.set(sessionId, Date.now())
+    ok(
+      res,
+      { authenticated: true },
+      {
+        'Set-Cookie': sessionCookie(sessionId),
+      }
+    )
+    return
   }
 
   if (!hasSession(req)) {
-    fail(res, 401, 'UNAUTHORIZED', 'login required');
-    return;
+    fail(res, 401, 'UNAUTHORIZED', 'login required')
+    return
   }
 
   try {
     if (req.method === 'POST' && url.pathname === '/api/logout') {
-      const id = parseCookies(req).uc_admin_session;
-      if (id) sessions.delete(id);
-      ok(res, { authenticated: false }, {
-        'Set-Cookie': sessionCookie('', 0),
-      });
-      return;
+      const id = parseCookies(req).uc_admin_session
+      if (id) sessions.delete(id)
+      ok(
+        res,
+        { authenticated: false },
+        {
+          'Set-Cookie': sessionCookie('', 0),
+        }
+      )
+      return
     }
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
-      ok(res, await mobileStatus());
-      return;
+      ok(res, await mobileStatus())
+      return
     }
 
     if (req.method === 'GET' && url.pathname === '/api/devices') {
-      const status = await mobileStatus();
-      ok(res, status.devices);
-      return;
+      const status = await mobileStatus()
+      ok(res, status.devices)
+      return
     }
 
     if (req.method === 'POST' && url.pathname === '/api/desktop-invite') {
-      const body = await readBody(req);
-      ok(res, await startDesktopInvite(body));
-      return;
+      const body = await readBody(req)
+      ok(res, await startDesktopInvite(body))
+      return
     }
 
     if (req.method === 'POST' && url.pathname === '/api/devices') {
-      const body = await readBody(req);
-      const label = String(body.label || '').trim();
+      const body = await readBody(req)
+      const label = String(body.label || '').trim()
       if (!label) {
-        fail(res, 422, 'LABEL_REQUIRED', 'device label is required');
-        return;
+        fail(res, 422, 'LABEL_REQUIRED', 'device label is required')
+        return
       }
-      const args = ['--json', 'mobile', 'add', '--label', label];
-      if (body.username) args.push('--username', String(body.username).trim());
-      let stdinText = null;
+      const args = ['--json', 'mobile', 'add', '--label', label]
+      if (body.username) args.push('--username', String(body.username).trim())
+      let stdinText = null
       if (body.password) {
-        args.push('--password-stdin');
-        stdinText = String(body.password);
+        args.push('--password-stdin')
+        stdinText = String(body.password)
       }
-      const out = await runUniclip(args, stdinText);
-      ok(res, normalizeRegistration(out));
-      return;
+      const out = await runUniclip(args, stdinText)
+      ok(res, normalizeRegistration(out))
+      return
     }
 
-    const revokeMatch = url.pathname.match(/^\/api\/devices\/([^/]+)$/);
+    const revokeMatch = url.pathname.match(/^\/api\/devices\/([^/]+)$/)
     if (req.method === 'DELETE' && revokeMatch) {
-      const deviceId = decodeURIComponent(revokeMatch[1]);
-      await runUniclip(['--json', 'mobile', 'revoke', deviceId]);
-      ok(res, { deviceId, revoked: true });
-      return;
+      const deviceId = decodeURIComponent(revokeMatch[1])
+      await runUniclip(['--json', 'mobile', 'revoke', deviceId])
+      ok(res, { deviceId, revoked: true })
+      return
     }
 
-    const rotateMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/rotate-password$/);
+    const rotateMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/rotate-password$/)
     if (req.method === 'POST' && rotateMatch) {
-      const body = await readBody(req);
-      const deviceId = decodeURIComponent(rotateMatch[1]);
-      const args = ['--json', 'mobile', 'rotate-password', deviceId];
-      let stdinText = null;
+      const body = await readBody(req)
+      const deviceId = decodeURIComponent(rotateMatch[1])
+      const args = ['--json', 'mobile', 'rotate-password', deviceId]
+      let stdinText = null
       if (body.password) {
-        args.push('--password-stdin');
-        stdinText = String(body.password);
+        args.push('--password-stdin')
+        stdinText = String(body.password)
       }
-      const out = await runUniclip(args, stdinText);
+      const out = await runUniclip(args, stdinText)
       ok(res, {
         deviceId: out.device_id || out.deviceId,
         username: out.username,
         password: out.password,
-      });
-      return;
+      })
+      return
     }
 
-    fail(res, 404, 'NOT_FOUND', 'not found');
+    fail(res, 404, 'NOT_FOUND', 'not found')
   } catch (err) {
     fail(
       res,
       err.status || 502,
       err.code || 'DAEMON_UNAVAILABLE',
-      err.message || 'daemon is not ready',
-    );
+      err.message || 'daemon is not ready'
+    )
   }
 }
 
 function serveStatic(req, res, url) {
-  let rel = url.pathname === '/' ? '/index.html' : url.pathname;
-  rel = path.normalize(rel).replace(/^(\.\.[/\\])+/, '');
-  const file = path.join(staticDir, rel);
+  let rel = url.pathname === '/' ? '/index.html' : url.pathname
+  rel = path.normalize(rel).replace(/^(\.\.[/\\])+/, '')
+  const file = path.join(staticDir, rel)
   if (!file.startsWith(staticDir)) {
-    res.writeHead(403);
-    res.end('forbidden');
-    return;
+    res.writeHead(403)
+    res.end('forbidden')
+    return
   }
   fs.readFile(file, (err, data) => {
     if (err) {
-      res.writeHead(404);
-      res.end('not found');
-      return;
+      res.writeHead(404)
+      res.end('not found')
+      return
     }
-    const ext = path.extname(file);
-    const type = ext === '.js' ? 'text/javascript; charset=utf-8'
-      : ext === '.css' ? 'text/css; charset=utf-8'
-        : 'text/html; charset=utf-8';
+    const ext = path.extname(file)
+    const type =
+      ext === '.js'
+        ? 'text/javascript; charset=utf-8'
+        : ext === '.css'
+          ? 'text/css; charset=utf-8'
+          : 'text/html; charset=utf-8'
     res.writeHead(200, {
       'Content-Type': type,
       'Cache-Control': 'no-store',
-    });
-    res.end(data);
-  });
+    })
+    res.end(data)
+  })
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
   if (url.pathname.startsWith('/api/')) {
-    void handleApi(req, res, url);
-    return;
+    void handleApi(req, res, url)
+    return
   }
-  serveStatic(req, res, url);
-});
+  serveStatic(req, res, url)
+})
 
-module.exports = { server };
+module.exports = { server }
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`UniClipboard admin web listening on ${port}; password (redacted); routes: ${ROUTES.length}`);
-});
+  console.log(
+    `UniClipboard admin web listening on ${port}; password (redacted); routes: ${ROUTES.length}`
+  )
+})
 
 process.on('SIGINT', () => {
-  cleanupDesktopInvite();
-  process.exit(130);
-});
+  cleanupDesktopInvite()
+  process.exit(130)
+})
 
 process.on('SIGTERM', () => {
-  cleanupDesktopInvite();
-  process.exit(143);
-});
+  cleanupDesktopInvite()
+  process.exit(143)
+})

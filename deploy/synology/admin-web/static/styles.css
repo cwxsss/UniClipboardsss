@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+  font-family: Inter, 'Microsoft YaHei', system-ui, sans-serif;
   background: #f5f7fb;
   color: #111827;
 }
@@ -248,7 +248,6 @@ code {
   .device-actions {
     justify-content: flex-start;
   }
-
 }
 
 @media (prefers-color-scheme: dark) {

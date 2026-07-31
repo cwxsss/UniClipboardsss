@@ -203,11 +203,7 @@ pub(crate) async fn revoke(device_id: Option<String>, json: bool, verbose: bool)
     }
 }
 
-pub(crate) async fn rotate_password(
-    args: RotatePasswordArgs,
-    json: bool,
-    verbose: bool,
-) -> i32 {
+pub(crate) async fn rotate_password(args: RotatePasswordArgs, json: bool, verbose: bool) -> i32 {
     let replacement = if args.password_stdin {
         match shared::read_password_stdin() {
             Ok(p) => Some(p),
