@@ -82,7 +82,13 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
-    exclude: ['**/node_modules/**', '**/dist/**', '**/.worktrees/**', '**/worktrees/**'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.worktrees/**',
+      '**/worktrees/**',
+      '**/deploy/synology/admin-web/test/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

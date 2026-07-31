@@ -145,18 +145,20 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    # 复用 build-base-image.yml 维护的 bookworm 镜像,避免 PR job 每次访问
-    # apt 源安装 webkit/gtk 依赖。镜像已包含 cargo check 所需系统包。
-    container:
-      image: ghcr.io/uniclipboard/build-bookworm:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # Forks cannot read the upstream project's private GHCR image. Install
+      # the same native build dependencies on the public GitHub runner instead.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake clang libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

@@ -33,6 +33,9 @@ export default tseslint.config(
       // 与生成器输出逐字节一致（CI 用 git diff --exit-code 做 drift-check）。
       // 因此排除在 eslint 之外，避免 lint-staged 的 `eslint --fix` 改写它。
       'src/api/generated/',
+      // The Synology admin web application ships its own CommonJS runtime
+      // and tests; it is not part of the frontend lint/test toolchain.
+      'deploy/synology/admin-web/',
     ],
   },
   js.configs.recommended,
