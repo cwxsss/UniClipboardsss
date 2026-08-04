@@ -306,12 +306,17 @@ jobs:
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             unset TAURI_SIGNING_PRIVATE_KEY
             unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            # This fork has no updater signing key. Keep producing the regular
+            # installer, but do not ask Tauri to create signed updater bundles.
+            TAURI_CONFIG_ARGS=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          else
+            TAURI_CONFIG_ARGS=()
           fi
 
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
-            bun run tauri build ${{ matrix.args }} --bundles nsis
+            bun run tauri build ${{ matrix.args }} --bundles nsis "${TAURI_CONFIG_ARGS[@]}"
           else
-            bun run tauri build ${{ matrix.args }}
+            bun run tauri build ${{ matrix.args }} "${TAURI_CONFIG_ARGS[@]}"
           fi
 
       - name: package Windows portable zip
