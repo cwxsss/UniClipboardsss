@@ -299,6 +299,15 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           VITE_SENTRY_PROJECT: ${{ secrets.VITE_SENTRY_PROJECT }}
         run: |
+          # GitHub exposes unset repository secrets as empty environment
+          # variables. Tauri treats an empty signing-key variable as a key and
+          # then fails after producing the installer, so leave both variables
+          # truly unset when this fork has no updater signing key configured.
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY
+            unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+
           if [ "${{ matrix.platform }}" = "windows-latest" ]; then
             bun run tauri build ${{ matrix.args }} --bundles nsis
           else
