@@ -197,7 +197,10 @@ export const TitleBar = ({ className, isSetupActive = false, rightSlot }: TitleB
           </div>
         )}
         {isWindows && (
-          <div className="flex items-center h-full bg-transparent" data-tauri-drag-region="false">
+          <div
+            className="flex h-full shrink-0 items-center bg-transparent pr-2"
+            data-tauri-drag-region="false"
+          >
             <TitleBarButton aria-label="最小化" onClick={handleMinimize}>
               <Minus className="size-4" />
             </TitleBarButton>
