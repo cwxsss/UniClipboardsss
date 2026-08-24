@@ -82,6 +82,7 @@ describe('AddDeviceDialog invitation issuing', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('123456789')).toBeInTheDocument()
     })
+    expect(screen.getByTitle('Scan this QR code')).toBeInTheDocument()
     expect(issuePairingInvitation).toHaveBeenCalledTimes(1)
   })
 })

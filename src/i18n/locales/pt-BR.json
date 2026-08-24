@@ -1019,6 +1019,8 @@
     "addDevice": {
       "title": "Convidar um novo dispositivo",
       "subtitle": "Digite este código no dispositivo que vai entrar",
+      "qrTitle": "Escaneie este código QR",
+      "qrHint": "Escaneie no dispositivo que vai entrar e digite a senha do espaço",
       "expiresIn": "Expira em {{remaining}}",
       "expired": "Convite expirado",
       "passphraseHint": "O dispositivo que vai entrar também precisa da frase secreta do Espaço para concluir o pareamento",

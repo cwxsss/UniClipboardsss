@@ -130,6 +130,22 @@ describe('selectPreviousPublishedRelease', () => {
 
     expect(release).toBeNull()
   })
+
+  it('accepts extended prerelease identifiers used by existing releases', () => {
+    const release = selectPreviousPublishedRelease(
+      [
+        {
+          tagName: 'v1.0.0-alpha.7-upstream-fix.1',
+          isDraft: false,
+          isPrerelease: true,
+          publishedAt: '2026-08-24T03:13:47Z',
+        },
+      ],
+      '1.0.0-alpha.7-upstream-fix.2'
+    )
+
+    expect(release?.tagName).toBe('v1.0.0-alpha.7-upstream-fix.1')
+  })
 })
 
 describe('fetchPublishedReleases', () => {

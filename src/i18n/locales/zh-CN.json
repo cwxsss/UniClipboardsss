@@ -1015,6 +1015,8 @@
     "addDevice": {
       "title": "邀请新设备",
       "subtitle": "在新设备上输入此邀请码",
+      "qrTitle": "扫描此二维码",
+      "qrHint": "用新设备扫描二维码，然后输入空间口令",
       "expiresIn": "{{remaining}} 后过期",
       "expired": "邀请码已过期",
       "passphraseHint": "新设备还需输入空间口令完成配对",

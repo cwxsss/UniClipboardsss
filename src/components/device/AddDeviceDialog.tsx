@@ -9,6 +9,7 @@ import {
   RefreshCw,
   XCircle,
 } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -304,6 +305,23 @@ function AddDeviceDialogInner({ open, onOpenChange }: AddDeviceDialogProps) {
               : 'border-primary/20 from-primary/[0.04] to-transparent'
           )}
         >
+          <div className="flex flex-col items-center gap-2.5 pb-4">
+            <div className="rounded-xl border border-border/60 bg-white p-3 shadow-sm dark:border-border/80">
+              <QRCodeSVG
+                value={invitation.code}
+                size={256}
+                marginSize={2}
+                level="M"
+                title={t('devices.addDevice.qrTitle')}
+                aria-label={t('devices.addDevice.qrTitle')}
+                className="size-48"
+              />
+            </div>
+            <p className="text-center text-xs text-muted-foreground">
+              {t('devices.addDevice.qrHint')}
+            </p>
+          </div>
+
           <div
             className={cn(
               'select-all text-center font-mono font-semibold tabular-nums text-foreground',

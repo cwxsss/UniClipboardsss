@@ -1016,6 +1016,8 @@
     "addDevice": {
       "title": "Invite a new device",
       "subtitle": "Enter this code on the joining device",
+      "qrTitle": "Scan this QR code",
+      "qrHint": "Scan it on the joining device, then enter the space passphrase",
       "expiresIn": "Expires in {{remaining}}",
       "expired": "Invitation expired",
       "passphraseHint": "The joining device also needs the space passphrase to finish pairing",

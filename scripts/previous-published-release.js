@@ -1,61 +1,19 @@
 import fs from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { parseSemver } from './bump-version-lib.js'
-
-const PRERELEASE_ORDER = {
-  alpha: 0,
-  beta: 1,
-  rc: 2,
-}
+import { compare, prerelease, valid } from 'semver'
 
 export function stripVersionTagPrefix(value) {
   return value.startsWith('v') ? value.slice(1) : value
 }
 
-function comparePrerelease(a, b) {
-  if (a.prerelease === b.prerelease) {
-    if (a.prerelease === null) {
-      return 0
-    }
-    return a.prereleaseVersion - b.prereleaseVersion
-  }
-
-  if (a.prerelease === null) {
-    return 1
-  }
-
-  if (b.prerelease === null) {
-    return -1
-  }
-
-  const aOrder = PRERELEASE_ORDER[a.prerelease] ?? Number.MAX_SAFE_INTEGER
-  const bOrder = PRERELEASE_ORDER[b.prerelease] ?? Number.MAX_SAFE_INTEGER
-
-  if (aOrder !== bOrder) {
-    return aOrder - bOrder
-  }
-
-  return a.prerelease.localeCompare(b.prerelease)
-}
-
 export function compareVersions(aVersion, bVersion) {
-  const a = parseSemver(stripVersionTagPrefix(aVersion))
-  const b = parseSemver(stripVersionTagPrefix(bVersion))
-
-  if (a.major !== b.major) {
-    return a.major - b.major
+  const a = valid(stripVersionTagPrefix(aVersion))
+  const b = valid(stripVersionTagPrefix(bVersion))
+  if (!a || !b) {
+    throw new Error(`Invalid semver version: ${aVersion} or ${bVersion}`)
   }
-
-  if (a.minor !== b.minor) {
-    return a.minor - b.minor
-  }
-
-  if (a.patch !== b.patch) {
-    return a.patch - b.patch
-  }
-
-  return comparePrerelease(a, b)
+  return compare(a, b)
 }
 
 function normalizeRelease(release) {
@@ -70,14 +28,19 @@ function normalizeRelease(release) {
 
 export function selectPreviousPublishedRelease(releases, currentVersion) {
   const normalizedCurrentVersion = stripVersionTagPrefix(currentVersion)
-  const currentIsStable = parseSemver(normalizedCurrentVersion).prerelease === null
+  const currentSemver = valid(normalizedCurrentVersion)
+  if (!currentSemver) {
+    throw new Error(`Invalid current semver version: ${currentVersion}`)
+  }
+  const currentIsStable = prerelease(currentSemver) === null
 
   const candidates = releases
     .filter(release => !release.isDraft)
     .filter(release => Boolean(release.publishedAt))
     .map(normalizeRelease)
+    .filter(release => Boolean(valid(release.version)))
     .filter(release => compareVersions(release.version, normalizedCurrentVersion) < 0)
-    .filter(release => !currentIsStable || parseSemver(release.version).prerelease === null)
+    .filter(release => !currentIsStable || prerelease(valid(release.version)) === null)
     .sort((left, right) => compareVersions(right.version, left.version))
 
   return candidates[0] ?? null
