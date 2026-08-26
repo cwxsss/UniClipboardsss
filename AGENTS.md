@@ -21,8 +21,18 @@ Do not treat this file as a full memory dump. Read only the documents needed for
   - 引用外部规范（RFC、标准库 API 等）时，专有名词保留英文原文。
 - **代码注释**（`//` / `///` / `/* */` / doc comments）使用英文。存量中文注释不强制迁移，新增或修改注释时按英文撰写；踏到旧中文注释可顺手改成英文。
   - 代码标识符（函数、类型、变量名）、Git commit message、PR 标题与描述同样保持英文。
-  - **不强制语言审查的开发自留路径**：`.planning/`（调研/spike 笔记）、`.agents/`（项目技能）、`.codex/`（Codex 配置与工具）、`publish = false` 的诊断 crate（例如 `crates/p2p-bench`）。这些目录按写作者方便即可，CodeRabbit 也已在 `.coderabbit.yaml` 中跳过。
+- **不强制语言审查的开发自留路径**：`.planning/`（调研/spike 笔记）、`.agents/`（项目技能）、`.codex/`（Codex 配置与工具）、`publish = false` 的诊断 crate（例如 `crates/p2p-bench`）。这些目录按写作者方便即可，CodeRabbit 也已在 `.coderabbit.yaml` 中跳过。
 - `CLAUDE.md` is only a compatibility entrypoint. This file is the root instruction source.
+
+## 项目阶段与工作优先级
+
+- 当前阶段：线上内测与功能快速迭代。
+- 核心职责：快速开发整套系统工作流程，打通基础功能，完善算法效果与运行链路，完善 ToB/C 端 API 接口，并将这些能力部署到线上内测环境。
+- 排期原则：所有工作优先服务上述职责。不得主动把主要工作重心转向网络安全专项、全面生产加固或复杂测试工程。
+- 延后事项：认为必要但当前应降级的深度测试、安全扫描、网络安全和生产加固工作，必须记录到 `docs/agent/project-memory.md`，写明原因、风险和建议触发条件；除非用户明确要求，不因这些事项改变当前开发优先级。
+- 阶段升级提醒：结合项目成熟度判断，当上述被延后的内容应进入下一阶段时，在对话中明确提醒：`项目应该进入下一阶段，应该更新 agents 了`。
+- 交付记录：每次完成对话中的工程工作后，若产生了新的事实、决策、验证结果或风险，更新 `docs/agent/project-memory.md`；避免重复记录无新增信息的内容。
+- 团队启用：每个对话根据需求自动判断是否启用全局团队成员。涉及跨项目统筹、桌面端、鸿蒙端、Engine、发布或验证时，优先启用对应职责的成员；范围明确的单项任务只启用必要成员，不为形式而扩大协作范围。
 
 ## Read-on-Demand Map
 
