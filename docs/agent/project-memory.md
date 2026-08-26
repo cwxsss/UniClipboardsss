@@ -63,7 +63,8 @@ Do not treat DeepWiki as a higher authority than the repository code.
 
 - 当前阶段已明确为“线上内测与功能快速迭代”。后续排期优先保障系统工作流程、基础功能、算法效果、运行链路、ToB/C 端 API 以及线上内测部署。
 - 深度测试、安全扫描、网络安全专项和全面生产加固暂列为后续阶段事项；当前仅记录必要风险，不主动改变功能开发主线。建议触发条件是：核心流程稳定、线上内测数据足以支持回归，或用户明确要求进入下一阶段。
-- 鸿蒙端最近一次 HAP 构建失败发生在源码编译前：直接使用含中文目录的路径触发 `00306003 Invalid project path`；映射到临时盘符后又因 Hvigor 无法解析模块路径触发 `00303149 Path not found`。目前没有证据表明是 ArkTS 或 Engine 源码编译错误，也没有在本次诊断中生成新的 HAP。
+- 鸿蒙端构建环境已验证：Engine 原生库在 DevEco 工具链下成功编译，使用 ASCII 工程副本规避 Windows `ld.lld` 无法读取中文真实路径的问题；新 HAR 已由 Hvigor 成功生成，Harmony 工程的 Engine 产物校验也已通过。
+- 新 Harmony HAP 已成功完成 ArkTS 编译和打包，但项目未配置 `signingConfigs`。使用 DevEco 默认 `OpenHarmony.p12` 签名后，真机安装返回 `9568257: fail to verify pkcs7 file`；昨天调试助手生成的 `trial-app-signing.p12` 需要正确密码才能继续真机签名。设备在构建完成后再次锁屏，启动测试还需重新解锁。
 - 鸿蒙端多空间加入逻辑的现有成员设备名兼容修复仍属于未提交工作树内容，后续提交前需要重新确认真实工程路径、构建入口和实机验证结果。
 - 已建立全局五人持久子代理团队，职责覆盖跨项目架构、后端数据、前端交互、OCR/算法以及质量发布；统一使用 `gpt-5.6-luna`、`high` 推理。当前对话按需求选择最少必要成员，避免无关协作。
 
@@ -73,5 +74,5 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 根因是桌面与鸿蒙的多空间 supervisor 已按“每个空间一个 Engine runtime”实现，但 Engine 的 `uc-infra` 仍保留单进程节点租约，二者架构契约不一致。
 - Engine 提交 `0ec02ed` 将单节点布尔租约改为可并行节点的计数租约；所有存活节点必须使用一致的 LAN-only 策略，最后一个节点关闭后才清理进程级策略。Engine 定向测试 `2 passed`，桌面 `space_runtime_supervisor` 定向测试 `22 passed`。
 - 桌面 `Cargo.toml` 与 `Cargo.lock` 已固定到 `cwxsss/Engine` 提交 `0ec02ed`，桌面修复提交为 `c8bf34726`。提交钩子因环境缺少 `bun` 未能运行，提交使用已通过的定向测试结果完成。
-- 鸿蒙端当前安装包内的 HAR 尚未替换为 `0ec02ed`，所以手机端第二空间的实机验证不能宣称完成；下一步应在 ASCII 路径下生成新 HAR/HAP 后再验证手机创建空间、桌面加入及双空间同时在线。
+- 鸿蒙端 ASCII 测试工程已临时替换为包含 `0ec02ed` 的 HAR 并成功生成 HAP；正式工程的版本目录和实机安装验证仍待真机签名完成后同步确认，不能提前宣称双空间实机验证完成。
 - 深度安全扫描、全量跨设备压力测试和完整发布验证继续按项目阶段要求后置；风险是多空间在新 HAP 前仍可能复现旧单节点失败，触发条件是准备交付新的多空间测试包或线上内测扩大范围。
