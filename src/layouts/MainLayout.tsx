@@ -1,6 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import React, { ReactNode, useMemo, useRef, useState } from 'react'
 import InsetSurface from '@/components/layout/InsetSurface'
+import { ContentToolbar } from '@/components/TitleBar'
 import SidebarFooter from '@/components/layout/SidebarFooter'
 import SidebarNavigation from '@/components/layout/SidebarNavigation'
 import { SidebarSlotContext } from '@/contexts/sidebar-slot-context'
@@ -70,9 +71,7 @@ const LinuxMainLayout: React.FC<MainLayoutProps & SidebarAreaProps & ContentTool
       <SidebarArea />
 
       <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-card text-card-foreground">
-        <div data-tauri-drag-region className="flex h-10 shrink-0 items-center justify-end px-3">
-          <div ref={toolbarHostRef} className="flex items-center" />
-        </div>
+        <ContentToolbar rightSlot={<div ref={toolbarHostRef} className="flex items-center" />} />
         <div className="min-h-0 flex-1">{children}</div>
       </main>
     </>
@@ -95,9 +94,7 @@ const InsetMainLayout: React.FC<MainLayoutProps & SidebarAreaProps & ContentTool
       <SidebarArea title={sidebarTitle} />
 
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div data-tauri-drag-region className="flex h-10 shrink-0 items-center justify-end px-3">
-          <div ref={toolbarHostRef} className="flex items-center" />
-        </div>
+        <ContentToolbar rightSlot={<div ref={toolbarHostRef} className="flex items-center" />} />
         <div className="flex min-h-0 flex-1 pb-2 pr-2">
           <InsetSurface className="h-full w-full flex-1 rounded-xl">{children}</InsetSurface>
         </div>

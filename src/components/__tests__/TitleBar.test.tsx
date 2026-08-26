@@ -59,4 +59,12 @@ describe('TitleBar', () => {
       expect(windowMocks.close).toHaveBeenCalledOnce()
     })
   })
+
+  it('最小化和最大化按钮也有悬停反馈，关闭按钮保留红色悬停反馈', () => {
+    render(<TitleBar />)
+
+    expect(screen.getByRole('button', { name: '最小化' })).toHaveClass('hover:bg-muted/70')
+    expect(screen.getByRole('button', { name: '最大化' })).toHaveClass('hover:bg-muted/70')
+    expect(screen.getByRole('button', { name: '关闭' })).toHaveClass('hover:bg-red-500/90')
+  })
 })

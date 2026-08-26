@@ -14,6 +14,7 @@ const platformState = vi.hoisted(() => ({
 }))
 
 const windowFrameState = vi.hoisted(() => ({
+  hasCustomWindowControls: true,
   useSystemWindowFrame: false,
 }))
 
@@ -33,6 +34,13 @@ vi.mock('@/components', () => ({
   Sidebar: ({ className }: { className?: string }) => (
     <aside data-testid="sidebar" className={className} />
   ),
+}))
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    isMaximized: vi.fn().mockResolvedValue(false),
+    onResized: vi.fn().mockResolvedValue(() => {}),
+  }),
 }))
 
 const renderLayout = () =>
@@ -98,5 +106,22 @@ describe('MainLayout', () => {
     expect(screen.getByRole('link', { name: 'History' })).toHaveAttribute('href', '/history')
     expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('href', '/devices')
     expect(screen.queryByRole('button', { name: /sidebar/i })).not.toBeInTheDocument()
+  })
+
+  it('Windows 主页面常驻显示窗口控制按钮', () => {
+    platformState.current = {
+      isWindows: true,
+      isMac: false,
+      isLinux: false,
+      isTauri: true,
+      reduceVisualEffects: false,
+    }
+    windowFrameState.useSystemWindowFrame = false
+
+    renderLayout()
+
+    expect(screen.getByRole('button', { name: '最小化' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '最大化' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument()
   })
 })

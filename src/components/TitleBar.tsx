@@ -55,7 +55,7 @@ const TitleBarButton = ({
     onDoubleClick={event => event.stopPropagation()}
     className={cn(
       'h-full w-12 flex items-center justify-center transition-colors duration-150',
-      'text-muted-foreground hover:text-foreground',
+      'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
       className
     )}
   >
