@@ -12,4 +12,14 @@ describe('history shortcut definitions', () => {
       })
     )
   })
+
+  it('uses Alt+V as the default quick panel shortcut', () => {
+    expect(SHORTCUT_DEFINITIONS).toContainEqual(
+      expect.objectContaining({
+        id: 'global.toggleQuickPanel',
+        key: 'alt+v',
+        scope: 'global',
+      })
+    )
+  })
 })

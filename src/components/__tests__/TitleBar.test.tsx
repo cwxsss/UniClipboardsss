@@ -8,6 +8,7 @@ const windowMocks = vi.hoisted(() => ({
   maximize: vi.fn().mockResolvedValue(undefined),
   minimize: vi.fn().mockResolvedValue(undefined),
   onResized: vi.fn().mockResolvedValue(() => {}),
+  startDragging: vi.fn().mockResolvedValue(undefined),
   unmaximize: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -63,8 +64,25 @@ describe('TitleBar', () => {
   it('最小化和最大化按钮也有悬停反馈，关闭按钮保留红色悬停反馈', () => {
     render(<TitleBar />)
 
-    expect(screen.getByRole('button', { name: '最小化' })).toHaveClass('hover:bg-muted/70')
-    expect(screen.getByRole('button', { name: '最大化' })).toHaveClass('hover:bg-muted/70')
+    expect(screen.getByRole('button', { name: '最小化' })).toHaveClass('hover:bg-foreground/10')
+    expect(screen.getByRole('button', { name: '最大化' })).toHaveClass('hover:bg-foreground/10')
     expect(screen.getByRole('button', { name: '关闭' })).toHaveClass('hover:bg-red-500/90')
+  })
+
+  it('在标题栏空白区域开始窗口拖动，但不会从窗口控制按钮开始拖动', async () => {
+    const { container } = render(<TitleBar />)
+    const titleBar = container.firstElementChild as HTMLElement
+
+    fireEvent.pointerDown(titleBar, { button: 0, clientX: 100, clientY: 10 })
+    fireEvent.pointerMove(titleBar, { buttons: 1, clientX: 110, clientY: 10 })
+
+    await waitFor(() => expect(windowMocks.startDragging).toHaveBeenCalledOnce())
+
+    windowMocks.startDragging.mockClear()
+    const minimizeButton = screen.getByRole('button', { name: '最小化' })
+    fireEvent.pointerDown(minimizeButton, { button: 0, clientX: 100, clientY: 10 })
+    fireEvent.pointerMove(minimizeButton, { buttons: 1, clientX: 110, clientY: 10 })
+
+    expect(windowMocks.startDragging).not.toHaveBeenCalled()
   })
 })

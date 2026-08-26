@@ -2,7 +2,6 @@
  * Shortcut action types
  * Union type of all shortcut actions
  */
-import { isMac } from '@/lib/shortcut-format'
 import { ShortcutLayer } from './layers'
 
 export type ShortcutAction =
@@ -74,7 +73,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   // ===== Global (OS-level) =====
   {
     id: 'global.toggleQuickPanel',
-    key: isMac ? 'meta+ctrl+v' : 'ctrl+alt+v',
+    key: 'alt+v',
     action: 'global.toggleQuickPanel',
     scope: 'global',
     description: 'settings.sections.shortcuts.actions.toggleQuickPanel',

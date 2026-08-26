@@ -1,6 +1,6 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Minus, Square, X } from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useWindowFrame } from '@/hooks/useWindowFrame'
 import { commands } from '@/lib/ipc'
@@ -55,7 +55,7 @@ const TitleBarButton = ({
     onDoubleClick={event => event.stopPropagation()}
     className={cn(
       'h-full w-12 flex items-center justify-center transition-colors duration-150',
-      'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+      'text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10',
       className
     )}
   >
@@ -212,11 +212,43 @@ export const ContentToolbar = ({ className, rightSlot }: ContentToolbarProps) =>
 }
 
 export const TitleBar = ({ className, isSetupActive = false, rightSlot }: TitleBarProps) => {
+  const { isTauri } = usePlatform()
+  const windowRef = useMemo(() => (isTauri ? getCurrentWindow() : null), [isTauri])
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  const handlePointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isTauri || event.button !== 0) return
+
+    const target = event.target as HTMLElement | null
+    if (target?.closest?.('[data-tauri-drag-region="false"]')) return
+
+    dragStartRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  const handlePointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = dragStartRef.current
+    if (!start || (event.buttons & 1) === 0 || !windowRef) return
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return
+
+    dragStartRef.current = null
+    void windowRef.startDragging().catch(error => {
+      log.error({ err: error }, 'Failed to start window dragging')
+    })
+  }
+
+  const clearDragStart = () => {
+    dragStartRef.current = null
+  }
+
   if (isSetupActive) return null
 
   return (
     <div
       data-tauri-drag-region
+      onPointerDownCapture={handlePointerDownCapture}
+      onPointerMoveCapture={handlePointerMoveCapture}
+      onPointerUpCapture={clearDragStart}
+      onPointerCancelCapture={clearDragStart}
       className={cn('relative z-20 flex h-10 w-full shrink-0 bg-transparent', className)}
     >
       <SidebarTitle className="min-w-0 flex-1" />
