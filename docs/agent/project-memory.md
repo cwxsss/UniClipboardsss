@@ -179,3 +179,4 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 鸿蒙 Release 已发布：`https://github.com/cwxsss/UniClipboardHarmonyOS/releases/tag/v1.0.5-codex-rc7-20260828`，资产为带 `READ_PASTEBOARD` 调试 ACL 的签名 HAP 和固定 Engine rc.7 HAR；两个资产均已通过 GitHub 远端摘要核验。
 - 已删除并统计释放 `38,535,151,194` 字节（约 `35.889 GiB`）：桌面 `t7a`、`target`、临时工具目录，Engine `target`/OHOS 构建缓存/本地工具目录，以及鸿蒙旧 HAP 和旧签名副本。删除前再次确认所有路径位于两个项目根目录内且不含联接或其他重解析点；源码、依赖、vendor、当前 rc.7 HAR、最终交付物、必要签名材料和用户数据均保留。
 - 测试用桌面进程已停止；`E:/software/UniClipboard` 中用户现有安装未触碰。工作区内的 `.codex/config.toml`、嵌套 Engine 源码仓库和 vendor 状态属于保留内容，不作为清理对象。
+- 三端发布分支均以用户仓库现有 `main` 为祖先并已快进更新：桌面 `cwxsss/UniClipboardsss:main` 为 `aa402298c`，鸿蒙 `cwxsss/UniClipboardHarmonyOS:main` 为 `426ea9a`，Engine `cwxsss/Engine:main` 为 `3c81e9e`；未执行强制推送或历史改写。
