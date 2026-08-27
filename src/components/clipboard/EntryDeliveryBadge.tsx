@@ -38,10 +38,13 @@ import type {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useResendAction, type UseResendActionResult } from '@/hooks/useResendAction'
+import type { ClipboardEntryType } from '@/lib/clipboard-entry'
 import { cn } from '@/lib/utils'
 
 interface EntryDeliveryBadgeProps {
   delivery: EntryDeliveryView | null
+  /** Media is resent only to an explicitly selected peer. */
+  entryType?: ClipboardEntryType
 }
 
 type SyncSummary =
@@ -111,7 +114,10 @@ function summarize(targets: readonly EntryDeliveryTargetView[]): SyncSummary | n
   return 'pending'
 }
 
-const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({ delivery }) => {
+const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({
+  delivery,
+  entryType = 'text',
+}) => {
   const { t } = useTranslation()
   // Resend 触发器与 toast 副作用; remote/historical 视图层据 `resendable`
   // 隐藏 UI,后端再做最终守护(返回 ENTRY_NOT_RESENDABLE.remoteOrigin)。
@@ -125,6 +131,7 @@ const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({ delivery }) => 
   // 看出这条从哪里来"的设计目标。
   const summary = source.tag === 'historical' ? null : summarize(deliveries)
   const resendable = source.tag === 'local'
+  const explicitTargetOnly = entryType === 'image' || entryType === 'file'
 
   return (
     <TooltipProvider delay={150}>
@@ -137,6 +144,7 @@ const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({ delivery }) => 
             t={t}
             entryId={entryId}
             resendable={resendable}
+            broadcastAllowed={!explicitTargetOnly}
             resendAction={resendAction}
           />
         )}
@@ -208,6 +216,8 @@ interface SyncBadgeProps {
    * remote / historical 不渲染任何 resend UI,避免误导用户。
    */
   resendable: boolean
+  /** Text can use the diff-set fan-out; media must name a target device. */
+  broadcastAllowed: boolean
   resendAction: UseResendActionResult
 }
 
@@ -217,6 +227,7 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
   t,
   entryId,
   resendable,
+  broadcastAllowed,
   resendAction,
 }) => {
   const { Icon, label, tone, spin } = useMemo(() => {
@@ -316,6 +327,7 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
               entryId={entryId}
               action={resendAction}
               t={t}
+              broadcastAllowed={broadcastAllowed}
             />
           )}
         </div>
@@ -388,6 +400,7 @@ interface ResendEntryButtonProps {
   entryId: string
   action: UseResendActionResult
   t: (key: string, opts?: Record<string, unknown>) => string
+  broadcastAllowed: boolean
 }
 
 /** entry-level "Resend" —— 仅当有至少一条非 Delivered / 非 Duplicate 时启用。 */
@@ -396,7 +409,9 @@ const ResendEntryButton: React.FC<ResendEntryButtonProps> = ({
   entryId,
   action,
   t,
+  broadcastAllowed,
 }) => {
+  if (!broadcastAllowed) return null
   // 所有可信 peer 都已成功 (Delivered/Duplicate) 时 disable,避免误触
   // 触发 `NoEligibleTargets`。
   const eligible = deliveries.some(

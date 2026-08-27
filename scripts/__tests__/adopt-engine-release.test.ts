@@ -172,16 +172,18 @@ describe('desktop Engine release adoption', () => {
     expect(script).toContain('verify_transfer "$BOB_CLI" "$ALICE_CLI"')
   })
 
-  it('stops the pending invitation immediately when the joiner fails', () => {
-    const root = mkdtempSync(join(tmpdir(), 'desktop-engine-interop-failure-'))
-    roots.push(root)
-    const fakeBin = join(root, 'bin')
-    const fakeUname = join(fakeBin, 'uname')
-    const fakeCli = join(root, 'fake-uniclip')
-    write(fakeUname, '#!/usr/bin/env bash\necho Darwin\n')
-    write(
-      fakeCli,
-      `#!/usr/bin/env bash
+  it.skipIf(process.platform !== 'darwin')(
+    'stops the pending invitation immediately when the joiner fails',
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'desktop-engine-interop-failure-'))
+      roots.push(root)
+      const fakeBin = join(root, 'bin')
+      const fakeUname = join(fakeBin, 'uname')
+      const fakeCli = join(root, 'fake-uniclip')
+      write(fakeUname, '#!/usr/bin/env bash\necho Darwin\n')
+      write(
+        fakeCli,
+        `#!/usr/bin/env bash
 if [[ " $* " == *" invite "* ]]; then
   echo "INVITATION_CODE=1234-5678"
   sleep 4
@@ -192,28 +194,29 @@ if [[ " $* " == *" join "* ]]; then
 fi
 exit 0
 `
-    )
-    chmodSync(fakeUname, 0o755)
-    chmodSync(fakeCli, 0o755)
+      )
+      chmodSync(fakeUname, 0o755)
+      chmodSync(fakeCli, 0o755)
 
-    const startedAt = Date.now()
-    const result = spawnSync('bash', [interopScript], {
-      cwd: repositoryRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        HOME: root,
-        TMPDIR: root,
-        ALICE_CLI: fakeCli,
-        BOB_CLI: fakeCli,
-        PROFILE_PREFIX: 'join-failure-test',
-        WAIT_SECS: '1',
-        PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
-      },
-    })
+      const startedAt = Date.now()
+      const result = spawnSync('bash', [interopScript], {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: root,
+          TMPDIR: root,
+          ALICE_CLI: fakeCli,
+          BOB_CLI: fakeCli,
+          PROFILE_PREFIX: 'join-failure-test',
+          WAIT_SECS: '1',
+          PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+        },
+      })
 
-    expect(result.status).toBe(1)
-    expect(Date.now() - startedAt).toBeLessThan(2500)
-    expect(result.stderr).toContain('FAIL: bob exit status 23')
-  })
+      expect(result.status).toBe(1)
+      expect(Date.now() - startedAt).toBeLessThan(2500)
+      expect(result.stderr).toContain('FAIL: bob exit status 23')
+    }
+  )
 })

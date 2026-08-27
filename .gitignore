@@ -48,6 +48,7 @@ public/splashscreen.html
 .seq-api-key
 target
 src-tauri/binaries/
+/artifacts/
 
 # ── GSD baseline (auto-generated) ──
 .gsd/activity/

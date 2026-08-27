@@ -9,15 +9,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uc_bootstrap::{
     DesktopClipboardHub, DesktopClipboardHubChangeStream, DesktopClipboardProfileHandle,
-    DesktopClipboardStageExecution,
 };
 use uc_daemon_contract::api::dto::v2::spaces::{
     CreateSpaceProfileRequestDto, JoinSpaceProfileRequestDto, SetActiveSendSpaceRequestDto,
     SpaceFaultDto, SpaceIncomingSyncStateDto, SpaceProfileSummaryDto, SpaceRuntimeStateDto,
 };
 use uc_engine::{
-    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary, ObserveClipboardChangeInput,
-    Operation, OperationResult, SecretString,
+    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary, Operation, OperationResult,
+    SecretString,
 };
 use uc_platform::clipboard::SystemClipboardSnapshot;
 
@@ -138,16 +137,12 @@ impl CatalogPort for ProductionCatalogPort {
 }
 
 struct ProductionRuntimePort {
-    legacy_profile_id: String,
     supervisor: Arc<SpaceRuntimeSupervisor>,
 }
 
 #[async_trait]
 impl RuntimePort for ProductionRuntimePort {
     async fn ensure_available(&self, profile_id: &str) -> anyhow::Result<()> {
-        if profile_id == self.legacy_profile_id {
-            return Ok(());
-        }
         let status = self
             .supervisor
             .status(profile_id)
@@ -173,10 +168,6 @@ impl RuntimePort for ProductionRuntimePort {
 
 struct ProductionClipboardRouterBackend {
     catalog: CatalogRepository,
-    legacy_profile_id: String,
-    legacy_engine: Arc<Engine>,
-    hub: DesktopClipboardHub,
-    legacy_clipboard: DesktopClipboardProfileHandle,
     supervisor: Arc<SpaceRuntimeSupervisor>,
 }
 
@@ -195,38 +186,10 @@ impl ClipboardRouterBackend<SystemClipboardSnapshot> for ProductionClipboardRout
         snapshot: SystemClipboardSnapshot,
         cancel: CancellationToken,
     ) -> anyhow::Result<()> {
-        if profile_id != self.legacy_profile_id {
-            return self
-                .supervisor
-                .dispatch_snapshot(profile_id, snapshot, cancel)
-                .await
-                .map_err(anyhow::Error::new);
-        }
-
-        let engine = Arc::clone(&self.legacy_engine);
-        let outcome = self
-            .hub
-            .execute_with_staged_snapshot(&self.legacy_clipboard, snapshot, move || async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => anyhow::bail!("clipboard dispatch was cancelled"),
-                    result = engine.execute(Operation::ObserveClipboardChange(
-                        ObserveClipboardChangeInput { dispatch: true },
-                    )) => result.map(|_| ()).map_err(anyhow::Error::new),
-                }
-            })
-            .await?;
-        match outcome {
-            DesktopClipboardStageExecution::ConsumedAndCompleted(()) => Ok(()),
-            DesktopClipboardStageExecution::CompletedWithoutConsumption(()) => {
-                anyhow::bail!("Engine completed without consuming staged clipboard")
-            }
-            DesktopClipboardStageExecution::FailedBeforeConsumption(error) => {
-                anyhow::bail!("clipboard dispatch failed before capture: {error}")
-            }
-            DesktopClipboardStageExecution::FailedAfterConsumption(error) => {
-                anyhow::bail!("clipboard dispatch failed after capture: {error}")
-            }
-        }
+        self.supervisor
+            .dispatch_snapshot(profile_id, snapshot, cancel)
+            .await
+            .map_err(anyhow::Error::new)
     }
 
     async fn persist_active_profile(
@@ -243,30 +206,20 @@ impl ClipboardRouterBackend<SystemClipboardSnapshot> for ProductionClipboardRout
 
 struct ProductionSpacesBackend {
     catalog: CatalogRepository,
-    legacy_profile_id: String,
-    legacy_engine: Arc<Engine>,
     supervisor: Arc<SpaceRuntimeSupervisor>,
     authority: Arc<WindowsSpaceAuthority>,
 }
 
 impl ProductionSpacesBackend {
     async fn engine_for(&self, profile_id: &str) -> Option<Arc<Engine>> {
-        if profile_id == self.legacy_profile_id {
-            Some(Arc::clone(&self.legacy_engine))
-        } else {
-            self.supervisor.engine(profile_id)
-        }
+        self.supervisor.engine(profile_id)
     }
 
     async fn summary(
         &self,
         entry: &SpaceCatalogEntry,
     ) -> Result<SpaceProfileSummaryDto, SpacesBackendError> {
-        let status = if entry.profile_id == self.legacy_profile_id {
-            None
-        } else {
-            self.supervisor.status(&entry.profile_id)
-        };
+        let status = self.supervisor.status(&entry.profile_id);
         let runtime_state = runtime_state(entry, status.as_ref());
         let last_fault = status
             .as_ref()
@@ -564,12 +517,9 @@ fn join_id_of(status: &JoinSpaceStatusSummary) -> &str {
 }
 
 fn runtime_state(
-    entry: &SpaceCatalogEntry,
+    _entry: &SpaceCatalogEntry,
     status: Option<&SpaceRuntimeStatus>,
 ) -> SpaceRuntimeStateDto {
-    if entry.profile_dir == "." {
-        return SpaceRuntimeStateDto::Running;
-    }
     match status.map(|status| status.lifecycle) {
         Some(SpaceRuntimeLifecycle::Running) => SpaceRuntimeStateDto::Running,
         Some(SpaceRuntimeLifecycle::Starting) => SpaceRuntimeStateDto::Starting,
@@ -657,24 +607,28 @@ impl WindowsMultiSpace {
     pub(crate) async fn start(
         catalog_root: PathBuf,
         roots: SpaceRuntimeRoots,
-        legacy_engine: Arc<Engine>,
+        initial_engine: Arc<Engine>,
         hub: DesktopClipboardHub,
-        legacy_clipboard: DesktopClipboardProfileHandle,
+        initial_clipboard: DesktopClipboardProfileHandle,
         run_mode: DaemonRunMode,
     ) -> anyhow::Result<Self> {
         let catalog = CatalogRepository::new(catalog_root);
         let entries = catalog.entries().await?;
-        let legacy_profile_id = entries
+        let default_entry = entries
             .iter()
             .find(|entry| entry.profile_dir == ".")
-            .map(|entry| entry.profile_id.clone())
-            .ok_or_else(|| anyhow::anyhow!("space catalog has no legacy compatibility profile"))?;
-        let supervisor = SpaceRuntimeSupervisor::production(roots, hub.clone());
-        for entry in entries
-            .iter()
-            .filter(|entry| entry.profile_dir != "." && entry.enabled)
             .cloned()
-        {
+            .ok_or_else(|| anyhow::anyhow!("space catalog has no default profile"))?;
+        let supervisor = SpaceRuntimeSupervisor::production(roots, hub.clone());
+        supervisor
+            .adopt_running_engine(
+                default_entry,
+                initial_engine,
+                hub.clone(),
+                initial_clipboard,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to adopt default space runtime: {error}"))?;
+        for entry in entries.iter().filter(|entry| entry.enabled).cloned() {
             match supervisor.start_entry(entry.clone()).await {
                 Ok(_) => {
                     if let Some(engine) = supervisor.engine(&entry.profile_id) {
@@ -691,10 +645,6 @@ impl WindowsMultiSpace {
 
         let backend = Arc::new(ProductionClipboardRouterBackend {
             catalog: catalog.clone(),
-            legacy_profile_id: legacy_profile_id.clone(),
-            legacy_engine: Arc::clone(&legacy_engine),
-            hub: hub.clone(),
-            legacy_clipboard,
             supervisor: Arc::clone(&supervisor),
         });
         let (router, router_task) = spawn_clipboard_router(backend);
@@ -703,15 +653,12 @@ impl WindowsMultiSpace {
                 catalog: catalog.clone(),
             }),
             Arc::new(ProductionRuntimePort {
-                legacy_profile_id: legacy_profile_id.clone(),
                 supervisor: Arc::clone(&supervisor),
             }),
             Arc::new(ClipboardRouterPort::new(router.clone())),
         ));
         let service = SpacesHttpService::new(Arc::new(ProductionSpacesBackend {
             catalog,
-            legacy_profile_id,
-            legacy_engine,
             supervisor: Arc::clone(&supervisor),
             authority: Arc::clone(&authority),
         }));
@@ -739,7 +686,7 @@ impl WindowsMultiSpace {
         Ok(())
     }
 
-    pub(crate) async fn shutdown_secondaries(&self) -> anyhow::Result<()> {
+    pub(crate) async fn shutdown_runtimes(&self) -> anyhow::Result<()> {
         let statuses = self.supervisor.shutdown_all().await;
         let failed: Vec<_> = statuses
             .into_iter()
@@ -747,7 +694,7 @@ impl WindowsMultiSpace {
             .map(|status| status.profile_id)
             .collect();
         if !failed.is_empty() {
-            anyhow::bail!("secondary space runtimes did not stop cleanly: {failed:?}");
+            anyhow::bail!("space runtimes did not stop cleanly: {failed:?}");
         }
         Ok(())
     }

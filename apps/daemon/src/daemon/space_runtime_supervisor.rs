@@ -151,10 +151,11 @@ impl ProductionSpaceRuntimeFactory {
 fn validate_production_profile_spec(
     spec: &SpaceRuntimeProfileSpec,
 ) -> Result<(), SpaceRuntimeFailure> {
-    if spec.profile_dir == "." {
+    let canonical_profile_dir = format!("profile-{}", spec.profile_id);
+    if spec.profile_dir != "." && spec.profile_dir != canonical_profile_dir {
         return Err(SpaceRuntimeFailure::for_category(
             SpaceRuntimeFailureCategory::ProfileConflict,
-            "legacy default profile must remain on the compatibility desktop host",
+            "catalog profile directory is not canonical",
         ));
     }
     Ok(())
@@ -167,6 +168,23 @@ struct ProductionSpaceRuntime {
     monitor_cancel: CancellationToken,
     monitor: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     shutdown: Arc<StickyShutdown>,
+}
+
+impl ProductionSpaceRuntime {
+    fn adopt_running_engine(
+        engine: Arc<Engine>,
+        clipboard_hub: DesktopClipboardHub,
+        clipboard_profile: DesktopClipboardProfileHandle,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            engine,
+            clipboard_hub,
+            clipboard_profile,
+            monitor_cancel: CancellationToken::new(),
+            monitor: Arc::new(Mutex::new(None)),
+            shutdown: Arc::new(StickyShutdown::default()),
+        })
+    }
 }
 
 struct StickyShutdown {
@@ -488,6 +506,20 @@ impl SpaceRuntimeSlot {
         }
     }
 
+    fn running(spec: SpaceRuntimeProfileSpec, runtime: Arc<dyn SupervisedSpaceRuntime>) -> Self {
+        Self {
+            spec,
+            generation: 1,
+            lifecycle: SpaceRuntimeLifecycle::Running,
+            last_failure: None,
+            pending_start_generation: None,
+            lifecycle_notify: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            start_waiter_notify: Arc::new(tokio::sync::Notify::new()),
+            runtime: Some(runtime),
+        }
+    }
+
     fn advance_generation(&mut self) -> u64 {
         self.generation = self
             .generation
@@ -552,6 +584,56 @@ impl SpaceRuntimeSupervisor {
             Arc::new(ProductionSpaceRuntimeFactory::new(clipboard_hub)),
             roots,
         )
+    }
+
+    pub fn adopt_running_engine(
+        &self,
+        entry: SpaceCatalogEntry,
+        engine: Arc<Engine>,
+        clipboard_hub: DesktopClipboardHub,
+        clipboard_profile: DesktopClipboardProfileHandle,
+    ) -> Result<SpaceRuntimeStart, SpaceRuntimeStartError> {
+        if !entry.enabled {
+            return Err(SpaceRuntimeStartError {
+                profile_id: entry.profile_id,
+                generation: 0,
+                failure: SpaceRuntimeFailure::for_category(
+                    SpaceRuntimeFailureCategory::Disabled,
+                    "profile is disabled",
+                ),
+            });
+        }
+        let spec = self
+            .profile_spec(&entry)
+            .map_err(|failure| SpaceRuntimeStartError {
+                profile_id: entry.profile_id.clone(),
+                generation: 0,
+                failure,
+            })?;
+        let profile_id = spec.profile_id.clone();
+        let runtime =
+            ProductionSpaceRuntime::adopt_running_engine(engine, clipboard_hub, clipboard_profile);
+        let mut slots = self.lock_slots();
+        if let Some(existing) = slots.get(&profile_id) {
+            return Err(SpaceRuntimeStartError {
+                profile_id,
+                generation: existing.generation,
+                failure: SpaceRuntimeFailure::for_category(
+                    SpaceRuntimeFailureCategory::ProfileConflict,
+                    "profile runtime is already registered",
+                ),
+            });
+        }
+        let status = {
+            let slot = SpaceRuntimeSlot::running(spec, runtime);
+            let status = slot.status();
+            slots.insert(status.profile_id.clone(), slot);
+            status
+        };
+        Ok(SpaceRuntimeStart {
+            disposition: SpaceRuntimeStartDisposition::Started,
+            status,
+        })
     }
 
     pub async fn start_enabled(
@@ -1563,7 +1645,7 @@ mod tests {
     }
 
     #[test]
-    fn production_factory_rejects_the_legacy_default_profile() {
+    fn production_factory_accepts_the_existing_default_profile_root() {
         let spec = SpaceRuntimeProfileSpec {
             profile_id: "11111111-1111-4111-8111-111111111111".to_string(),
             profile_dir: ".".to_string(),
@@ -1574,11 +1656,7 @@ mod tests {
             secure_storage_namespace: "11111111-1111-4111-8111-111111111111".to_string(),
         };
 
-        let error = validate_production_profile_spec(&spec)
-            .expect_err("legacy must stay on the compatibility host");
-
-        assert_eq!(error.category, SpaceRuntimeFailureCategory::ProfileConflict);
-        assert!(error.message.contains("legacy"));
+        validate_production_profile_spec(&spec).expect("default profile root is canonical");
     }
 
     #[async_trait]
