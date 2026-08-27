@@ -172,3 +172,10 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 桌面便携程序 `artifacts/pc/UniClipboard.exe` 的 SHA-256 为 `bb1da6ca96c81de91cd82468dd2c57e24031e12ffabe64f4e79c2b894c8eddcf`；NSIS 安装包 `artifacts/pc/UniClipboard_1.0.0-alpha.7_x64-setup.exe` 的 SHA-256 为 `1fe3efb47b87b7c0128e4535c2cb9d8e80134061b890faaf5fd345084a219d57`。
 - 鸿蒙签名交付物 `D:/下载/codedit/UniClipboardHarmonyOS/artifacts/sssUniClip-rc7-debug-signed-acl-20260828.hap` 的 SHA-256 为 `100af09ca608143883e84f300cf218f5cc22a8f5b14dd985720a5da49c29c270`，包含 `arm64-v8a` 与 `x86_64` 库，已通过签名校验并安装启动于当前模拟器。
 - 三端源代码提交和交付物核验完成后，才允许删除已确认的桌面/Engine 构建缓存、临时 ASCII 构建副本、过期 HAP 和旧签名副本；当前 Engine 源码、锁文件、vendor、rc.7 HAR、最终 PC/HAP、必要签名材料和用户运行数据必须保留。用户 Git 全局代理 `127.0.0.1:20808` 不得修改，只有本次进程环境中的 `127.0.0.1:9` 注入值可清除。
+
+## 2026-08-28 发布核验与存储清理完成
+
+- 桌面 Release 已发布：`https://github.com/cwxsss/UniClipboardsss/releases/tag/v1.0.0-alpha.7-codex-rc7-20260828`，资产为便携版和 x64 NSIS 安装包，远端摘要与本地 SHA-256 一致。
+- 鸿蒙 Release 已发布：`https://github.com/cwxsss/UniClipboardHarmonyOS/releases/tag/v1.0.5-codex-rc7-20260828`，资产为带 `READ_PASTEBOARD` 调试 ACL 的签名 HAP 和固定 Engine rc.7 HAR；两个资产均已通过 GitHub 远端摘要核验。
+- 已删除并统计释放 `38,535,151,194` 字节（约 `35.889 GiB`）：桌面 `t7a`、`target`、临时工具目录，Engine `target`/OHOS 构建缓存/本地工具目录，以及鸿蒙旧 HAP 和旧签名副本。删除前再次确认所有路径位于两个项目根目录内且不含联接或其他重解析点；源码、依赖、vendor、当前 rc.7 HAR、最终交付物、必要签名材料和用户数据均保留。
+- 测试用桌面进程已停止；`E:/software/UniClipboard` 中用户现有安装未触碰。工作区内的 `.codex/config.toml`、嵌套 Engine 源码仓库和 vendor 状态属于保留内容，不作为清理对象。
