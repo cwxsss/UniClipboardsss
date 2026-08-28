@@ -291,3 +291,16 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - Engine 已将入站剪贴板去重修复提交为 `44329b55d2b420e195b8e421401897cbc31dff62`，推送到 `cwxsss/Engine` 的 `main`。
 - 鸿蒙端已将后台剪贴板轮询优化提交为 `ef5d26d601dfaba0cdaa9f79ed7e9a58abc93765`，推送到 `cwxsss/UniClipboardHarmonyOS` 的 `main`。三个远端提交均已通过 GitHub CLI 独立核验。
 - 桌面端提交时仓库 `pre-commit` 仅调用本机不存在的 `bun lint-staged`，已在既有测试、格式检查和生产构建通过的前提下跳过该钩子；未修改钩子文件。用户 Git 配置中的 `127.0.0.1:20808` 保持不变，仅清除了本次 Git 子进程中的临时 `127.0.0.1:9` 代理环境变量。
+
+## 2026-08-28 Windows 剪贴板转发器自动恢复
+
+- 用户报告空间连接后桌面端必须重启才能再次捕获本机剪贴板。实时日志确认重启后的 daemon 能正常捕获并分发文本，因此不是 Windows 剪贴板权限或 Engine 配对未完成。
+- 根因位于 `apps/daemon/src/daemon/production_spaces.rs`：多空间 `ClipboardForwarder` 在任意一次 `router.clipboard_changed()` 失败时通过 `?` 退出，而 `DesktopClipboardHub` 的唯一物理监听流只在 daemon 启动时取得一次，退出后没有重新取得机制。刚重连时的临时发送失败因而会永久停止后续本机复制处理，直至重启 daemon。
+- 修复后，单个快照的路由/发送失败仅记录不含正文的结构化告警并继续监听；监听流关闭或错误时，转发器关闭旧流、等待其租约释放并以 250ms 有界间隔重新取得唯一监听器。首次启动本就没有系统监听器时仍保持原有禁用语义，不会创建无意义的重试循环。
+- 新增两项 daemon 回归测试：一次分发失败后下一次快照仍会送达路由器；监听流异常后会自动重新取得监听器。`cargo test -p uc-daemon` 通过 `123` 项单元测试和 `10` 项接口契约测试，`git diff --check` 通过。随后已生成并安装包含该修复的新桌面构建，具体交付验证记录见下一节。
+
+## 2026-08-28 Windows 剪贴板转发器构建、安装与启动验证
+
+- 使用 `npm.cmd run daemon:sidecar`、`npm.cmd run build` 与仅覆盖本机打包行为的临时 Tauri 配置重新生成 Windows x64 NSIS 安装包；临时配置已经删除。`target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe` 于 `2026-08-28 23:05:04` 生成，大小 `19,500,678` 字节，SHA-256 为 `91D089E8007E675F809E67685C737CBE70046A4F30F4FBF850911D86A1179E2F`。本机构建未生成便携版，也未生成需要私钥的在线更新签名产物。
+- 该 NSIS 包已先静默安装到项目内隔离目录并成功启动主程序与对应 `uniclipd` 侧车，随后已覆盖安装至 `E:/software/UniClipboard`；实际实例于 `2026-08-28 23:10` 启动并拉起新侧车。已安装的 `uniclipboard.exe` SHA-256 为 `D1065F97E6A2CE16E3EE322FCDAB19CF65490CC947E11B3BEA1362D8E4AA75DA`，`uniclipd.exe` SHA-256 为 `CD881A451F6F7EFD3BE41EF0F845A8F234681BFC76F8F9276371CA681B518318`。
+- 为避免覆盖用户正在使用的系统剪贴板，安装后仅验证了 GUI 与 daemon 的实际启动，没有自动写入测试文本；后续应在已连接空间中由用户复制一段任意文本，确认断线/重连后无需再重启桌面程序即可被捕获。
