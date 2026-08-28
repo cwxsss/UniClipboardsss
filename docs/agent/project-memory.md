@@ -173,6 +173,14 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 鸿蒙签名交付物 `D:/下载/codedit/UniClipboardHarmonyOS/artifacts/sssUniClip-rc7-debug-signed-acl-20260828.hap` 的 SHA-256 为 `100af09ca608143883e84f300cf218f5cc22a8f5b14dd985720a5da49c29c270`，包含 `arm64-v8a` 与 `x86_64` 库，已通过签名校验并安装启动于当前模拟器。
 - 三端源代码提交和交付物核验完成后，才允许删除已确认的桌面/Engine 构建缓存、临时 ASCII 构建副本、过期 HAP 和旧签名副本；当前 Engine 源码、锁文件、vendor、rc.7 HAR、最终 PC/HAP、必要签名材料和用户运行数据必须保留。用户 Git 全局代理 `127.0.0.1:20808` 不得修改，只有本次进程环境中的 `127.0.0.1:9` 注入值可清除。
 
+## 2026-08-28 重建桌面侧车与 HAP 交付记录
+
+- 桌面端已重新执行 `npm run daemon:sidecar`、`npm run build` 和 Tauri NSIS 生产构建。便携版启动冒烟验证通过：新目录中的 `uniclipboard.exe` 能正常存活，并拉起同目录的 `uniclipd.exe`；因此交付包不再是缺少后台侧车的单文件副本。
+- 本轮桌面交付物位于 `artifacts/pc/UniClipboard-1.0.0-alpha.7-retest-20260828-portable/`、其压缩包和 `UniClipboard_1.0.0-alpha.7-retest-20260828_x64-setup.exe`。旧的重复安装包、旧便携目录和压缩包已按精确路径删除；未触碰源代码、用户安装目录和运行数据。
+- HarmonyOS 工程正式路径包含中文，Hvigor 返回 `00306003 Invalid project path`；已使用临时 ASCII 副本完成真实构建，日志通过 Engine rc.7 校验和 `dataTransfer` 后台模式检查，随后删除该临时副本。正式仓库的 4 个 `oh-package-lock.json5` 只因 `ohpm install` 被刷新，已恢复到构建前状态。
+- 新 HAP 位于 `D:/下载/codedit/UniClipboardHarmonyOS/artifacts/sssUniClip-rc7-retest-20260828-debug-signed-acl.hap`，由当前源码构建、使用通用 `OpenHarmony.p12` 重新签名并通过 `hap-sign-tool verify-app`。它包含 `arm64-v8a` 和 `x86_64` Engine 原生库；该证书可用于模拟器，但实体机此前已返回 `9568257: fail to verify pkcs7 file`，所以本轮不能把它宣称为已通过真机安装的签名包。
+- 本轮 HDC 检查时模拟器 `127.0.0.1:10000` 未在线，实体机 `192.168.1.207:12345` 也显示离线；因此没有自动向实体机安装 HAP，用户按交付路径手动安装后仍需以设备实际验签结果为准。若实体机继续拒绝，需要在 DevEco Studio 为 `com.sss.uniclipboard` 生成设备匹配的自动签名，而不是重复使用通用 OpenHarmony 证书。
+
 ## 2026-08-28 发布核验与存储清理完成
 
 - 桌面 Release 已发布：`https://github.com/cwxsss/UniClipboardsss/releases/tag/v1.0.0-alpha.7-codex-rc7-20260828`，资产为便携版和 x64 NSIS 安装包，远端摘要与本地 SHA-256 一致。
