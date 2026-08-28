@@ -285,6 +285,7 @@ function initializeErrorMessage(
 
 export function InitializeSpaceScreen({
   onSubmit,
+  onSuccess,
   onBack,
   loading,
 }: {
@@ -293,6 +294,7 @@ export function InitializeSpaceScreen({
     passphrase: string
     passphraseConfirm: string
   }) => Promise<{ ok: true } | { ok: false; kind: InitializeSpaceErrorKind; raw: string }>
+  onSuccess?: () => void
   onBack: () => void
   loading?: boolean
 }) {
@@ -347,7 +349,11 @@ export function InitializeSpaceScreen({
       passphrase: pass1,
       passphraseConfirm: pass2,
     })
-    if (!res.ok) setErrorKind(res.kind)
+    if (!res.ok) {
+      setErrorKind(res.kind)
+      return
+    }
+    onSuccess?.()
   }
 
   return (

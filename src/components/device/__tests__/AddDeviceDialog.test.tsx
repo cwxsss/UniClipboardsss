@@ -6,7 +6,7 @@
  * 这里用 StrictMode 渲染,确保双跑后仍然能拿到邀请码而不是卡在 loading。
  */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { I18nextProvider } from 'react-i18next'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -113,16 +113,14 @@ describe('AddDeviceDialog invitation issuing', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('123456789')).toBeInTheDocument()
     })
-    expect(screen.queryByLabelText(i18n.t('devices.addDevice.qrAlt'))).not.toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText(i18n.t('devices.addDevice.qrPassphraseLabel')), {
-      target: { value: 'correct horse!' },
-    })
 
     expect(screen.getByLabelText(i18n.t('devices.addDevice.qrAlt'))).toHaveAttribute(
       'data-qr-value',
-      'uniclipboard://join-space?v=1&code=123456789&pwd=correct%20horse!'
+      'uniclipboard://join-space?v=1&code=123456789'
     )
+    expect(
+      screen.queryByLabelText(i18n.t('devices.addDevice.qrPassphraseLabel'))
+    ).not.toBeInTheDocument()
     expect(issuePairingInvitation).toHaveBeenCalledTimes(1)
   })
 

@@ -64,7 +64,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   // ===== Navigation =====
   {
     id: 'nav.settings',
-    key: 'mod+comma',
+    key: '',
     action: 'navigation.settings',
     scope: 'global',
     description: 'settings.sections.shortcuts.actions.goSettings',
@@ -80,14 +80,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   },
   {
     id: 'global.zoomIn',
-    key: ['mod+shift+equal', 'mod+equal', 'mod+add'],
+    key: '',
     action: 'global.zoomIn',
     scope: 'global',
     description: 'settings.sections.shortcuts.actions.zoomIn',
   },
   {
     id: 'global.zoomOut',
-    key: ['mod+minus', 'mod+subtract'],
+    key: '',
     action: 'global.zoomOut',
     scope: 'global',
     description: 'settings.sections.shortcuts.actions.zoomOut',
@@ -96,14 +96,14 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   // ===== Clipboard page =====
   {
     id: 'clipboard.favorite',
-    key: 'f',
+    key: '',
     action: 'clipboard.favorite',
     scope: 'clipboard',
     description: 'settings.sections.shortcuts.actions.favoriteClipboardItem',
   },
   {
     id: 'clipboard.search',
-    key: 'mod+f',
+    key: '',
     action: 'clipboard.search',
     scope: 'clipboard',
     description: 'settings.sections.shortcuts.actions.searchHistory',

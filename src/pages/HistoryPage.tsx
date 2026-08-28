@@ -17,6 +17,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { useSidebarSlot } from '@/contexts/sidebar-slot-context'
 import { useHistoryController } from '@/hooks/useHistoryController'
 import { useShortcut } from '@/hooks/useShortcut'
+import { SHORTCUT_DEFINITIONS } from '@/shortcuts/definitions'
 
 const HistoryPage: React.FC = () => {
   const { t } = useTranslation()
@@ -47,7 +48,7 @@ const HistoryPage: React.FC = () => {
 
   useShortcut({
     id: 'clipboard.search',
-    key: 'mod+f',
+    key: SHORTCUT_DEFINITIONS.find(def => def.id === 'clipboard.search')?.key ?? '',
     scope: 'clipboard',
     handler: () => setSearchOpen(true),
     enableOnFormTags: true,
@@ -177,7 +178,7 @@ const HistoryPage: React.FC = () => {
             aria-label={t('history.composite.title')}
             aria-expanded="false"
             onClick={() => setSearchOpen(true)}
-            className="relative flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+            className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10"
           >
             <Search className="size-4" />
             {hasActiveSearch && (

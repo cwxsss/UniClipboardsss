@@ -6,7 +6,7 @@ describe('history shortcut definitions', () => {
     expect(SHORTCUT_DEFINITIONS).toContainEqual(
       expect.objectContaining({
         id: 'clipboard.search',
-        key: 'mod+f',
+        key: '',
         scope: 'clipboard',
         description: 'settings.sections.shortcuts.actions.searchHistory',
       })
@@ -21,5 +21,13 @@ describe('history shortcut definitions', () => {
         scope: 'global',
       })
     )
+  })
+
+  it('leaves every non-quick-panel shortcut unconfigured by default', () => {
+    expect(
+      SHORTCUT_DEFINITIONS.filter(definition => definition.id !== 'global.toggleQuickPanel').every(
+        definition => definition.key === ''
+      )
+    ).toBe(true)
   })
 })

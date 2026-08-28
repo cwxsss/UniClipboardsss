@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { TitleBar } from '@/components/TitleBar'
+import { ContentToolbar, TitleBar } from '@/components/TitleBar'
 
 const windowMocks = vi.hoisted(() => ({
   close: vi.fn().mockResolvedValue(undefined),
@@ -82,6 +82,43 @@ describe('TitleBar', () => {
     const minimizeButton = screen.getByRole('button', { name: '最小化' })
     fireEvent.pointerDown(minimizeButton, { button: 0, clientX: 100, clientY: 10 })
     fireEvent.pointerMove(minimizeButton, { buttons: 1, clientX: 110, clientY: 10 })
+
+    expect(windowMocks.startDragging).not.toHaveBeenCalled()
+  })
+
+  it('ContentToolbar 在历史页标题栏空白区域开始窗口拖动', async () => {
+    const { container } = render(<ContentToolbar />)
+    const toolbar = container.firstElementChild as HTMLElement
+
+    fireEvent.pointerDown(toolbar, { button: 0, clientX: 100, clientY: 10 })
+    fireEvent.pointerMove(toolbar, { buttons: 1, clientX: 110, clientY: 10 })
+
+    await waitFor(() => expect(windowMocks.startDragging).toHaveBeenCalledOnce())
+  })
+
+  it('ContentToolbar keeps the slot background draggable but excludes slot controls', async () => {
+    const { getByRole, getByTestId } = render(
+      <ContentToolbar
+        rightSlot={
+          <div data-testid="toolbar-slot">
+            <button type="button" data-tauri-drag-region="false" aria-label="slot action">
+              action
+            </button>
+          </div>
+        }
+      />
+    )
+    const slot = getByTestId('toolbar-slot')
+
+    fireEvent.pointerDown(slot, { button: 0, clientX: 100, clientY: 10 })
+    fireEvent.pointerMove(slot, { buttons: 1, clientX: 110, clientY: 10 })
+
+    await waitFor(() => expect(windowMocks.startDragging).toHaveBeenCalledOnce())
+
+    windowMocks.startDragging.mockClear()
+    const action = getByRole('button', { name: 'slot action' })
+    fireEvent.pointerDown(action, { button: 0, clientX: 100, clientY: 10 })
+    fireEvent.pointerMove(action, { buttons: 1, clientX: 110, clientY: 10 })
 
     expect(windowMocks.startDragging).not.toHaveBeenCalled()
   })

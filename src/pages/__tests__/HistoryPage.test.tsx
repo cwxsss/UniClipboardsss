@@ -234,11 +234,20 @@ describe('HistoryPage', () => {
     )
   })
 
+  it('uses title bar hover feedback for the closed search control', () => {
+    render(<HistoryPage />)
+
+    expect(screen.getByRole('button', { name: 'history.composite.title' })).toHaveClass(
+      'hover:bg-foreground/10',
+      'focus-visible:bg-foreground/10'
+    )
+  })
+
   it('opens and focuses search from the configurable shortcut', async () => {
     render(<HistoryPage />)
 
     const shortcut = shortcuts.configs.find(config => config.id === 'clipboard.search')
-    expect(shortcut?.key).toBe('mod+f')
+    expect(shortcut?.key).toBe('')
 
     act(() => shortcut?.handler())
     const input = await screen.findByRole('textbox', { name: 'history.searchPlaceholder' })

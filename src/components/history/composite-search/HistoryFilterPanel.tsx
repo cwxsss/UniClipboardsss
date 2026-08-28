@@ -47,8 +47,8 @@ function FilterButton({
             className={cn(
               'flex size-7 shrink-0 items-center justify-center rounded-full transition-colors',
               active
-                ? 'bg-muted/50 text-foreground'
-                : 'text-muted-foreground hover:bg-muted/35 hover:text-foreground'
+                ? 'bg-muted/50 text-foreground hover:bg-foreground/10 focus-visible:bg-foreground/10'
+                : 'text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10'
             )}
           />
         }

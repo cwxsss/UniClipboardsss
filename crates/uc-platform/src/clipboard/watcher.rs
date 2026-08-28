@@ -128,6 +128,11 @@ const IMAGE_BURST_SIZE_TOLERANCE_PERCENT: i64 = 1;
 /// and resurfaces.
 const MEANINGFUL_REDEDUP_WINDOW: Duration = Duration::from_secs(2);
 
+/// Window for the desktop hub's representation-churn guard. Some clipboard
+/// producers rewrite rich-text metadata several seconds after the original
+/// copy; those rewrites keep the visible text but change the full snapshot.
+const REPRESENTATION_CHURN_WINDOW: Duration = Duration::from_secs(15);
+
 /// Maximum number of attempts used to capture one snapshot under a stable
 /// Windows clipboard sequence number. A bounded loop avoids forwarding a
 /// programmatic write when the notification raced a second clipboard update.
@@ -141,6 +146,15 @@ struct ImageBurst {
     at: Instant,
     size: i64,
     latched: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DedupMode {
+    /// Apply the regular meaningful-content deduplication rules.
+    Normal,
+    /// Suppress only representation churn while still allowing an identical
+    /// full snapshot through when it carries a different user change token.
+    RepresentationChurn,
 }
 
 pub struct ClipboardWatcher {
@@ -163,10 +177,27 @@ pub struct ClipboardWatcher {
     /// path stays on the [`IMAGE_STORM_MAX_GAP`] size latch).
     image_burst: Option<ImageBurst>,
     dedup_enabled: bool,
+    dedup_mode: DedupMode,
+    /// Optional causal filter used by the shared desktop hub to consume its
+    /// own write echoes before content deduplication mutates watcher state.
+    event_filter: Option<Arc<dyn Fn(Option<ClipboardChangeToken>) -> bool + Send + Sync>>,
+    /// Full representation fingerprint used only by the hub churn mode. It
+    /// deliberately excludes representation ids and timestamps.
+    last_snapshot_fingerprint: Option<String>,
+    last_change_token: Option<ClipboardChangeToken>,
 }
 
 impl ClipboardWatcher {
     pub fn new(local_clipboard: Arc<dyn SystemClipboard>, sender: PlatformEventSender) -> Self {
+        Self::with_options(local_clipboard, sender, DedupMode::Normal, None)
+    }
+
+    fn with_options(
+        local_clipboard: Arc<dyn SystemClipboard>,
+        sender: PlatformEventSender,
+        dedup_mode: DedupMode,
+        event_filter: Option<Arc<dyn Fn(Option<ClipboardChangeToken>) -> bool + Send + Sync>>,
+    ) -> Self {
         Self {
             local_clipboard,
             sender,
@@ -175,6 +206,10 @@ impl ClipboardWatcher {
             last_image_seen: None,
             image_burst: None,
             dedup_enabled: true,
+            dedup_mode,
+            event_filter,
+            last_snapshot_fingerprint: None,
+            last_change_token: None,
         }
     }
 
@@ -186,6 +221,25 @@ impl ClipboardWatcher {
         watcher.dedup_enabled = false;
         watcher
     }
+
+    /// Build a watcher for the shared desktop hub.
+    ///
+    /// The callback consumes programmatic-write echoes by their OS change
+    /// token. Unlike `new_passthrough`, this keeps content deduplication active
+    /// for representation churn, while allowing the same complete snapshot to
+    /// pass when it carries a different token representing a real recopy.
+    pub fn new_with_event_filter(
+        local_clipboard: Arc<dyn SystemClipboard>,
+        sender: PlatformEventSender,
+        event_filter: Arc<dyn Fn(Option<ClipboardChangeToken>) -> bool + Send + Sync>,
+    ) -> Self {
+        Self::with_options(
+            local_clipboard,
+            sender,
+            DedupMode::RepresentationChurn,
+            Some(event_filter),
+        )
+    }
 }
 
 fn is_file_representation(rep: &crate::clipboard::ObservedClipboardRepresentation) -> bool {
@@ -194,6 +248,51 @@ fn is_file_representation(rep: &crate::clipboard::ObservedClipboardRepresentatio
 
 fn dedupe_key(snapshot: &SystemClipboardSnapshot) -> Option<String> {
     snapshot.meaningful_origin_key()
+}
+
+fn update_fingerprint_part(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&(bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// Fingerprint all inline representations without including volatile ids or
+/// timestamps. Returning `None` for path-backed payloads avoids reading large
+/// files from the clipboard watcher hot path.
+fn snapshot_content_fingerprint(snapshot: &SystemClipboardSnapshot) -> Option<String> {
+    if snapshot.is_empty() {
+        return None;
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(snapshot.representations.len() as u64).to_le_bytes());
+    for representation in &snapshot.representations {
+        let bytes = representation.inline_bytes()?;
+        update_fingerprint_part(&mut hasher, representation.format_id.as_str().as_bytes());
+        match representation.mime.as_ref() {
+            Some(mime) => {
+                hasher.update(&[1]);
+                update_fingerprint_part(&mut hasher, mime.as_str().as_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        update_fingerprint_part(&mut hasher, bytes);
+    }
+    hasher.update(&(snapshot.file_content_digests.len() as u64).to_le_bytes());
+    for digest in &snapshot.file_content_digests {
+        hasher.update(digest);
+    }
+    match snapshot.file_set_v1_component {
+        Some(component) => {
+            hasher.update(&[1]);
+            hasher.update(&component);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    Some(hasher.finalize().to_hex().to_string())
 }
 
 /// Returns true if any representation in the snapshot is a file representation.
@@ -353,6 +452,14 @@ impl ClipboardWatcher {
         change_token: Option<ClipboardChangeToken>,
         now: Instant,
     ) {
+        if !snapshot.is_empty()
+            && self
+                .event_filter
+                .as_ref()
+                .is_some_and(|filter| filter(change_token))
+        {
+            return;
+        }
         if !self.dedup_enabled {
             self.send_event(snapshot, change_token);
             return;
@@ -379,6 +486,39 @@ impl ClipboardWatcher {
             (Some(k), Some(fp)) if k.starts_with("image:") => Some(format!("image:{fp}")),
             _ => raw_key,
         };
+        let snapshot_fingerprint = if self.dedup_mode == DedupMode::RepresentationChurn {
+            snapshot_content_fingerprint(&snapshot)
+        } else {
+            None
+        };
+        let same_snapshot_as_last = snapshot_fingerprint
+            .as_ref()
+            .zip(self.last_snapshot_fingerprint.as_ref())
+            .is_some_and(|(current, last)| current == last);
+        let same_snapshot_with_new_token = same_snapshot_as_last
+            && matches!(
+                (change_token, self.last_change_token),
+                (Some(current), Some(last)) if current != last
+            );
+
+        if self.dedup_mode == DedupMode::RepresentationChurn {
+            if let (Some(key), Some((last_key, last_at)), Some(_)) = (
+                current_dedupe_key.as_ref(),
+                self.last_meaningful.as_ref(),
+                snapshot_fingerprint.as_ref(),
+            ) {
+                if last_key == key
+                    && !same_snapshot_as_last
+                    && now.duration_since(*last_at) < REPRESENTATION_CHURN_WINDOW
+                {
+                    // Refresh the window so a sustained metadata rewrite stays
+                    // collapsed without making text recopy dedup permanent.
+                    self.last_meaningful = Some((key.clone(), now));
+                    info!(dedupe_key = %key, "Skipping clipboard representation churn");
+                    return;
+                }
+            }
+        }
 
         if let Some(key) = current_dedupe_key.as_ref() {
             if let Some((last_key, last_at)) = self.last_meaningful.as_ref() {
@@ -390,7 +530,10 @@ impl ClipboardWatcher {
                     // only collapse re-reads of the same physical copy, i.e.
                     // within MEANINGFUL_REDEDUP_WINDOW.
                     let permanent = key.starts_with("image:");
-                    if permanent || now.duration_since(*last_at) < MEANINGFUL_REDEDUP_WINDOW {
+                    if permanent
+                        || (!same_snapshot_with_new_token
+                            && now.duration_since(*last_at) < MEANINGFUL_REDEDUP_WINDOW)
+                    {
                         // Info-level on purpose: this is the last silent spot
                         // where a user-visible "copy did nothing" can hide (key
                         // is kind:hash, never payload content).
@@ -538,6 +681,10 @@ impl ClipboardWatcher {
             }
             if let Some(key) = current_dedupe_key {
                 self.last_meaningful = Some((key, now));
+            }
+            if self.dedup_mode == DedupMode::RepresentationChurn {
+                self.last_snapshot_fingerprint = snapshot_fingerprint;
+                self.last_change_token = change_token;
             }
         }
     }
@@ -819,6 +966,28 @@ mod tests {
         SystemClipboardSnapshot {
             ts_ms: 0,
             representations: vec![rep],
+            file_content_digests: Vec::new(),
+            file_set_v1_component: None,
+        }
+    }
+
+    fn text_with_html(text: &str, html: &str) -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![
+                ObservedClipboardRepresentation::new(
+                    RepresentationId::new(),
+                    FormatId::from("text"),
+                    Some(MimeType::text_plain()),
+                    text.as_bytes().to_vec(),
+                ),
+                ObservedClipboardRepresentation::new(
+                    RepresentationId::new(),
+                    FormatId::from("html"),
+                    Some(MimeType::text_html()),
+                    html.as_bytes().to_vec(),
+                ),
+            ],
             file_content_digests: Vec::new(),
             file_set_v1_component: None,
         }
@@ -1112,6 +1281,62 @@ mod tests {
             drain(&mut rx),
             1,
             "a same-copy re-read within the window must collapse"
+        );
+    }
+
+    #[test]
+    fn representation_churn_mode_collapses_rich_text_variants_beyond_normal_window() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut watcher = ClipboardWatcher::new_with_event_filter(
+            Arc::new(StubClipboard),
+            tx,
+            Arc::new(|_| false),
+        );
+        let base = Instant::now();
+
+        watcher.emit_with_dedup_at(text_with_html("about us", "<p>about us</p>"), base);
+        watcher.emit_with_dedup_at(
+            text_with_html("about us", "<p>about us</p> "),
+            base + Duration::from_secs(5),
+        );
+        watcher.emit_with_dedup_at(
+            text_with_html("about us", "<p>about us</p>  "),
+            base + Duration::from_secs(6),
+        );
+
+        assert_eq!(
+            drain(&mut rx),
+            1,
+            "rich-text metadata churn must not create multiple clipboard events"
+        );
+    }
+
+    #[test]
+    fn representation_churn_mode_allows_identical_snapshot_with_new_token() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut watcher = ClipboardWatcher::new_with_event_filter(
+            Arc::new(StubClipboard),
+            tx,
+            Arc::new(|_| false),
+        );
+        let snapshot = text_with_html("same text", "<p>same text</p>");
+        let base = Instant::now();
+
+        watcher.emit_with_dedup_at_and_token(
+            snapshot.clone(),
+            Some(ClipboardChangeToken::new(99)),
+            base,
+        );
+        watcher.emit_with_dedup_at_and_token(
+            snapshot,
+            Some(ClipboardChangeToken::new(102)),
+            base + Duration::from_millis(100),
+        );
+
+        assert_eq!(
+            drain(&mut rx),
+            2,
+            "a real recopy with a different token must not be swallowed"
         );
     }
 

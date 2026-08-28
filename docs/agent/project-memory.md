@@ -188,3 +188,99 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 已删除并统计释放 `38,535,151,194` 字节（约 `35.889 GiB`）：桌面 `t7a`、`target`、临时工具目录，Engine `target`/OHOS 构建缓存/本地工具目录，以及鸿蒙旧 HAP 和旧签名副本。删除前再次确认所有路径位于两个项目根目录内且不含联接或其他重解析点；源码、依赖、vendor、当前 rc.7 HAR、最终交付物、必要签名材料和用户数据均保留。
 - 测试用桌面进程已停止；`E:/software/UniClipboard` 中用户现有安装未触碰。工作区内的 `.codex/config.toml`、嵌套 Engine 源码仓库和 vendor 状态属于保留内容，不作为清理对象。
 - 三端发布分支均以用户仓库现有 `main` 为祖先并已快进更新：桌面 `cwxsss/UniClipboardsss:main` 为 `aa402298c`，鸿蒙 `cwxsss/UniClipboardHarmonyOS:main` 为 `426ea9a`，Engine `cwxsss/Engine:main` 为 `3c81e9e`；未执行强制推送或历史改写。
+
+## 2026-08-28 桌面端优化构建
+
+- 针对桌面邀请二维码、历史页标题栏拖动和筛选按钮悬停反馈的未提交改动，重新执行 `npm.cmd run daemon:sidecar`、`npm.cmd run build` 和 Tauri Windows NSIS 构建；前端与后台侧车均使用当前工作树内容。
+- NSIS 构建阶段已完成并生成 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`。Tauri 命令最后因仓库启用更新包签名而检查到只有公钥、缺少 `TAURI_SIGNING_PRIVATE_KEY`，返回非零；这只影响更新签名产物，不影响已生成的 NSIS 安装包。
+- 本次交付副本位于 `artifacts/pc/UniClipboard_1.0.0-alpha.7-desktop-fix-20260828_x64-setup.exe` 和 `artifacts/pc/UniClipboard-1.0.0-alpha.7-desktop-fix-20260828-portable.zip`；便携目录包含 `uniclipboard.exe` 与 `uniclipd.exe`。安装包 SHA-256 为 `BA194FF7A9A0AE4715D92E816C2D85DC70F87DE447344C6FD32C4A823698A11B`，便携压缩包 SHA-256 为 `DCFB673C0F486946EA702BD2A81BFCF6532F47A57578215347C659C86D6A84B7`。
+- 构建仍保留已有 Rust 未使用变量、Vite 动态导入和大分包警告；本轮没有提交、推送或发布 Release。
+
+## 2026-08-28 桌面端修复包重新交付
+
+- 核实用户实际运行的是 `E:/software/UniClipboard/uniclipboard.exe`，该目录中的程序属于旧安装，不包含本轮邀请二维码修复；当前源码和 `dist` 已确认没有“输入口令后生成”逻辑。
+- 在当前工作树重新执行侧车编译、前端构建和 Tauri NSIS 构建，生成新的桌面修复包。NSIS 安装包位于 `artifacts/pc/UniClipboard_1.0.0-alpha.7-fix-titlebar-invite-20260828_x64-setup.exe`，便携包位于 `artifacts/pc/UniClipboard-1.0.0-alpha.7-fix-titlebar-invite-20260828-portable.zip`，便携目录同时包含 `uniclipboard.exe` 和 `uniclipd.exe`。
+- 新安装包 SHA-256 为 `5E93C40BB948C5C4DE0A15A620C488695BC5D95619D7E7E7AB7FB49AD5DEC606`，便携压缩包 SHA-256 为 `08BCA40A4E5B60097E4586AEEA187C9821D047A8910C506D1705348BDA26D7F4`。Tauri 最后因只有更新公钥、缺少 `TAURI_SIGNING_PRIVATE_KEY` 而返回非零，但 NSIS 包已完成生成。
+
+## 2026-08-28 桌面邀请与历史窗口优化
+
+- 桌面邀请二维码改为仅编码一次性邀请码。`/v2/setup/issue-invitation` 只返回邀请码和过期时间，桌面端不再要求再次输入空间口令，也不把空间口令拼入二维码；加入端仍按现有 Engine 流程输入空间口令。
+- 配对完成仍以 daemon 的 `device-trust.changed` 加状态快照为准，成功态继续在 2 秒后自动关闭邀请对话框；未重新接入当前 daemon 未广播的 `setup.pairingCompleted`。
+- `TitleBar`、主布局的 `ContentToolbar` 与侧栏共用 `src/hooks/useWindowDrag.ts`；历史页标题栏可拖动，筛选按钮悬停反馈与窗口控制按钮统一。
+- 富文本、链接复制转文本的需求按用户确认延期，本轮未修改。
+- 验证：聚焦测试 19/19；完整前端测试 1028 通过、1 跳过；TypeScript/Vite 构建和 macOS 兼容检查通过。全量 lint 仍受未跟踪 `_engine_upstream` 既有 CJS/正则规则问题影响；构建保留现有动态导入和大分包警告。
+
+## 2026-08-28 方案一扫码协议与历史标题栏修复
+
+- 按用户确认的方案一，桌面邀请二维码继续只编码短时邀请码，不重新加入空间口令；鸿蒙 `importSpaceInvitation` 现在接受桌面生成的仅邀请码 URI，并在扫码成功后填充邀请码、清空旧口令，加入前仍要求用户手动输入当前空间口令。
+- 鸿蒙仍兼容带 `pwd` 的旧邀请 URI，以保证鸿蒙旧版本生成的二维码可用；该兼容只保留在输入解析侧，不改变桌面二维码不携带长期口令的约束。扫码成功提示已改为明确提示“请输入空间口令”。
+- 桌面 `ContentToolbar` 的右侧插槽不再把整块空白区域标为不可拖动，只有插槽内明确标记的交互控件阻止窗口拖动；历史页“全部”筛选按钮和关闭状态的“搜索”按钮增加与标题栏窗口控制一致的悬停背景反馈。
+- 桌面定向测试 `23/23` 通过，完整前端测试 `1031` 通过、`1` 跳过。
+- 鸿蒙构建前置校验确认 Engine `v1.1.0-rc.7`、提交 `ff493cfa8563cdd7fbf8615ed0a95b9058714176` 和 `dataTransfer` 后台同步模式通过。由于 DevEco 不接受中文工程路径，本轮在 ASCII 临时副本中运行测试和 debug HAP 构建；两项任务均被仓库已有的 ArkTS 严格类型错误以及 `@uniclipboard/engine` 的 `Index.d.ets` 命名导出识别问题阻断，错误未落在本轮新增的扫码解析代码上，因此未宣称生成新的 HAP。临时验证副本不属于项目交付物。
+- 当前仍处于线上内测与快速迭代阶段，Engine HAR/NAPI 声明导出和既存 ArkTS 严格类型问题记录为后续构建阻塞；在修复前不应把鸿蒙 HAP 构建结果标记为通过。
+
+## 2026-08-28 中继验证与桌面安装包交付规则
+
+- 后续桌面交付只生成 NSIS 安装包，不再生成新的便携版目录或压缩包。当前工作树生成的安装包位于 `artifacts/pc/UniClipboard_1.0.0-alpha.7-relay-test-20260828_x64-setup.exe`，SHA-256 为 `1F24CE860FD1257A97431379B5052886F94057E7AC7C056E3CEFFE735B479657`；构建使用当前工作树和已编译的 `uniclipd-x86_64-pc-windows-msvc.exe` 侧车。
+- 桌面设置中的 `https://relay.chatsss.top` 已被 Engine 选为当前中继，日志出现 `home is now relay https://relay.chatsss.top/`；从 Engine 直接运行的真实 iroh 中继协议探测也已通过。中继网页根路径返回 404 属于服务路由预期，不代表中继协议不可用。
+- 邀请服务与中继是两套地址：邀请码注册/兑换走 rendezvous 服务，中继只承载 iroh 数据连接。对 rendezvous 的解析/消费接口探测可达并返回结构化 `pairing_not_found`，说明接口路径和服务可访问。
+- 旧桌面日志显示，远端已通过 `/uniclipboard/pairing/2` 连接到桌面，但在打开配对双向流、发送第一帧之前由对端关闭连接；当前证据不支持把问题归因于中继不可达，更可能是手机端未完成同一 Engine 配对握手、版本/运行状态不一致或邀请码流程已失效。物理手机 HDC 当前离线，尚未取得手机侧日志，暂不修改配对代码。
+- 当前 Codex 进程曾注入 `127.0.0.1:9` 代理变量；网络验证时仅在进程级清除。用户 Git 全局代理 `127.0.0.1:20808` 已保留且不得修改。
+- 待用户安装当前 NSIS 包后，使用全新邀请码在跨网络环境复测，并同时取得桌面和手机日志；只有在双端时间线确认后才进入中继/配对代码修复。
+
+## 2026-08-28 模拟器配对与中继测试边界
+
+- 使用当前 `v1.1.0-rc.7` Engine 的鸿蒙模拟器完成一次完整配对：桌面端接受配对双向流、解码首帧、验证加入端证明并发送持久化入会候选，随后将模拟器标记为在线；因此本次配对链路已成功。
+- 鸿蒙模拟器保存的自定义中继 `https://relay.chatsss.top` 在强制停止并重启后仍然存在，桌面端启动日志也确认已加载该中继。Engine 的策略仍是直连优先、中继回退；“已配置中继”不等于“当前会话强制走中继”。
+- 模拟器与桌面端同机运行时，直连是预期路径，不能作为中继实测。有效的中继验证需要手机与桌面处于不同网络，或在明确授权后临时阻断直连并保留中继；验证时必须同时检查双端通道日志，不能只看界面状态。
+
+## 2026-08-28 当前源码 HAP 重新构建
+
+- 之前 `07:55:49` 生成的 `sssUniClip-rc7-retest-20260828-debug-signed-acl.hap` 不是当前源码最新构建；鸿蒙端四个未提交源码文件在 `09:51` 仍有修改，产品锁文件也在 `08:00` 更新。
+- DevEco/Hvigor 直接使用中文项目路径会报 `00306003 Invalid project path`。本次未修改源码，将当前工作树复制到纯英文临时路径后重新执行 `ohpm install --all` 与 `assembleHap`，构建日志包含 Engine `v1.1.0-rc.7` 校验和 `BUILD SUCCESSFUL`。
+- 重新生成的 HAP 使用本机 OpenHarmony 测试签名并通过 `verify-app`，同时包含 `arm64-v8a` 与 `x86_64` 原生库。交付文件为 `UniClipboardHarmonyOS/artifacts/sssUniClip-rc7-current-source-20260828-debug-signed-acl.hap`，生成时间 `11:07:18`，SHA-256 为 `3E6B1C8565F5273046C6F68188D1B28E98D645607A99DD243EDC797FAC1AFEB0`。
+
+## 2026-08-28 剪贴板重复记录与回环抑制修复
+
+- 用户在 HP 笔记本复制“关于我们”后，当前桌面 `zsmy` 在约 7 秒内收到多个不同的 `snapshot_hash`，但明文长度始终为 14 字节，HTML 表示长度按 4 字节递增；这些事件均由 `RemotePush` 进入，说明是同一可见文本的富文本表示重写被当成多个物理快照，而不是历史界面重复渲染。
+- 桌面多空间 Hub 最近为按 Windows 序列号消费自身写回回声而使用 `new_passthrough`，绕过了平台监听器原有的内容去重。现改为带事件过滤回调的监听器：先按变化令牌消费程序写回，再保留普通内容去重，并在 15 秒内合并相同可见文本的富文本表示变化；不同真实变化令牌的完整快照仍可通过。
+- Engine 入站去重窗口从 2 秒调整为 15 秒，以覆盖日志中约 5 秒后的延迟表示重写；命中可见内容后同时刷新哈希和可见内容缓存。对已存在条目的重复激活新增 `(snapshot_hash, activated_at_ms)` 守卫，避免同一活动状态在约几百毫秒的重发中反复写回系统剪贴板并再次触发同步；真正重新复制相同内容会带新的激活时间，仍可重新激活。
+- 验证通过：桌面 `uc-platform` 监听器测试 26/26，`uc-bootstrap` 多空间 Hub 测试 18/18；Engine `uc-application` 入站同步测试 84/84，Engine 格式检查和桌面格式检查均通过。Engine 测试仍会打印既有的后台 Mock 写入期望提示，但进程结果为成功，本轮没有出现新增失败。
+- 依赖边界：桌面根工程当前仍固定解析远端 Engine 提交 `ff493cfa8563cdd7fbf8615ed0a95b9058714176`；本轮 Engine 修复位于工作区内独立的 `_engine_upstream` 仓库，尚未推送或改变桌面 `Cargo.toml` 的远端提交，因此发布桌面包前必须先将 Engine 修复提交到选定远端并更新桌面锁定提交，再做一次完整构建核验。
+- 本轮没有打包、推送或发布 Release；暂不扩大到图片/文件策略或生产安全专项，真实多设备链路仍需在更新后的桌面包上复测重复历史和回环行为。
+
+## 2026-08-28 新桌面安装包构建
+
+- 按用户要求仅生成 Windows x64 NSIS 安装包，没有生成便携版。因当前 PowerShell 环境未提供 `bun`，先直接运行前端生产构建，再使用临时 Tauri 配置跳过重复的前端构建步骤；临时配置已在构建完成后删除。
+- 后台 `uniclipd` 侧车使用 `x86_64-pc-windows-msvc` release 构建并成功暂存；前端 `tsc`、Vite 生产构建和 macOS 兼容检查均通过。Vite 仍报告既有的大分包和动态导入提示，未阻断构建。
+- 新安装包位于 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，生成时间为 `2026-08-28 13:23:01`，大小 `19,498,283` 字节，SHA-256 为 `434E2C8D31074A22FDD116428C794885EC9304C051413ECED850D53EFCE6027E`。
+- Tauri 最后因配置了更新公钥但当前环境没有 `TAURI_SIGNING_PRIVATE_KEY` 而返回非零；NSIS 安装包已完整生成，该错误只影响更新签名产物。本轮未推送代码、未发布 Release、未删除已有安装包或用户数据。
+
+## 2026-08-28 鸿蒙后台耗电优化实施
+
+- 按确认方案修改鸿蒙端：`common/src/main/ets/engine/EngineClipboardHost.ets` 将固定 `200ms` 轮询改为事件监听加 `1s -> 2s -> 5s` 自适应兜底，改用单个递归 `setTimeout`，剪贴板发生变化后重新回到快速检查；未改变 `dataTransfer` 后台任务。
+- `features/clipboard/src/main/ets/viewmodel/ClipboardFeatureController.ets` 在页面隐藏和 Ability 进入后台时清除界面层实时轮询，调度函数增加页面可见性守卫，避免异步查询收尾重新创建定时器；前台恢复时立即对账并刷新一次设备列表，删除每 4 次轮询刷新设备的旧路径。
+- `products/default/src/main/ets/entryability/EntryAbility.ets` 接入控制器的后台/前台生命周期，确保即使页面回调时序变化也不会在后台继续执行界面轮询。新增轮询退避和后台定时器清理测试。
+- 使用纯英文临时目录运行 `assembleHap --mode module -p product=default -p module=entry@default -p buildMode=release --no-daemon`，`CompileArkTS`、`SignHap`（当前无产品签名配置）和 `BUILD SUCCESSFUL` 均通过，Engine rc.7 与 `dataTransfer` 校验通过。临时目录已按精确路径删除，未修改正式构建产物。
+- 全量 `test` 当前仍被既有测试基础设施阻断：产品测试模板引用不存在的 `products/default/src/test/List.test`，公共模块测试另有 `EngineRuntimeService.test.ets` 的 3 处未类型化对象字面量错误；这些问题未落在本轮耗电实现上，待后续单独修复。
+- 基于同一当前源码再次生成并签名验证测试 HAP：`UniClipboardHarmonyOS/artifacts/sssUniClip-rc7-power-optimized-20260828-debug-signed-acl.hap`，大小 `191,137,469` 字节，SHA-256 为 `2A7CFDDAA8DF56F23B4A0BC5695EF0B9279E2B8CF62C3CA691E05D8A799D8EE0`。该包使用 OpenHarmony 测试签名，仅用于内测耗电和同步回归，不宣称为正式发布签名。
+
+## 2026-08-28 鸿蒙后台耗电审计
+
+- 只读检查确认：鸿蒙端在后台同步开启且已加入空间时，`common/src/main/ets/engine/EngineClipboardHost.ets` 会以 `200ms` 固定间隔调用 `systemPasteboard.getDataSync()`，约每秒读取 5 次；系统 `pasteboard` 更新监听同时保持注册。该轮询最初为降低后台文字同步延迟而引入，现有测试也把 `200ms` 当作延迟上限，而不是耗电指标。
+- 发现第二套重复轮询：`features/clipboard/src/main/ets/viewmodel/ClipboardFeatureController.ets` 的页面控制器在 `onPageHide()` 后只把页面标记为不可见，没有停止定时器；后台同步开启时仍约每 2 秒调用一次 Engine 入站查询，并每 4 次刷新设备列表。控制器已经订阅 Engine 事件，因此该定时器具备收敛为前台兜底或事件丢失时重试的条件，但需实机验证事件通道可靠性。
+- `products/default/src/main/module.json5` 与 `BackgroundSyncService.ets` 的 `dataTransfer` 后台任务属于长时间接收的必要能力。README 已记录改成 `multiDeviceConnection` 会在约 65 秒后被系统挂起，不能用切换后台模式的方式换取续航。
+- 多空间监督器会为每个启用且已加入的非当前空间启动独立 Engine 运行时；多个空间会线性增加网络保活、事件等待和重连成本。是否默认保持所有空间后台接收属于产品策略，暂不擅自改变。
+- 建议的下一步：保留 `dataTransfer`，将 Engine 剪贴板检测改为事件优先、带退避的低频兜底；应用进入后台时暂停界面控制器轮询，恢复前台时执行一次立即对账；再用真机对后台 30 分钟的剪贴板读取次数、CPU、网络、耗电和文字同步延迟做基准。该建议尚未改动鸿蒙源码，等待用户确认后实施。
+
+## 2026-08-28 首次设置与快捷键默认值修复
+
+- 首次设备创建空间成功后，`InitializeSpaceScreen` 直接完成设置流程并导航到主界面，不再停留在“空间已准备好”的完成页；主界面的普通设备邀请不会再次打开首次设置引导。
+- 快捷键默认值统一为仅保留切换快捷面板 `Alt+V`，设置、缩放、收藏和历史搜索等其他快捷键默认为空；空绑定不会注册运行时监听器，用户后续手动配置仍可生效。历史页搜索与收藏操作改为读取统一定义，避免代码内残留旧默认快捷键。
+- 验证通过：完整前端 Vitest `157` 个测试文件通过，`1035` 个测试通过、`1` 个跳过；定向 Vitest `19/19`，相关源码与测试的 `oxlint`、`oxfmt`、`git diff --check` 通过；前端生产构建的 TypeScript、Vite 和 macOS 兼容性检查通过。构建仍保留既有的动态导入和大分包提示。
+
+## 2026-08-28 桌面端首次设置与快捷键修复包
+
+- 使用当前工作树重新执行前端生产构建、`uniclipd` Windows release 侧车构建和 Tauri NSIS 打包；前端 TypeScript、Vite、macOS 兼容性检查，以及后台 release 编译均通过。
+- 最新 Windows x64 NSIS 安装包位于 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，生成时间为 `2026-08-28 15:38:16`，大小 `19,502,997` 字节，SHA-256 为 `BA839CC3DEEB61A2905F53EF0FDF7AFD577EFF41F4A17E020259F4C3E5202256`。主程序为 `target/release/uniclipboard.exe`，后台侧车已暂存到 `src-tauri/binaries/uniclipd-x86_64-pc-windows-msvc.exe`。
+- 本次只生成 NSIS 安装包，没有生成便携版；本地打包使用临时 Tauri 配置跳过本机缺失的 `bun` 前端钩子，并关闭更新签名产物生成，未修改正式 Tauri 配置。安装包可用于当前 Windows x64 内测安装，更新包签名不属于本次交付。
