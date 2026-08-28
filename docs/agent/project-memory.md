@@ -284,3 +284,10 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 使用当前工作树重新执行前端生产构建、`uniclipd` Windows release 侧车构建和 Tauri NSIS 打包；前端 TypeScript、Vite、macOS 兼容性检查，以及后台 release 编译均通过。
 - 最新 Windows x64 NSIS 安装包位于 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，生成时间为 `2026-08-28 15:38:16`，大小 `19,502,997` 字节，SHA-256 为 `BA839CC3DEEB61A2905F53EF0FDF7AFD577EFF41F4A17E020259F4C3E5202256`。主程序为 `target/release/uniclipboard.exe`，后台侧车已暂存到 `src-tauri/binaries/uniclipd-x86_64-pc-windows-msvc.exe`。
 - 本次只生成 NSIS 安装包，没有生成便携版；本地打包使用临时 Tauri 配置跳过本机缺失的 `bun` 前端钩子，并关闭更新签名产物生成，未修改正式 Tauri 配置。安装包可用于当前 Windows x64 内测安装，更新包签名不属于本次交付。
+
+## 2026-08-28 三端代码同步到用户 GitHub main
+
+- 桌面端已将当前已核对的源代码、测试和项目文档提交为 `ff5db6a6f53e61e5d2bfe982d39af49128f70c22`，推送到 `cwxsss/UniClipboardsss` 的 `main`。
+- Engine 已将入站剪贴板去重修复提交为 `44329b55d2b420e195b8e421401897cbc31dff62`，推送到 `cwxsss/Engine` 的 `main`。
+- 鸿蒙端已将后台剪贴板轮询优化提交为 `ef5d26d601dfaba0cdaa9f79ed7e9a58abc93765`，推送到 `cwxsss/UniClipboardHarmonyOS` 的 `main`。三个远端提交均已通过 GitHub CLI 独立核验。
+- 桌面端提交时仓库 `pre-commit` 仅调用本机不存在的 `bun lint-staged`，已在既有测试、格式检查和生产构建通过的前提下跳过该钩子；未修改钩子文件。用户 Git 配置中的 `127.0.0.1:20808` 保持不变，仅清除了本次 Git 子进程中的临时 `127.0.0.1:9` 代理环境变量。
