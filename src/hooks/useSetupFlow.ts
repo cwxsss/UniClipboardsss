@@ -203,10 +203,11 @@ export function useSetupFlow(): UseSetupFlowReturn {
           passphraseConfirm: input.passphraseConfirm,
           deviceName: input.deviceName,
         })
-        // Space initialization and peer pairing are separate milestones. Keep
-        // setup open on the ready screen until the user invites a peer or exits.
+        // Space initialization completes onboarding. Device invitation is a
+        // normal main-screen workflow, so do not keep the setup gate open with
+        // a transient "space ready" summary.
         const next = await getSetupState()
-        applyServerSetupState(next, { kind: 'space_ready' })
+        applyServerSetupState(next)
         return { ok: true } as const
       } catch (err) {
         if (err instanceof SetupV2Error) {

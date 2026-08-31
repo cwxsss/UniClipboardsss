@@ -1,11 +1,11 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import React, { ReactNode, useMemo, useRef, useState } from 'react'
+import React, { ReactNode, useMemo, useState } from 'react'
 import InsetSurface from '@/components/layout/InsetSurface'
-import { ContentToolbar } from '@/components/TitleBar'
 import SidebarFooter from '@/components/layout/SidebarFooter'
 import SidebarNavigation from '@/components/layout/SidebarNavigation'
+import { ContentToolbar } from '@/components/TitleBar'
 import { SidebarSlotContext } from '@/contexts/sidebar-slot-context'
 import { usePlatform } from '@/hooks/usePlatform'
+import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useWindowFrame } from '@/hooks/useWindowFrame'
 
 interface MainLayoutProps {
@@ -22,33 +22,10 @@ interface ContentToolbarProps {
 }
 
 const SidebarArea: React.FC<SidebarAreaProps> = ({ title }) => {
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
-
-  const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0) return
-    dragStartRef.current = { x: event.clientX, y: event.clientY }
-  }
-
-  const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
-    const start = dragStartRef.current
-    if (!start || (event.buttons & 1) === 0) return
-    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return
-    dragStartRef.current = null
-    void getCurrentWindow()
-      .startDragging()
-      .catch(() => undefined)
-  }
+  const dragHandlers = useWindowDrag()
 
   return (
-    <aside
-      data-tauri-drag-region
-      onPointerDownCapture={handlePointerDown}
-      onPointerMoveCapture={handlePointerMove}
-      onPointerUpCapture={() => {
-        dragStartRef.current = null
-      }}
-      className="flex h-full w-12 shrink-0 flex-col"
-    >
+    <aside data-tauri-drag-region {...dragHandlers} className="flex h-full w-12 shrink-0 flex-col">
       {title}
       <SidebarNavigation />
       <SidebarFooter />

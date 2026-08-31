@@ -89,6 +89,7 @@ const HistoryCardContextMenu: React.FC<HistoryCardContextMenuProps> = ({
   const isUnavailable = item.isUnavailable ?? false
   const revealPath = item.type === 'file' ? firstRevealableFilePath(item.content) : null
   const sendInFlight = resendAction.isEntryInFlight(item.id)
+  const explicitTargetOnly = item.type === 'image' || item.type === 'file'
 
   const handleOpenFileLocation = async () => {
     if (!revealPath) return
@@ -153,10 +154,14 @@ const HistoryCardContextMenu: React.FC<HistoryCardContextMenuProps> = ({
               <ContextMenuItem disabled>{t('clipboard.contextMenu.sendNoDevices')}</ContextMenuItem>
             ) : (
               <>
-                <ContextMenuItem onClick={() => void resendAction.resendAll(item.id)}>
-                  {t('clipboard.contextMenu.sendAll')}
-                </ContextMenuItem>
-                <ContextMenuSeparator />
+                {!explicitTargetOnly && (
+                  <>
+                    <ContextMenuItem onClick={() => void resendAction.resendAll(item.id)}>
+                      {t('clipboard.contextMenu.sendAll')}
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                  </>
+                )}
                 {members.map(member => (
                   <ContextMenuItem
                     key={member.peerId}

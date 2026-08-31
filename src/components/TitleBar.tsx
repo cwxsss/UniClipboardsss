@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Minus, Square, X } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePlatform } from '@/hooks/usePlatform'
+import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useWindowFrame } from '@/hooks/useWindowFrame'
 import { commands } from '@/lib/ipc'
 import { createLogger } from '@/lib/logger'
@@ -20,7 +21,9 @@ interface TitleBarSectionProps {
   rightSlot?: React.ReactNode
 }
 
-type ContentToolbarProps = TitleBarSectionProps
+type ContentToolbarProps = TitleBarSectionProps & {
+  enableWindowDrag?: boolean
+}
 
 // macOS 三色交通灯相对系统标准位置的偏移，屏幕坐标系：正 X 向右、正 Y 向下。
 // 自绘 titlebar 高度 40pt vs 系统默认 28pt，按钮要向下挪一点才视觉居中；
@@ -55,7 +58,7 @@ const TitleBarButton = ({
     onDoubleClick={event => event.stopPropagation()}
     className={cn(
       'h-full w-12 flex items-center justify-center transition-colors duration-150',
-      'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+      'text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10',
       className
     )}
   >
@@ -84,11 +87,16 @@ export const SidebarTitle = ({ className, rightSlot }: TitleBarSectionProps) => 
   )
 }
 
-export const ContentToolbar = ({ className, rightSlot }: ContentToolbarProps) => {
+export const ContentToolbar = ({
+  className,
+  rightSlot,
+  enableWindowDrag = true,
+}: ContentToolbarProps) => {
   const [isMaximized, setIsMaximized] = useState(false)
 
   const { isMac, isTauri } = usePlatform()
   const { hasCustomWindowControls } = useWindowFrame()
+  const dragHandlers = useWindowDrag({ enabled: enableWindowDrag })
   const windowRef = useMemo(() => (isTauri ? getCurrentWindow() : null), [isTauri])
 
   const syncTrafficLightPosition = useCallback(() => {
@@ -170,6 +178,7 @@ export const ContentToolbar = ({ className, rightSlot }: ContentToolbarProps) =>
   return (
     <div
       data-tauri-drag-region
+      {...dragHandlers}
       onDoubleClick={() => {
         if (!hasCustomWindowControls) return
         handleToggleMaximize()
@@ -182,7 +191,6 @@ export const ContentToolbar = ({ className, rightSlot }: ContentToolbarProps) =>
       {rightSlot && (
         <div
           className="relative z-10 flex min-w-0 flex-1 items-center px-3"
-          data-tauri-drag-region="false"
         >
           {rightSlot}
         </div>
@@ -212,15 +220,18 @@ export const ContentToolbar = ({ className, rightSlot }: ContentToolbarProps) =>
 }
 
 export const TitleBar = ({ className, isSetupActive = false, rightSlot }: TitleBarProps) => {
+  const dragHandlers = useWindowDrag()
+
   if (isSetupActive) return null
 
   return (
     <div
       data-tauri-drag-region
+      {...dragHandlers}
       className={cn('relative z-20 flex h-10 w-full shrink-0 bg-transparent', className)}
     >
       <SidebarTitle className="min-w-0 flex-1" />
-      <ContentToolbar rightSlot={rightSlot} />
+      <ContentToolbar rightSlot={rightSlot} enableWindowDrag={false} />
     </div>
   )
 }

@@ -139,4 +139,17 @@ describe('setupRealtimeStore completion ownership', () => {
       completion: null,
     })
   })
+
+  it('does not reopen onboarding for an invitation issued from the main app', () => {
+    const { result } = renderHook(() => useSetupRealtimeStore())
+
+    act(() => applyServerSetupState(completedState))
+    act(() => applyIssuedInvitation({ code: 'ABC123', expiresAtMs: 123_456 }))
+
+    expect(result.current.flow).toEqual({
+      kind: 'completed',
+      deviceName: 'MacBook',
+      completion: null,
+    })
+  })
 })

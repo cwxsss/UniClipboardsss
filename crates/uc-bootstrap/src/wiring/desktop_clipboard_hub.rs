@@ -418,8 +418,14 @@ impl DesktopClipboardHubChangeStream {
             }
         };
         let (sender, receiver) = tokio::sync::mpsc::channel(64);
-        let watcher =
-            ClipboardWatcher::new_passthrough(Arc::clone(&self.hub.inner.system_clipboard), sender);
+        let hub = self.hub.clone();
+        let event_filter =
+            Arc::new(move |change_token| hub.should_suppress_watcher_event(change_token));
+        let watcher = ClipboardWatcher::new_with_event_filter(
+            Arc::clone(&self.hub.inner.system_clipboard),
+            sender,
+            event_filter,
+        );
         let (shutdown, shutdown_receiver) = shutdown_channel();
         let lease = self
             .lease
@@ -450,8 +456,6 @@ impl DesktopClipboardHubChangeStream {
             };
             match event {
                 Some(PlatformEvent::ClipboardChanged { snapshot, .. }) if snapshot.is_empty() => {}
-                Some(PlatformEvent::ClipboardChanged { change_token, .. })
-                    if self.hub.should_suppress_watcher_event(change_token) => {}
                 Some(PlatformEvent::ClipboardChanged { snapshot, .. }) => {
                     return Ok(Some(snapshot))
                 }

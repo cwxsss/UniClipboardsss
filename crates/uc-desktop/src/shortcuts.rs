@@ -21,12 +21,8 @@ use uc_daemon_contract::api::dto::settings::ShortcutKeyDto;
 /// 快捷面板默认的全局快捷键（物理键格式，与 `tauri-plugin-global-shortcut`
 /// 接受的字符串格式一致）。
 ///
-/// - macOS: `Cmd+Ctrl+V`
-/// - Windows / Linux: `Ctrl+Alt+V`
-#[cfg(target_os = "macos")]
-pub const DEFAULT_QUICK_PANEL_SHORTCUT: &str = "super+ctrl+v";
-#[cfg(not(target_os = "macos"))]
-pub const DEFAULT_QUICK_PANEL_SHORTCUT: &str = "ctrl+alt+v";
+/// - All desktop platforms: `Alt+V`
+pub const DEFAULT_QUICK_PANEL_SHORTCUT: &str = "alt+v";
 
 /// `Settings.keyboard_shortcuts` 中存放"切换快捷面板"快捷键覆盖的键名。
 ///
@@ -348,6 +344,11 @@ mod tests {
     fn resolve_none_returns_default() {
         let out = resolve_shortcut_values(None::<Vec<&str>>);
         assert_eq!(out, vec![DEFAULT_QUICK_PANEL_SHORTCUT.to_string()]);
+    }
+
+    #[test]
+    fn default_quick_panel_shortcut_is_alt_v() {
+        assert_eq!(DEFAULT_QUICK_PANEL_SHORTCUT, "alt+v");
     }
 
     #[test]

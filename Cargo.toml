@@ -51,11 +51,10 @@ dbg_macro = "warn"
 [workspace.dependencies]
 # All desktop consumers use one immutable Engine revision. Features remain
 # opt-in at each host boundary so LAN compatibility cannot become a default.
-# Temporary immutable fork pin for the Windows admission recovery in
-# https://github.com/UniClipboard/Engine/pull/52. Return to the official repo
-# after the fix is merged and released.
-uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "f449698b6e96e5d99549c3fdd076dcd8e68118ce" }
-uc-observability-contract = { git = "https://github.com/cwxsss/Engine.git", rev = "f449698b6e96e5d99549c3fdd076dcd8e68118ce" }
+# Immutable rc.7 pin shared with the HarmonyOS HAR. Move to the official
+# repository only after this exact commit is merged and released upstream.
+uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "ff493cfa8563cdd7fbf8615ed0a95b9058714176" }
+uc-observability-contract = { git = "https://github.com/cwxsss/Engine.git", rev = "ff493cfa8563cdd7fbf8615ed0a95b9058714176" }
 
 # tauri 2.11 是 specta rc.25 兼容的最低版本 —— 2.10.x 及之前在
 # `tauri/src/ipc/channel.rs` 用了 `#[specta(remote=..., rename="...")]`

@@ -6,18 +6,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, info_span, warn, Instrument};
 use uc_bootstrap::{
     DesktopClipboardHub, DesktopClipboardHubChangeStream, DesktopClipboardProfileHandle,
-    DesktopClipboardStageExecution,
 };
 use uc_daemon_contract::api::dto::v2::spaces::{
     CreateSpaceProfileRequestDto, JoinSpaceProfileRequestDto, SetActiveSendSpaceRequestDto,
     SpaceFaultDto, SpaceIncomingSyncStateDto, SpaceProfileSummaryDto, SpaceRuntimeStateDto,
 };
 use uc_engine::{
-    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary, ObserveClipboardChangeInput,
-    Operation, OperationResult, SecretString,
+    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary, Operation, OperationResult,
+    SecretString,
 };
 use uc_platform::clipboard::SystemClipboardSnapshot;
 
@@ -38,6 +37,7 @@ use super::windows_space_authority::{
 
 const JOIN_COMPLETION_TIMEOUT: Duration = Duration::from_secs(90);
 const JOIN_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const CLIPBOARD_FORWARDER_RECOVERY_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 struct CatalogRepository {
@@ -138,16 +138,12 @@ impl CatalogPort for ProductionCatalogPort {
 }
 
 struct ProductionRuntimePort {
-    legacy_profile_id: String,
     supervisor: Arc<SpaceRuntimeSupervisor>,
 }
 
 #[async_trait]
 impl RuntimePort for ProductionRuntimePort {
     async fn ensure_available(&self, profile_id: &str) -> anyhow::Result<()> {
-        if profile_id == self.legacy_profile_id {
-            return Ok(());
-        }
         let status = self
             .supervisor
             .status(profile_id)
@@ -173,10 +169,6 @@ impl RuntimePort for ProductionRuntimePort {
 
 struct ProductionClipboardRouterBackend {
     catalog: CatalogRepository,
-    legacy_profile_id: String,
-    legacy_engine: Arc<Engine>,
-    hub: DesktopClipboardHub,
-    legacy_clipboard: DesktopClipboardProfileHandle,
     supervisor: Arc<SpaceRuntimeSupervisor>,
 }
 
@@ -195,38 +187,10 @@ impl ClipboardRouterBackend<SystemClipboardSnapshot> for ProductionClipboardRout
         snapshot: SystemClipboardSnapshot,
         cancel: CancellationToken,
     ) -> anyhow::Result<()> {
-        if profile_id != self.legacy_profile_id {
-            return self
-                .supervisor
-                .dispatch_snapshot(profile_id, snapshot, cancel)
-                .await
-                .map_err(anyhow::Error::new);
-        }
-
-        let engine = Arc::clone(&self.legacy_engine);
-        let outcome = self
-            .hub
-            .execute_with_staged_snapshot(&self.legacy_clipboard, snapshot, move || async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => anyhow::bail!("clipboard dispatch was cancelled"),
-                    result = engine.execute(Operation::ObserveClipboardChange(
-                        ObserveClipboardChangeInput { dispatch: true },
-                    )) => result.map(|_| ()).map_err(anyhow::Error::new),
-                }
-            })
-            .await?;
-        match outcome {
-            DesktopClipboardStageExecution::ConsumedAndCompleted(()) => Ok(()),
-            DesktopClipboardStageExecution::CompletedWithoutConsumption(()) => {
-                anyhow::bail!("Engine completed without consuming staged clipboard")
-            }
-            DesktopClipboardStageExecution::FailedBeforeConsumption(error) => {
-                anyhow::bail!("clipboard dispatch failed before capture: {error}")
-            }
-            DesktopClipboardStageExecution::FailedAfterConsumption(error) => {
-                anyhow::bail!("clipboard dispatch failed after capture: {error}")
-            }
-        }
+        self.supervisor
+            .dispatch_snapshot(profile_id, snapshot, cancel)
+            .await
+            .map_err(anyhow::Error::new)
     }
 
     async fn persist_active_profile(
@@ -243,30 +207,20 @@ impl ClipboardRouterBackend<SystemClipboardSnapshot> for ProductionClipboardRout
 
 struct ProductionSpacesBackend {
     catalog: CatalogRepository,
-    legacy_profile_id: String,
-    legacy_engine: Arc<Engine>,
     supervisor: Arc<SpaceRuntimeSupervisor>,
     authority: Arc<WindowsSpaceAuthority>,
 }
 
 impl ProductionSpacesBackend {
     async fn engine_for(&self, profile_id: &str) -> Option<Arc<Engine>> {
-        if profile_id == self.legacy_profile_id {
-            Some(Arc::clone(&self.legacy_engine))
-        } else {
-            self.supervisor.engine(profile_id)
-        }
+        self.supervisor.engine(profile_id)
     }
 
     async fn summary(
         &self,
         entry: &SpaceCatalogEntry,
     ) -> Result<SpaceProfileSummaryDto, SpacesBackendError> {
-        let status = if entry.profile_id == self.legacy_profile_id {
-            None
-        } else {
-            self.supervisor.status(&entry.profile_id)
-        };
+        let status = self.supervisor.status(&entry.profile_id);
         let runtime_state = runtime_state(entry, status.as_ref());
         let last_fault = status
             .as_ref()
@@ -564,12 +518,9 @@ fn join_id_of(status: &JoinSpaceStatusSummary) -> &str {
 }
 
 fn runtime_state(
-    entry: &SpaceCatalogEntry,
+    _entry: &SpaceCatalogEntry,
     status: Option<&SpaceRuntimeStatus>,
 ) -> SpaceRuntimeStateDto {
-    if entry.profile_dir == "." {
-        return SpaceRuntimeStateDto::Running;
-    }
     match status.map(|status| status.lifecycle) {
         Some(SpaceRuntimeLifecycle::Running) => SpaceRuntimeStateDto::Running,
         Some(SpaceRuntimeLifecycle::Starting) => SpaceRuntimeStateDto::Starting,
@@ -604,6 +555,53 @@ fn map_authority(error: WindowsSpaceAuthorityError) -> SpacesBackendError {
     }
 }
 
+#[async_trait]
+trait ClipboardForwarderStream: Send {
+    async fn next_snapshot(&mut self) -> anyhow::Result<Option<SystemClipboardSnapshot>>;
+
+    async fn shutdown(&mut self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+impl ClipboardForwarderStream for DesktopClipboardHubChangeStream {
+    async fn next_snapshot(&mut self) -> anyhow::Result<Option<SystemClipboardSnapshot>> {
+        DesktopClipboardHubChangeStream::next(self)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        DesktopClipboardHubChangeStream::shutdown(self)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+}
+
+trait ClipboardForwarderStreamSource: Send + Sync {
+    fn take_stream(&self) -> anyhow::Result<Option<Box<dyn ClipboardForwarderStream>>>;
+}
+
+struct HubClipboardForwarderStreamSource {
+    hub: DesktopClipboardHub,
+}
+
+impl ClipboardForwarderStreamSource for HubClipboardForwarderStreamSource {
+    fn take_stream(&self) -> anyhow::Result<Option<Box<dyn ClipboardForwarderStream>>> {
+        self.hub
+            .take_change_stream()
+            .map_err(anyhow::Error::new)
+            .map(|stream| {
+                stream.map(|stream| Box::new(stream) as Box<dyn ClipboardForwarderStream>)
+            })
+    }
+}
+
+enum ClipboardForwarderStreamExit {
+    Cancelled,
+    Closed,
+    Failed(anyhow::Error),
+}
+
 struct ClipboardForwarder {
     cancel: CancellationToken,
     join: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
@@ -611,26 +609,35 @@ struct ClipboardForwarder {
 
 impl ClipboardForwarder {
     fn spawn(
-        stream: Option<DesktopClipboardHubChangeStream>,
+        initial_stream: Option<DesktopClipboardHubChangeStream>,
+        hub: DesktopClipboardHub,
         router: ClipboardRouterHandle<SystemClipboardSnapshot>,
+    ) -> Self {
+        Self::spawn_with_source(
+            initial_stream.map(|stream| Box::new(stream) as Box<dyn ClipboardForwarderStream>),
+            Arc::new(HubClipboardForwarderStreamSource { hub }),
+            router,
+            CLIPBOARD_FORWARDER_RECOVERY_DELAY,
+        )
+    }
+
+    fn spawn_with_source(
+        initial_stream: Option<Box<dyn ClipboardForwarderStream>>,
+        source: Arc<dyn ClipboardForwarderStreamSource>,
+        router: ClipboardRouterHandle<SystemClipboardSnapshot>,
+        recovery_delay: Duration,
     ) -> Self {
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
-        let join = stream.map(|mut stream| {
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = task_cancel.cancelled() => break,
-                        next = stream.next() => match next? {
-                            Some(snapshot) => router.clipboard_changed(snapshot).await?,
-                            None => break,
-                        },
-                    }
+        let join = initial_stream.map(|stream| {
+            let span = info_span!("daemon.clipboard_forwarder");
+            tokio::spawn(
+                async move {
+                    run_clipboard_forwarder(stream, source, router, task_cancel, recovery_delay)
+                        .await
                 }
-                stream.shutdown().await?;
-                Ok(())
-            })
+                .instrument(span),
+            )
         });
         Self { cancel, join }
     }
@@ -642,6 +649,103 @@ impl ClipboardForwarder {
                 .map_err(|error| anyhow::anyhow!("clipboard watcher task failed: {error}"))??;
         }
         Ok(())
+    }
+}
+
+async fn run_clipboard_forwarder(
+    mut stream: Box<dyn ClipboardForwarderStream>,
+    source: Arc<dyn ClipboardForwarderStreamSource>,
+    router: ClipboardRouterHandle<SystemClipboardSnapshot>,
+    cancel: CancellationToken,
+    recovery_delay: Duration,
+) -> anyhow::Result<()> {
+    let mut recovery_attempt = 0_u32;
+    info!("desktop clipboard forwarder started");
+
+    loop {
+        let exit = forward_clipboard_stream(stream.as_mut(), &router, &cancel).await;
+        let shutdown_result = stream.shutdown().await;
+
+        match exit {
+            ClipboardForwarderStreamExit::Cancelled => {
+                if let Err(error) = shutdown_result {
+                    warn!(error = %error, "desktop clipboard watcher shutdown failed");
+                    return Err(error);
+                }
+                return Ok(());
+            }
+            ClipboardForwarderStreamExit::Closed => {
+                warn!("desktop clipboard watcher closed unexpectedly; scheduling recovery");
+            }
+            ClipboardForwarderStreamExit::Failed(error) => {
+                warn!(error = %error, "desktop clipboard watcher failed; scheduling recovery");
+            }
+        }
+        if let Err(error) = shutdown_result {
+            warn!(error = %error, "desktop clipboard watcher cleanup failed during recovery");
+        }
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+
+        recovery_attempt = recovery_attempt.saturating_add(1);
+        loop {
+            match source.take_stream() {
+                Ok(Some(next_stream)) => {
+                    info!(recovery_attempt, "desktop clipboard watcher recovered");
+                    stream = next_stream;
+                    break;
+                }
+                Ok(None) => {
+                    debug!(
+                        recovery_attempt,
+                        "desktop clipboard watcher lease is not yet available"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        recovery_attempt,
+                        error = %error,
+                        "desktop clipboard watcher reacquire failed"
+                    );
+                }
+            }
+            if wait_for_clipboard_forwarder_retry(&cancel, recovery_delay).await {
+                return Ok(());
+            }
+        }
+    }
+}
+
+async fn forward_clipboard_stream(
+    stream: &mut dyn ClipboardForwarderStream,
+    router: &ClipboardRouterHandle<SystemClipboardSnapshot>,
+    cancel: &CancellationToken,
+) -> ClipboardForwarderStreamExit {
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return ClipboardForwarderStreamExit::Cancelled,
+            next = stream.next_snapshot() => match next {
+                Ok(Some(snapshot)) => {
+                    if let Err(error) = router.clipboard_changed(snapshot).await {
+                        warn!(
+                            error = %error,
+                            "desktop clipboard snapshot dispatch failed; keeping watcher active"
+                        );
+                    }
+                }
+                Ok(None) => return ClipboardForwarderStreamExit::Closed,
+                Err(error) => return ClipboardForwarderStreamExit::Failed(error),
+            },
+        }
+    }
+}
+
+async fn wait_for_clipboard_forwarder_retry(cancel: &CancellationToken, delay: Duration) -> bool {
+    tokio::select! {
+        _ = cancel.cancelled() => true,
+        _ = tokio::time::sleep(delay) => false,
     }
 }
 
@@ -657,24 +761,28 @@ impl WindowsMultiSpace {
     pub(crate) async fn start(
         catalog_root: PathBuf,
         roots: SpaceRuntimeRoots,
-        legacy_engine: Arc<Engine>,
+        initial_engine: Arc<Engine>,
         hub: DesktopClipboardHub,
-        legacy_clipboard: DesktopClipboardProfileHandle,
+        initial_clipboard: DesktopClipboardProfileHandle,
         run_mode: DaemonRunMode,
     ) -> anyhow::Result<Self> {
         let catalog = CatalogRepository::new(catalog_root);
         let entries = catalog.entries().await?;
-        let legacy_profile_id = entries
+        let default_entry = entries
             .iter()
             .find(|entry| entry.profile_dir == ".")
-            .map(|entry| entry.profile_id.clone())
-            .ok_or_else(|| anyhow::anyhow!("space catalog has no legacy compatibility profile"))?;
-        let supervisor = SpaceRuntimeSupervisor::production(roots, hub.clone());
-        for entry in entries
-            .iter()
-            .filter(|entry| entry.profile_dir != "." && entry.enabled)
             .cloned()
-        {
+            .ok_or_else(|| anyhow::anyhow!("space catalog has no default profile"))?;
+        let supervisor = SpaceRuntimeSupervisor::production(roots, hub.clone());
+        supervisor
+            .adopt_running_engine(
+                default_entry,
+                initial_engine,
+                hub.clone(),
+                initial_clipboard,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to adopt default space runtime: {error}"))?;
+        for entry in entries.iter().filter(|entry| entry.enabled).cloned() {
             match supervisor.start_entry(entry.clone()).await {
                 Ok(_) => {
                     if let Some(engine) = supervisor.engine(&entry.profile_id) {
@@ -691,10 +799,6 @@ impl WindowsMultiSpace {
 
         let backend = Arc::new(ProductionClipboardRouterBackend {
             catalog: catalog.clone(),
-            legacy_profile_id: legacy_profile_id.clone(),
-            legacy_engine: Arc::clone(&legacy_engine),
-            hub: hub.clone(),
-            legacy_clipboard,
             supervisor: Arc::clone(&supervisor),
         });
         let (router, router_task) = spawn_clipboard_router(backend);
@@ -703,20 +807,17 @@ impl WindowsMultiSpace {
                 catalog: catalog.clone(),
             }),
             Arc::new(ProductionRuntimePort {
-                legacy_profile_id: legacy_profile_id.clone(),
                 supervisor: Arc::clone(&supervisor),
             }),
             Arc::new(ClipboardRouterPort::new(router.clone())),
         ));
         let service = SpacesHttpService::new(Arc::new(ProductionSpacesBackend {
             catalog,
-            legacy_profile_id,
-            legacy_engine,
             supervisor: Arc::clone(&supervisor),
             authority: Arc::clone(&authority),
         }));
         let stream = hub.take_change_stream()?;
-        let forwarder = ClipboardForwarder::spawn(stream, router);
+        let forwarder = ClipboardForwarder::spawn(stream, hub, router);
         info!("Windows multi-space runtime started");
         Ok(Self {
             service,
@@ -739,7 +840,7 @@ impl WindowsMultiSpace {
         Ok(())
     }
 
-    pub(crate) async fn shutdown_secondaries(&self) -> anyhow::Result<()> {
+    pub(crate) async fn shutdown_runtimes(&self) -> anyhow::Result<()> {
         let statuses = self.supervisor.shutdown_all().await;
         let failed: Vec<_> = statuses
             .into_iter()
@@ -747,7 +848,7 @@ impl WindowsMultiSpace {
             .map(|status| status.profile_id)
             .collect();
         if !failed.is_empty() {
-            anyhow::bail!("secondary space runtimes did not stop cleanly: {failed:?}");
+            anyhow::bail!("space runtimes did not stop cleanly: {failed:?}");
         }
         Ok(())
     }
@@ -759,7 +860,150 @@ pub(crate) fn catalog_root(process_data_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use tokio::sync::{Mutex as AsyncMutex, Notify};
+
     use super::*;
+
+    struct ScriptedClipboardForwarderStream {
+        events: VecDeque<ScriptedClipboardForwarderEvent>,
+        shutdowns: Arc<AtomicUsize>,
+    }
+
+    enum ScriptedClipboardForwarderEvent {
+        Snapshot(i64),
+        Fail(&'static str),
+    }
+
+    #[async_trait]
+    impl ClipboardForwarderStream for ScriptedClipboardForwarderStream {
+        async fn next_snapshot(&mut self) -> anyhow::Result<Option<SystemClipboardSnapshot>> {
+            match self.events.pop_front() {
+                Some(ScriptedClipboardForwarderEvent::Snapshot(ts_ms)) => {
+                    Ok(Some(test_snapshot(ts_ms)))
+                }
+                Some(ScriptedClipboardForwarderEvent::Fail(message)) => anyhow::bail!(message),
+                None => {
+                    std::future::pending::<anyhow::Result<Option<SystemClipboardSnapshot>>>().await
+                }
+            }
+        }
+
+        async fn shutdown(&mut self) -> anyhow::Result<()> {
+            self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct ScriptedClipboardForwarderSource {
+        streams: Mutex<VecDeque<Box<dyn ClipboardForwarderStream>>>,
+        take_count: AtomicUsize,
+    }
+
+    impl ScriptedClipboardForwarderSource {
+        fn new(streams: Vec<Box<dyn ClipboardForwarderStream>>) -> Self {
+            Self {
+                streams: Mutex::new(streams.into()),
+                take_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ClipboardForwarderStreamSource for ScriptedClipboardForwarderSource {
+        fn take_stream(&self) -> anyhow::Result<Option<Box<dyn ClipboardForwarderStream>>> {
+            self.take_count.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .streams
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front())
+        }
+    }
+
+    struct RecordingClipboardForwarderBackend {
+        fail_first_dispatch: AtomicBool,
+        dispatch_attempts: AtomicUsize,
+        successful_dispatches: AsyncMutex<Vec<i64>>,
+        successful_dispatch_notify: Notify,
+    }
+
+    impl RecordingClipboardForwarderBackend {
+        fn new(fail_first_dispatch: bool) -> Self {
+            Self {
+                fail_first_dispatch: AtomicBool::new(fail_first_dispatch),
+                dispatch_attempts: AtomicUsize::new(0),
+                successful_dispatches: AsyncMutex::new(Vec::new()),
+                successful_dispatch_notify: Notify::new(),
+            }
+        }
+
+        async fn wait_for_successes(&self, expected: usize) {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let notified = self.successful_dispatch_notify.notified();
+                    if self.successful_dispatches.lock().await.len() >= expected {
+                        return;
+                    }
+                    notified.await;
+                }
+            })
+            .await
+            .expect("clipboard forwarder did not dispatch the expected snapshot");
+        }
+    }
+
+    #[async_trait]
+    impl ClipboardRouterBackend<SystemClipboardSnapshot> for RecordingClipboardForwarderBackend {
+        async fn load_active_profile(&self, _cancel: CancellationToken) -> anyhow::Result<String> {
+            Ok("profile-a".into())
+        }
+
+        async fn dispatch_snapshot(
+            &self,
+            _profile_id: &str,
+            snapshot: SystemClipboardSnapshot,
+            _cancel: CancellationToken,
+        ) -> anyhow::Result<()> {
+            self.dispatch_attempts.fetch_add(1, Ordering::SeqCst);
+            if self.fail_first_dispatch.swap(false, Ordering::SeqCst) {
+                anyhow::bail!("injected clipboard dispatch failure");
+            }
+            self.successful_dispatches.lock().await.push(snapshot.ts_ms);
+            self.successful_dispatch_notify.notify_waiters();
+            Ok(())
+        }
+
+        async fn persist_active_profile(
+            &self,
+            _profile_id: &str,
+            _cancel: CancellationToken,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_snapshot(ts_ms: i64) -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms,
+            representations: Vec::new(),
+            file_content_digests: Vec::new(),
+            file_set_v1_component: None,
+        }
+    }
+
+    fn scripted_stream(
+        events: Vec<ScriptedClipboardForwarderEvent>,
+        shutdowns: Arc<AtomicUsize>,
+    ) -> Box<dyn ClipboardForwarderStream> {
+        Box::new(ScriptedClipboardForwarderStream {
+            events: events.into(),
+            shutdowns,
+        })
+    }
 
     #[tokio::test]
     async fn reserved_profile_is_invisible_until_successful_publication() {
@@ -794,5 +1038,74 @@ mod tests {
             runtime_state(&entry, Some(&status)),
             SpaceRuntimeStateDto::Stopped
         );
+    }
+
+    #[tokio::test]
+    async fn clipboard_forwarder_keeps_watching_after_one_dispatch_failure() {
+        let backend = Arc::new(RecordingClipboardForwarderBackend::new(true));
+        let (router, router_task) = spawn_clipboard_router(backend.clone());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let source = Arc::new(ScriptedClipboardForwarderSource::new(Vec::new()));
+        let initial_stream = scripted_stream(
+            vec![
+                ScriptedClipboardForwarderEvent::Snapshot(1),
+                ScriptedClipboardForwarderEvent::Snapshot(2),
+            ],
+            Arc::clone(&shutdowns),
+        );
+        let mut forwarder = ClipboardForwarder::spawn_with_source(
+            Some(initial_stream),
+            source,
+            router,
+            Duration::from_millis(1),
+        );
+
+        backend.wait_for_successes(1).await;
+        assert_eq!(
+            backend.dispatch_attempts.load(Ordering::SeqCst),
+            2,
+            "the second snapshot must still reach the router after the first dispatch fails"
+        );
+        assert_eq!(*backend.successful_dispatches.lock().await, vec![2]);
+
+        forwarder.shutdown().await.unwrap();
+        router_task.shutdown().await.unwrap();
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn clipboard_forwarder_reacquires_watcher_after_stream_failure() {
+        let backend = Arc::new(RecordingClipboardForwarderBackend::new(false));
+        let (router, router_task) = spawn_clipboard_router(backend.clone());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let source = Arc::new(ScriptedClipboardForwarderSource::new(vec![
+            scripted_stream(
+                vec![ScriptedClipboardForwarderEvent::Snapshot(2)],
+                Arc::clone(&shutdowns),
+            ),
+        ]));
+        let initial_stream = scripted_stream(
+            vec![ScriptedClipboardForwarderEvent::Fail(
+                "injected watcher stream failure",
+            )],
+            Arc::clone(&shutdowns),
+        );
+        let mut forwarder = ClipboardForwarder::spawn_with_source(
+            Some(initial_stream),
+            source.clone(),
+            router,
+            Duration::from_millis(1),
+        );
+
+        backend.wait_for_successes(1).await;
+        assert_eq!(*backend.successful_dispatches.lock().await, vec![2]);
+        assert!(
+            source.take_count.load(Ordering::SeqCst) >= 1,
+            "the forwarder must ask the source for a replacement watcher"
+        );
+
+        forwarder.shutdown().await.unwrap();
+        router_task.shutdown().await.unwrap();
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 2);
     }
 }

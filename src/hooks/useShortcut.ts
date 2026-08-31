@@ -82,9 +82,15 @@ export const useShortcut = ({
     return key
   })()
 
+  const hasEffectiveKey = Array.isArray(effectiveKey)
+    ? effectiveKey.some(binding => binding.trim().length > 0)
+    : effectiveKey.trim().length > 0
+
   // global scope 在非 modal 层时始终激活，其他 scope 保持精确匹配
   const isActive =
-    scope === 'global' ? activeLayer !== 'modal' && enabled : activeScope === scope && enabled
+    scope === 'global'
+      ? activeLayer !== 'modal' && enabled && hasEffectiveKey
+      : activeScope === scope && enabled && hasEffectiveKey
 
   // Chord support: a single-string binding may be a two-segment sequence
   // ("A B"). Array bindings (alternatives) are never chorded.

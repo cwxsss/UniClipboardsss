@@ -93,9 +93,9 @@ async fn run_async(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     let clipboard_hub = prepare_desktop_clipboard_hub()?;
     #[cfg(target_os = "windows")]
-    let legacy_clipboard = clipboard_hub.profile_handle();
+    let initial_clipboard = clipboard_hub.profile_handle();
     #[cfg(target_os = "windows")]
-    let prepared = prepare_desktop_engine_host_with_hub(legacy_clipboard.clone())?;
+    let prepared = prepare_desktop_engine_host_with_hub(initial_clipboard.clone())?;
     #[cfg(not(target_os = "windows"))]
     let prepared = prepare_desktop_engine_host()?;
     let process_paths = prepared.process_paths().clone();
@@ -137,7 +137,7 @@ async fn run_async(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         ),
         Arc::clone(&engine),
         clipboard_hub,
-        legacy_clipboard,
+        initial_clipboard,
         run_mode,
     )
     .await
@@ -161,11 +161,8 @@ async fn run_async(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     )
     .await;
     #[cfg(target_os = "windows")]
-    if result.is_err() {
-        let _ = multi_space.quiesce().await;
-        let _ = multi_space.shutdown_clipboard().await;
-        let _ = multi_space.shutdown_secondaries().await;
-    }
+    let shutdown: anyhow::Result<()> = Ok(());
+    #[cfg(not(target_os = "windows"))]
     let shutdown = engine
         .shutdown(ENGINE_SHUTDOWN_DEADLINE)
         .await
@@ -306,7 +303,7 @@ async fn run_daemon_surfaces(
     )
     .await;
     #[cfg(target_os = "windows")]
-    if let Err(error) = multi_space.shutdown_secondaries().await {
+    if let Err(error) = multi_space.shutdown_runtimes().await {
         shutdown_error.get_or_insert(error);
     }
     // ADR-011: a graceful exit must not leave a stale connection file behind —

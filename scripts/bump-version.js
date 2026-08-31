@@ -83,7 +83,9 @@ export function updateCargoToml(
   relativePath = path.join('src-tauri', 'Cargo.toml'),
   section = 'package'
 ) {
-  const cargoPath = path.join(process.cwd(), relativePath)
+  const cargoPath = path.isAbsolute(relativePath)
+    ? relativePath
+    : path.resolve(process.cwd(), relativePath)
   const content = fs.readFileSync(cargoPath, 'utf8')
   const lines = content.split('\n')
   let currentSection = null

@@ -75,7 +75,14 @@ const SetupScreen: React.FC<SetupScreenProps> = ({
         />
       )
     case 'initialize_space':
-      return <InitializeSpaceScreen onSubmit={initializeSpace} onBack={goEntry} loading={loading} />
+      return (
+        <InitializeSpaceScreen
+          onSubmit={initializeSpace}
+          onSuccess={onDone}
+          onBack={goEntry}
+          loading={loading}
+        />
+      )
     case 'import_config':
       return <ImportConfigScreen onBack={goEntry} />
     case 'show_invitation':

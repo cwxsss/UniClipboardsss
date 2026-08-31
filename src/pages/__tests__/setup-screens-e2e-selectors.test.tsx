@@ -114,6 +114,22 @@ describe('setup screens e2e selectors', () => {
     expect(await screen.findByLabelText('Space passphrase')).toHaveValue('')
   })
 
+  it('enters the main app after first-device space creation succeeds', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn().mockResolvedValue({ ok: true })
+    const onSuccess = vi.fn()
+
+    render(<InitializeSpaceScreen onSubmit={onSubmit} onSuccess={onSuccess} onBack={vi.fn()} />)
+
+    await user.type(screen.getByLabelText('Device name'), 'MacBook')
+    await user.type(screen.getByLabelText('Passphrase'), 'correct horse battery staple')
+    await user.type(screen.getByLabelText('Confirm passphrase'), 'correct horse battery staple')
+    await user.click(screen.getByTestId('setup-initialize-submit'))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSuccess).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the invitation and passphrase when the other device needs an update', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn().mockResolvedValue({

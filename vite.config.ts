@@ -92,12 +92,14 @@ export default defineConfig({
     // 工具链（node:test + 独立 vitest 环境）；根 vitest 的默认 include 会把
     // docs-site/test/next-config.test.mjs 卷进来，导致 "Cannot bundle Node.js
     // built-in node:test"（根环境无法 bundle node:test）。
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.{test,spec}.{ts,tsx}'],
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
       '**/.worktrees/**',
       '**/worktrees/**',
       '**/docs-site/**',
+      '**/_engine_upstream/**',
     ],
     coverage: {
       provider: 'v8',

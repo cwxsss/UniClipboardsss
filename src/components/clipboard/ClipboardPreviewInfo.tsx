@@ -111,7 +111,7 @@ const ClipboardPreviewInfo: React.FC<ClipboardPreviewInfoProps> = ({
         ))}
         {delivery && (
           <div className="ml-auto">
-            <EntryDeliveryBadge delivery={delivery} />
+            <EntryDeliveryBadge delivery={delivery} entryType={item.type} />
           </div>
         )}
       </div>
