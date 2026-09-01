@@ -328,3 +328,9 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 在 rc8 桌面锁定更新后，`cargo check --workspace --locked --quiet` 通过；`cargo test -p uc-daemon --locked --quiet` 通过 123 个单元测试和 10 个契约测试。唯一输出为既有 `uc-daemon-process` 的未使用 `pid_path` 警告，未扩大本轮范围处理。
 - 鸿蒙 `tools/verify-engine-release.ps1` 已确认 vendored 双架构 HAR 为 `v1.1.0-rc8`，`sourceCommit` 与已推送的 `cwxsss/Engine` `733ea64ea29775db0027e624099214cb46e56079` 一致。桌面 NSIS 包为 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，SHA-256 为 `C0BF8BF4BFBF554843039592FBD5343005A487AE55DB94F4E801EA023668D403`；测试签名 HAP 的 SHA-256 为 `C32E35B00907CE4529469ABD6006D7D19D47FCC57B817906632CBB1D6838B9E3`。
 - 不应将直接运行 release `uniclipd.exe` 的日志目录访问拒绝当作安装包运行失败：该命令绕过正常 GUI/daemon 启动和应用数据目录初始化，只作为错误调用被停止。尚未关闭用户当前运行的已安装 GUI，也未覆盖安装新 NSIS 包；对新安装包的 GUI 启动和跨设备配对仍需在用户允许关闭现有实例并提供可覆盖的应用签名后完成。
+
+### 2026-09-01 rc8 预发布交付
+
+- 桌面源码提交 `f67aae1c6` 已推送到 `cwxsss/UniClipboardsss` 的 `main`；预发布标签和 Release 均为 `v1.0.0-alpha.7-engine-rc8.1`。公开资产为 Windows x64 NSIS 安装包，发布页已核验提交、说明、18.6 MB 文件和 SHA-256 `C0BF8BF4BFBF554843039592FBD5343005A487AE55DB94F4E801EA023668D403` 一致。
+- Engine 提交 `733ea64ea29775db0027e624099214cb46e56079` 已以 `v1.1.0-rc.8` 预发布。Release 包含双架构 `UniClipboardEngine.har`、类型声明、manifest、提交和校验文件；发布页说明明确其为内测版本。
+- 鸿蒙仓库 `cwxsss/UniClipboardHarmonyOS` 是公开 Fork。rc8 HAR 已正确以 Git LFS 指针暂存，但 GitHub 拒绝 Fork 上传新的 LFS 对象，错误为 `@cwxsss can not upload new objects to public fork`。在用户确认“从 Engine Release 下载并校验固定 HAR”或迁移为独立非 Fork 仓库前，不得推送缺少 HAR 的鸿蒙提交，也不得发布与未推送源码不一致的 HAP。
