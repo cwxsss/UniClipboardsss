@@ -85,6 +85,7 @@ export interface UseSetupFlowReturn {
   redeemInvitation: (input: {
     code: string
     passphrase: string
+    deviceName: string
   }) => Promise<
     | { ok: true; redeem: ActiveJoinSpaceResponse | null }
     | { ok: false; kind: RedeemInvitationErrorKind; raw: string }
@@ -289,12 +290,13 @@ export function useSetupFlow(): UseSetupFlowReturn {
   }, [t])
 
   const handleRedeem = useCallback(
-    async (input: { code: string; passphrase: string }) => {
+    async (input: { code: string; passphrase: string; deviceName: string }) => {
       setLoading(true)
       try {
         const redeem = await redeemInvitation({
           code: input.code,
           passphrase: input.passphrase,
+          deviceName: input.deviceName,
         })
         if (redeem.status === 'pending') {
           setPageScreen({ kind: 'join_pending', joinId: redeem.joinId })

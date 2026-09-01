@@ -256,6 +256,27 @@ describe('spacesSlice', () => {
     expect(listSpacesApi).toHaveBeenCalledTimes(2)
   })
 
+  it('activates the newly joined profile so the device page reads its members', async () => {
+    const existing = makeSpace('existing', { isActiveSend: true })
+    const joined = makeSpace('joined')
+    joinSpaceProfileApi.mockResolvedValue(joined)
+    setActiveSendSpaceApi.mockResolvedValue(makeSpace('joined', { isActiveSend: true }))
+    listSpacesApi.mockResolvedValue([
+      makeSpace('existing', { isActiveSend: false }),
+      makeSpace('joined', { isActiveSend: true }),
+    ])
+    const store = makeStore([existing])
+
+    await store.dispatch(
+      joinSpace({ code: 'ABCD-1234', passphrase: 'correct horse battery staple' })
+    )
+
+    expect(setActiveSendSpaceApi).toHaveBeenCalledWith('joined')
+    expect(store.getState().spaces.items.find(space => space.isActiveSend)?.profileId).toBe(
+      'joined'
+    )
+  })
+
   it('replaces local state from GET after remove succeeds and after remove fails', async () => {
     const first = makeSpace('a', { isActiveSend: true })
     const second = makeSpace('b')

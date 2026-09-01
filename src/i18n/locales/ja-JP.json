@@ -2041,10 +2041,12 @@
       "subtitle": "他のデバイスに表示される招待コードを入力し、スペースの作成に使用したものと同じパスフレーズを入力します。",
       "labels": {
         "code": "招待コード",
-        "passphrase": "スペース パスフレーズ"
+        "passphrase": "スペース パスフレーズ",
+        "deviceName": "デバイス名"
       },
       "placeholders": {
-        "passphrase": "ホスト デバイスからパスフレーズを入力してください"
+        "passphrase": "ホスト デバイスからパスフレーズを入力してください",
+        "deviceName": "例: Windows デスクトップ"
       },
       "errors": {
         "invitationNotFound": "この招待コードはすでに使用されているか、無効になっています。ホストに新しい招待状を発行するよう依頼してください。",
@@ -2167,7 +2169,7 @@
       "code": "招待コード",
       "passphrase": "スペースのパスフレーズ",
       "confirmPassphrase": "パスフレーズを確認",
-      "deviceName": "デバイス名（任意）",
+      "deviceName": "デバイス名",
       "passphraseMismatch": "パスフレーズが一致しません",
       "joining": "参加中…",
       "creating": "作成中…"

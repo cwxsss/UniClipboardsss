@@ -228,7 +228,7 @@ pub(crate) async fn redeem(
     let result = state
         .execute(Operation::JoinSpace(JoinSpaceInput {
             invitation_code: req.code,
-            device_name: None,
+            device_name: req.device_name,
             passphrase: SecretString::new(req.passphrase),
             preserve_unreadable_history: false,
         }))

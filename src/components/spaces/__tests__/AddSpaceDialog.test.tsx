@@ -11,6 +11,7 @@ import spacesReducer from '@/store/spacesSlice'
 const listSpacesApi = vi.hoisted(() => vi.fn())
 const createSpaceProfileApi = vi.hoisted(() => vi.fn())
 const joinSpaceProfileApi = vi.hoisted(() => vi.fn())
+const setActiveSendSpaceApi = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/daemon/spaces', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/daemon/spaces')>()
@@ -19,6 +20,7 @@ vi.mock('@/api/daemon/spaces', async importOriginal => {
     listSpaces: listSpacesApi,
     createSpaceProfile: createSpaceProfileApi,
     joinSpaceProfile: joinSpaceProfileApi,
+    setActiveSendSpace: setActiveSendSpaceApi,
   }
 })
 
@@ -56,6 +58,8 @@ describe('AddSpaceDialog', () => {
     listSpacesApi.mockReset()
     createSpaceProfileApi.mockReset()
     joinSpaceProfileApi.mockReset()
+    setActiveSendSpaceApi.mockReset()
+    setActiveSendSpaceApi.mockResolvedValue(joinedSpace)
     document.elementFromPoint = vi.fn(() => document.body)
     await i18n.changeLanguage('en-US')
   })
@@ -78,7 +82,7 @@ describe('AddSpaceDialog', () => {
 
       await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), enteredCode)
       await user.type(screen.getByLabelText('Space passphrase'), 'correct horse')
-      await user.type(screen.getByLabelText('Device name (optional)'), 'Office PC')
+      await user.type(screen.getByLabelText('Device name'), 'Office PC')
       await user.click(screen.getByRole('button', { name: 'Join space' }))
 
       expect(joinSpaceProfileApi).toHaveBeenCalledWith({
@@ -102,6 +106,21 @@ describe('AddSpaceDialog', () => {
     expect(joinSpaceProfileApi).not.toHaveBeenCalled()
   })
 
+  it('requires a non-empty device name before joining a space', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), '12345678')
+    await user.type(screen.getByLabelText('Space passphrase'), 'correct horse')
+
+    const deviceNameInput = screen.getByRole('textbox', { name: 'Device name' })
+    expect(deviceNameInput).toBeRequired()
+    expect(screen.getByRole('button', { name: 'Join space' })).toBeDisabled()
+
+    await user.type(deviceNameInput, 'Office PC')
+    expect(screen.getByRole('button', { name: 'Join space' })).toBeEnabled()
+  })
+
   it('creates a space only when both passphrase fields match', async () => {
     const user = userEvent.setup()
     createSpaceProfileApi.mockResolvedValue(joinedSpace)
@@ -116,12 +135,13 @@ describe('AddSpaceDialog', () => {
 
     await user.clear(screen.getByLabelText('Confirm passphrase'))
     await user.type(screen.getByLabelText('Confirm passphrase'), 'correct horse')
+    await user.type(screen.getByLabelText('Device name'), 'Office PC')
     await user.click(screen.getByRole('button', { name: 'Create space' }))
 
     expect(createSpaceProfileApi).toHaveBeenCalledWith({
       passphrase: 'correct horse',
       passphraseConfirm: 'correct horse',
-      deviceName: null,
+      deviceName: 'Office PC',
     })
   })
 
@@ -133,6 +153,7 @@ describe('AddSpaceDialog', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Invitation code' }), '12345678')
     await user.type(screen.getByLabelText('Space passphrase'), 'wrong')
+    await user.type(screen.getByLabelText('Device name'), 'Office PC')
     await user.click(screen.getByRole('button', { name: 'Join space' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(

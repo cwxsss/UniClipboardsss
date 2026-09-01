@@ -104,9 +104,16 @@ describe('setup screens e2e selectors', () => {
     await user.type(codeInput, 'ABCD1234')
     const passphraseInput = await screen.findByLabelText('Space passphrase')
     await user.type(passphraseInput, 'wrong passphrase')
+    const deviceNameInput = screen.getByLabelText('Device name')
+    await user.type(deviceNameInput, 'Windows desktop')
     await user.click(screen.getByTestId('setup-redeem-submit'))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit).toHaveBeenCalledWith({
+      code: 'ABCD1234',
+      passphrase: 'wrong passphrase',
+      deviceName: 'Windows desktop',
+    })
     expect(codeInput).toHaveValue('')
     expect(screen.queryByLabelText('Space passphrase')).not.toBeInTheDocument()
 
@@ -144,6 +151,7 @@ describe('setup screens e2e selectors', () => {
     await user.type(codeInput, 'ABCD1234')
     const passphraseInput = await screen.findByLabelText('Space passphrase')
     await user.type(passphraseInput, 'correct passphrase')
+    await user.type(screen.getByLabelText('Device name'), 'Windows desktop')
     await user.click(screen.getByTestId('setup-redeem-submit'))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
@@ -169,6 +177,7 @@ describe('setup screens e2e selectors', () => {
     rerender(<RedeemInvitationScreen onSubmit={vi.fn()} onBack={noop} />)
     expect(screen.getByTestId('setup-redeem-back')).toBeInTheDocument()
     expect(screen.getByTestId('setup-redeem-code')).toBeInTheDocument()
+    expect(screen.getByTestId('setup-redeem-device-name')).toBeInTheDocument()
     expect(screen.getByTestId('setup-redeem-submit')).toBeInTheDocument()
 
     rerender(

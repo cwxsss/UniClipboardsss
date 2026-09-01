@@ -1964,6 +1964,7 @@ export type QuickPanelSettingsPatchDto = {
 export type RedeemRequest = {
     code: string;
     passphrase: string;
+    deviceName: string;
 };
 
 /**

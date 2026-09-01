@@ -178,6 +178,7 @@ describe('useSetupFlow joiner admission', () => {
       await result.current.redeemInvitation({
         code: 'ABCD1234',
         passphrase: 'passphrase',
+        deviceName: 'Windows desktop',
       })
     })
 
@@ -194,6 +195,7 @@ describe('useSetupFlow joiner admission', () => {
       await result.current.redeemInvitation({
         code: 'ABCD1234',
         passphrase: 'passphrase',
+        deviceName: 'Windows desktop',
       })
     })
     getDeviceTrust.mockResolvedValue({

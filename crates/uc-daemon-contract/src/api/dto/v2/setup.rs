@@ -56,6 +56,8 @@ pub struct IssueInvitationResponse {
 pub struct RedeemRequest {
     pub code: String,
     pub passphrase: String,
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 /// Stable outcome of a durable space admission.
@@ -216,8 +218,10 @@ mod tests {
         let req = RedeemRequest {
             code: "WXYZ-5678".to_string(),
             passphrase: "hunter22hunter22".to_string(),
+            device_name: Some("Windows desktop".to_string()),
         };
         let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"deviceName\":\"Windows desktop\""));
         let decoded: RedeemRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, req);
     }

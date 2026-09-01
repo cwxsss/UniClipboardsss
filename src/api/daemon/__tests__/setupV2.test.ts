@@ -28,7 +28,7 @@ describe('setup v2 sponsor upgrade errors', () => {
     )
 
     await expect(
-      redeemInvitation({ code: 'ABCD1234', passphrase: 'secret' })
+      redeemInvitation({ code: 'ABCD1234', passphrase: 'secret', deviceName: 'Windows desktop' })
     ).rejects.toMatchObject({ kind: 'sponsor_upgrade_required' })
   })
 

@@ -48,9 +48,11 @@ function AddSpaceDialogInner({ open, onOpenChange }: AddSpaceDialogProps) {
   const passphrasesMismatch =
     mode === 'create' && passphraseConfirm.length > 0 && passphrase !== passphraseConfirm
   const codeComplete = isInvitationCodeComplete(code)
+  const hasDeviceName = deviceName.trim().length > 0
   const canSubmit =
     !submitting &&
     passphrase.length > 0 &&
+    hasDeviceName &&
     (mode === 'join' ? codeComplete : passphraseConfirm.length > 0 && !passphrasesMismatch)
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -165,6 +167,7 @@ function AddSpaceDialogInner({ open, onOpenChange }: AddSpaceDialogProps) {
               id="add-space-device-name"
               value={deviceName}
               onChange={event => setDeviceName(event.target.value)}
+              required
               autoComplete="off"
             />
           </div>

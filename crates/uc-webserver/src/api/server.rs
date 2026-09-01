@@ -22,8 +22,8 @@ use axum::Router;
 use tokio::sync::{broadcast, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uc_engine::{
-    Engine, HostFileHandle, NetworkRecoveryPhaseSummary, NetworkRecoveryStatusSummary, Operation,
-    OperationResult, PeerConnectionChannelSummary,
+    DeviceMembershipSummary, Engine, HostFileHandle, NetworkRecoveryPhaseSummary,
+    NetworkRecoveryStatusSummary, Operation, OperationResult, PeerConnectionChannelSummary,
 };
 use uc_observability::analytics::{AnalyticsPort, NoopAnalyticsSink};
 use utoipa::OpenApi;
@@ -188,6 +188,31 @@ impl DaemonApiState {
         self.engine.execute(operation).await
     }
 
+    async fn peer_connections_or_empty_after_local_removal(
+        &self,
+    ) -> anyhow::Result<OperationResult> {
+        match self.execute(Operation::QueryPeerConnections).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                let local_device_removed = matches!(
+                    self.execute(Operation::QueryDeviceTrust).await,
+                    Ok(OperationResult::DeviceTrust(snapshot))
+                        if local_device_removal_allows_empty_peer_projection(
+                            snapshot.local_membership
+                        )
+                );
+                if local_device_removed {
+                    tracing::warn!(
+                        error_code = error.code(),
+                        "returning an empty peer projection because the local device was removed"
+                    );
+                    return Ok(OperationResult::PeerConnections(Vec::new()));
+                }
+                Err(error.into())
+            }
+        }
+    }
+
     pub async fn health_response(&self) -> HealthResponse {
         let degraded = match self.execute(Operation::QueryReceiveReadiness).await {
             Ok(OperationResult::ReceiveReadiness(readiness)) => readiness.degraded,
@@ -241,7 +266,7 @@ impl DaemonApiState {
     }
 
     pub async fn peer_snapshots(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
-        let result = self.execute(Operation::QueryPeerConnections).await?;
+        let result = self.peer_connections_or_empty_after_local_removal().await?;
         let OperationResult::PeerConnections(peers) = result else {
             anyhow::bail!("engine returned an unexpected peer connection result");
         };
@@ -310,7 +335,7 @@ impl DaemonApiState {
         // 反映 IrohPresenceAdapter 中由 ensure_reachable / connection.closed()
         // 维护的 last_state 缓存。list_members() 不查 PresencePort，所以
         // 拿不到 connected。同时 list_peer_snapshots() 已过滤本机。
-        let result = self.execute(Operation::QueryPeerConnections).await?;
+        let result = self.peer_connections_or_empty_after_local_removal().await?;
         let OperationResult::PeerConnections(snapshots) = result else {
             anyhow::bail!("engine returned an unexpected peer connection result");
         };
@@ -350,6 +375,10 @@ impl DaemonApiState {
             client_pid,
         )
     }
+}
+
+fn local_device_removal_allows_empty_peer_projection(membership: DeviceMembershipSummary) -> bool {
+    matches!(membership, DeviceMembershipSummary::Removed)
 }
 
 pub trait DaemonFileHandles: Send + Sync {
@@ -757,5 +786,26 @@ mod quiescing_gate_tests {
         let err = ensure_not_quiescing(&quiescing).expect_err("must reject while quiescing");
         assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(err.code, "daemon_restarting");
+    }
+}
+
+#[cfg(test)]
+mod removed_local_peer_projection_tests {
+    use super::*;
+
+    #[test]
+    fn only_removed_local_membership_allows_an_empty_peer_projection() {
+        assert!(local_device_removal_allows_empty_peer_projection(
+            uc_engine::DeviceMembershipSummary::Removed
+        ));
+        assert!(!local_device_removal_allows_empty_peer_projection(
+            uc_engine::DeviceMembershipSummary::Active
+        ));
+        assert!(!local_device_removal_allows_empty_peer_projection(
+            uc_engine::DeviceMembershipSummary::Unavailable
+        ));
+        assert!(!local_device_removal_allows_empty_peer_projection(
+            uc_engine::DeviceMembershipSummary::Unknown
+        ));
     }
 }

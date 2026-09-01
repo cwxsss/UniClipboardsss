@@ -2040,10 +2040,12 @@
       "subtitle": "輸入對方裝置顯示的邀請碼，以及建立空間時設定的口令。",
       "labels": {
         "code": "邀請碼",
-        "passphrase": "空間口令"
+        "passphrase": "空間口令",
+        "deviceName": "裝置名稱"
       },
       "placeholders": {
-        "passphrase": "輸入對方在建立空間時使用的口令"
+        "passphrase": "輸入對方在建立空間時使用的口令",
+        "deviceName": "例如：Windows 電腦"
       },
       "errors": {
         "invitationNotFound": "邀請碼已被使用或失效，請讓對方重新生成一個。",
@@ -2159,7 +2161,7 @@
       "code": "邀請碼",
       "passphrase": "空間密碼",
       "confirmPassphrase": "確認密碼",
-      "deviceName": "裝置名稱（選填）",
+      "deviceName": "裝置名稱",
       "passphraseMismatch": "兩次輸入的密碼不一致",
       "joining": "正在加入…",
       "creating": "正在建立…"

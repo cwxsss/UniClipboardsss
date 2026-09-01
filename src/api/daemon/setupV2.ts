@@ -55,6 +55,7 @@ export interface IssueInvitationResponse {
 export interface RedeemRequest {
   code: string
   passphrase: string
+  deviceName: string
 }
 
 export interface JoinedSpaceResponse {

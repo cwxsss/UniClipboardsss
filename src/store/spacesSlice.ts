@@ -41,11 +41,13 @@ const initialState: SpacesState = {
 
 async function mutateThenRefresh(
   mutation: () => Promise<unknown>,
-  mutationError: string
+  mutationError: string,
+  afterMutation?: (value: unknown) => Promise<unknown>
 ): Promise<MutationSuccess | MutationFailure> {
   let message: string | null = null
   try {
-    await mutation()
+    const value = await mutation()
+    await afterMutation?.(value)
   } catch {
     message = mutationError
   }
@@ -99,7 +101,11 @@ export const joinSpace = createAsyncThunk<
   { rejectValue: MutationFailure }
 >('spaces/join', async (request, { rejectWithValue }) => {
   const result = await enqueueAuthority(() =>
-    mutateThenRefresh(() => joinSpaceProfile(request), 'spaces.errors.join')
+    mutateThenRefresh(
+      () => joinSpaceProfile(request),
+      'spaces.errors.join',
+      joined => setActiveSendSpace((joined as SpaceProfileSummary).profileId)
+    )
   )
   return 'message' in result ? rejectWithValue(result) : result
 })

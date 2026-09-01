@@ -584,6 +584,7 @@ export function RedeemInvitationScreen({
   onSubmit: (input: {
     code: string
     passphrase: string
+    deviceName: string
   }) => Promise<
     | { ok: true; redeem: ActiveJoinSpaceResponse | null }
     | { ok: false; kind: RedeemInvitationErrorKind; raw: string }
@@ -596,13 +597,14 @@ export function RedeemInvitationScreen({
   })
   const [code, setCode] = useState('')
   const [pass, setPass] = useState('')
+  const [deviceName, setDeviceName] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [errorKind, setErrorKind] = useState<RedeemInvitationErrorKind | null>(null)
   const passInputRef = useRef<HTMLInputElement>(null)
 
   const errorMessage = redeemErrorMessage(t, errorKind)
   const codeComplete = code.length === INVITATION_CODE_LENGTH
-  const canSubmit = codeComplete && pass.length > 0 && !loading
+  const canSubmit = codeComplete && pass.length > 0 && deviceName.trim().length > 0 && !loading
   const codeInvalid = errorKind === 'invitation_not_found' || errorKind === 'invitation_expired'
 
   // Hand focus over to passphrase the moment the code reaches full length —
@@ -614,7 +616,7 @@ export function RedeemInvitationScreen({
   const handleSubmit = async () => {
     setErrorKind(null)
     if (!canSubmit) return
-    const res = await onSubmit({ code, passphrase: pass })
+    const res = await onSubmit({ code, passphrase: pass, deviceName: deviceName.trim() })
     if (!res.ok) {
       setErrorKind(res.kind)
       // These failures all consume or invalidate the one-time invitation.
@@ -681,6 +683,23 @@ export function RedeemInvitationScreen({
               autoFocus
             />
           </div>
+      </div>
+
+        <div className="mx-auto w-[calc(100%-0.25rem)] space-y-2">
+          <Label htmlFor="join-device-name" className="text-xs font-medium text-muted-foreground">
+            {t('labels.deviceName')}
+          </Label>
+          <Input
+            id="join-device-name"
+            data-testid="setup-redeem-device-name"
+            value={deviceName}
+            onChange={e => setDeviceName(e.target.value)}
+            disabled={loading}
+            required
+            className="h-10 rounded-md bg-card text-base shadow-xs"
+            placeholder={t('placeholders.deviceName')}
+            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+          />
         </div>
 
         <AnimatePresence initial={false}>

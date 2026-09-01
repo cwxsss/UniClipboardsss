@@ -2042,10 +2042,12 @@
       "subtitle": "Enter the invitation code shown on the other device, then provide the same passphrase used to create the space.",
       "labels": {
         "code": "Invitation code",
-        "passphrase": "Space passphrase"
+        "passphrase": "Space passphrase",
+        "deviceName": "Device name"
       },
       "placeholders": {
-        "passphrase": "Enter the passphrase from the host device"
+        "passphrase": "Enter the passphrase from the host device",
+        "deviceName": "e.g. Windows desktop"
       },
       "errors": {
         "invitationNotFound": "This invitation code has already been used or is no longer valid. Ask the host to issue a new one.",
@@ -2168,7 +2170,7 @@
       "code": "Invitation code",
       "passphrase": "Space passphrase",
       "confirmPassphrase": "Confirm passphrase",
-      "deviceName": "Device name (optional)",
+      "deviceName": "Device name",
       "passphraseMismatch": "Passphrases do not match",
       "joining": "Joining…",
       "creating": "Creating…"

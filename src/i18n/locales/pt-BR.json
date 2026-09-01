@@ -2048,10 +2048,12 @@
       "subtitle": "Digite o código de convite exibido no outro dispositivo e informe a mesma frase secreta usada para criar o Espaço.",
       "labels": {
         "code": "Código de convite",
-        "passphrase": "Frase secreta do Espaço"
+        "passphrase": "Frase secreta do Espaço",
+        "deviceName": "Nome do dispositivo"
       },
       "placeholders": {
-        "passphrase": "Digite a frase secreta do dispositivo anfitrião"
+        "passphrase": "Digite a frase secreta do dispositivo anfitrião",
+        "deviceName": "ex.: computador Windows"
       },
       "errors": {
         "invitationNotFound": "Este código de convite já foi usado ou não é mais válido. Peça um novo código ao dispositivo anfitrião.",
@@ -2174,7 +2176,7 @@
       "code": "Código do convite",
       "passphrase": "Senha do espaço",
       "confirmPassphrase": "Confirmar senha",
-      "deviceName": "Nome do dispositivo (opcional)",
+      "deviceName": "Nome do dispositivo",
       "passphraseMismatch": "As senhas não coincidem",
       "joining": "Entrando…",
       "creating": "Criando…"
