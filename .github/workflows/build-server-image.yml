@@ -4,8 +4,8 @@ run-name: "build-server-image-${{ github.ref_name }}-${{ github.run_number }}"
 # 无头 VPS server 节点镜像 (deploy/vps/Dockerfile)。
 #
 # 触发:
-#   - push tag v* → 跟 release.yml 同一个 tag 触发,并行产出多 arch 镜像并
-#     推到 GHCR(不阻塞 release.yml 的二进制发布,二者相互独立)。
+#   - push tag v* → 并行产出多 arch 镜像并推到 GHCR；与手动二进制发布
+#     相互独立。
 #   - 手动 dispatch → 临时构建某个 ref,可用 `tag` 覆盖镜像 tag。
 #
 # 多 arch 策略:server 镜像在 Dockerfile 里编 Rust(aws-lc/iroh/sqlx),QEMU
@@ -97,7 +97,7 @@ jobs:
           # (GHA cache is ref-isolated; tags can only read their own ref or
           # main), and (2) accumulate one such garbage set per release,
           # blowing past the repo's 10GB GHA cache quota and evicting the
-          # Rust/Bun build caches that release.yml needs. A registry cache
+          # Rust/Bun build caches used by local and manual binary builds. A registry cache
           # lives in GHCR instead: it costs no GHA quota and is shared across
           # every tag build, so the Docker layer cache actually gets reused.
           cache-from: type=registry,ref=${{ steps.img.outputs.image }}:buildcache-${{ env.PLATFORM_PAIR }}

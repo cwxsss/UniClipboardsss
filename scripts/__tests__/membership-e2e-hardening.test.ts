@@ -39,13 +39,10 @@ describe('membership E2E hardening', () => {
     expect(prCheck).toContain('run: bun run test -- --run')
   })
 
-  it('keeps the membership matrix out of the release dependency chain', () => {
-    const release = read('.github/workflows/release.yml')
+  it('keeps the membership matrix independent from binary release publishing', () => {
     const workflow = read('.github/workflows/membership-e2e.yml')
     const script = read('scripts/e2e/run-membership-matrix.sh')
 
-    expect(release).not.toMatch(/^\s+membership-e2e:/m)
-    expect(release).not.toContain('needs: [validate, membership-e2e]')
     expect(workflow).not.toContain('  workflow_call:')
     expect(workflow).not.toContain('          - release')
     expect(script).not.toContain('pr|nightly|release')

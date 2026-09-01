@@ -262,7 +262,7 @@ export function run(options = parseArgs()) {
         newVersion +
         '"'
     )
-    console.log('  3. Push and trigger release workflow\n')
+    console.log('  3. Push, then create and publish the GitHub Release manually\n')
   }
 
   if (process.env.GITHUB_OUTPUT) {

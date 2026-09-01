@@ -6,14 +6,8 @@ const workflowPath = path.resolve(
   import.meta.dirname,
   '../../.github/workflows/issue-lifecycle.yml'
 )
-const releaseWorkflowPath = path.resolve(import.meta.dirname, '../../.github/workflows/release.yml')
-
 function readWorkflow(): string {
   return fs.readFileSync(workflowPath, 'utf8')
-}
-
-function readReleaseWorkflow(): string {
-  return fs.readFileSync(releaseWorkflowPath, 'utf8')
 }
 
 describe('Issue lifecycle workflow', () => {
@@ -47,12 +41,10 @@ describe('Issue lifecycle workflow', () => {
     expect(workflow).toContain('listComments')
   })
 
-  test('notifies issues for releases published by the release workflow itself', () => {
+  test('notifies issues for manually published releases', () => {
     const workflow = readWorkflow()
-    const releaseWorkflow = readReleaseWorkflow()
 
     expect(workflow).toContain('repository_dispatch:')
     expect(workflow).toContain('issue-lifecycle-release')
-    expect(releaseWorkflow).toContain('-f "event_type=issue-lifecycle-release"')
   })
 })

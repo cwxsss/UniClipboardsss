@@ -69,7 +69,7 @@ jobs:
         run: |
           VERSION="${{ steps.extract.outputs.version }}"
           git push origin "v${VERSION}"
-          echo "Pushed tag v${VERSION} — this will trigger the Release workflow"
+          echo "Pushed tag v${VERSION} — automatic binary release publishing is disabled"
 
       - name: Delete release branch
         continue-on-error: true
@@ -86,9 +86,9 @@ jobs:
           echo "**Tag:** v${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.event.pull_request.merge_commit_sha }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The tag push has triggered the [Release workflow](https://github.com/${{ github.repository }}/actions/workflows/release.yml)." >> $GITHUB_STEP_SUMMARY
+          echo "The tag was created. Automatic binary release publishing is disabled; create a GitHub Release manually if needed." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### What happens next" >> $GITHUB_STEP_SUMMARY
-          echo "1. The Release workflow builds artifacts for all platforms" >> $GITHUB_STEP_SUMMARY
-          echo "2. A draft GitHub Release is created with the built artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "1. Build the required Windows/Harmony artifacts manually" >> $GITHUB_STEP_SUMMARY
+          echo "2. Create a GitHub Release manually and upload the verified artifacts" >> $GITHUB_STEP_SUMMARY
           echo "3. Review and publish the release when ready" >> $GITHUB_STEP_SUMMARY

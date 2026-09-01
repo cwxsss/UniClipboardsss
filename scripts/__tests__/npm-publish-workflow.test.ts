@@ -7,17 +7,6 @@ function readWorkflow(name: string) {
 }
 
 describe('npm publish workflow trigger', () => {
-  it('uses repository_dispatch for alpha npm publish handoff', () => {
-    const releaseWorkflow = readWorkflow('release.yml')
-    const npmDispatchJob = releaseWorkflow.slice(releaseWorkflow.indexOf('  dispatch-npm-alpha:'))
-
-    expect(npmDispatchJob).toContain('"repos/${{ github.repository }}/dispatches"')
-    expect(npmDispatchJob).toContain('event_type="npm-publish"')
-    expect(npmDispatchJob).toContain('client_payload[version]="${VERSION}"')
-    expect(npmDispatchJob).toContain('contents: write')
-    expect(releaseWorkflow).not.toContain('actions/workflows/npm-publish.yml/dispatches')
-  })
-
   it('accepts repository_dispatch payloads in npm-publish.yml', () => {
     const npmWorkflow = readWorkflow('npm-publish.yml')
 

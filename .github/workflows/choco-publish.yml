@@ -11,8 +11,8 @@ run-name: >-
 # choco pack、choco push 到 community repo。
 #
 # 首版仍需人工过 moderation 上架;之后版本走 trusted maintainer 自动校验。
-# 与 homebrew-tap.yml / copr.yml 一样监听 release.published —— stable release
-# 在 release.yml 里是 draft,人工点 "Publish" 后 asset URL 才可达,此时触发。
+# 与 homebrew-tap.yml 一样监听 release.published；稳定版由人工点
+# "Publish" 后触发，确保 asset URL 已经可达。
 on:
   release:
     types: [published]

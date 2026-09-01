@@ -105,8 +105,8 @@ function findFirstFile(artifactsDir, predicate) {
 }
 
 // Mobile apps live in the companion repo (UniClipboard/UniClip) and ship on
-// their own cadence, independent of this desktop release. The release workflow
-// resolves the Android URL for prereleases so its channel matches desktop.
+// their own cadence, independent of this desktop release. Release notes resolve
+// the Android URL for prereleases so its channel matches desktop.
 const MOBILE_REPO = 'UniClipboard/UniClip'
 const MOBILE_IOS_TESTFLIGHT_URL = 'https://testflight.apple.com/join/nyNQ8dQe'
 const MOBILE_ANDROID_LATEST_URL = `https://github.com/${MOBILE_REPO}/releases/latest`

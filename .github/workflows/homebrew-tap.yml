@@ -5,9 +5,9 @@ run-name: >-
     || format('homebrew-tap-manual-{0}', inputs.version) }}
 
 # Trigger the homebrew tap update only after a release transitions to
-# `published`. The Release workflow leaves stable releases in draft so a human
-# can review the generated notes; once they hit "Publish", this listener fires
-# and the asset URLs are guaranteed to be reachable (no draft 404 race).
+# `published`. Releases are published manually after a human reviews the
+# generated notes; once they hit "Publish", this listener fires and the asset
+# URLs are guaranteed to be reachable (no draft 404 race).
 #
 # `workflow_dispatch` is exposed for debugging — handy when re-running against
 # an existing release without un-publishing it.

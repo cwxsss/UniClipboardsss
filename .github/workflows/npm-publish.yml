@@ -7,22 +7,19 @@ run-name: >-
     || format('npm-publish-manual-{0}', inputs.version) }}
 
 # Publish the CLI to npm only after a release transitions to `published`,
-# mirroring homebrew-tap.yml: the Release workflow leaves stable releases in
-# draft for human review, and npm publishes are irreversible — we must never
-# push a draft that might get discarded.
+# mirroring homebrew-tap.yml: releases are published manually after human
+# review, and npm publishes are irreversible — we must never push a draft that
+# might get discarded.
 #
 # Layout (esbuild/biome pattern): 5 platform packages
 # (@uniclipboard/cli-{platform}-{arch}, each shipping uniclip + uniclipd) and
 # one main package (uniclipboard) whose JS launcher picks the matching one via
 # optionalDependencies. Assembly lives in scripts/build-npm-packages.mjs.
 #
-# Channel mapping (same pattern as snap.yml / copr.yml): alpha releases are
-# auto-published by release.yml with GITHUB_TOKEN, so their release.published
-# event never fires other workflows — release.yml sends repository_dispatch and
-# this workflow remains the top-level run that npm trusted publishing validates.
-# beta / rc / stable are left as drafts and published by a human; that
-# release.published event lands here. The version suffix maps to the npm
-# dist-tag (X.Y.Z-alpha.N → `alpha`), and only stable gets `latest`.
+# Manually published beta / rc / stable releases land here. The optional
+# repository_dispatch path remains available for an explicit external caller.
+# The version suffix maps to the npm dist-tag (X.Y.Z-alpha.N → `alpha`), and
+# only stable gets `latest`.
 #
 # `workflow_dispatch` is the manual debugging / re-run path.
 # Already-published package versions are skipped, so the whole job is
@@ -44,10 +41,9 @@ permissions: {}
 jobs:
   publish:
     name: Publish npm packages
-    # The release.published path serves manually published releases
-    # (beta / rc / stable); alpha arrives via release.yml's repository_dispatch
-    # instead, so skip alpha release events to avoid double-publishing on
-    # re-publish.
+    # Keep manually published alpha releases out of this path unless an
+    # explicit repository_dispatch is used; package publishing is otherwise
+    # manually controlled.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch' || !contains(github.event.release.tag_name, '-alpha')
     runs-on: ubuntu-latest
     permissions:

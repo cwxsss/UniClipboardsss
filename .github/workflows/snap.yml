@@ -59,7 +59,7 @@ on:
 
 jobs:
   build:
-    # alpha 由 release.yml 在自动发布完成后显式 dispatch,这里的
+    # alpha 如需发布由显式 dispatch 触发,这里的
     # release.published 入口只承接人工发布的 beta / rc / stable。
     if: ${{ github.event_name != 'release' || !contains(github.event.release.tag_name, '-alpha') }}
     name: Build snap (${{ matrix.arch }})

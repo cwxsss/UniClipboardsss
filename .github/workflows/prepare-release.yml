@@ -242,7 +242,7 @@ jobs:
 
           ### What happens when this PR is merged
           1. The **tag-on-merge** workflow will automatically create an annotated tag \`v${VERSION}\`
-          2. The tag push will trigger the **Release** workflow to build and publish artifacts
+          2. Build the required artifacts manually and create the GitHub Release
           3. The release branch \`release/v${VERSION}\` will be automatically deleted
 
           > **Do not manually create a tag.** Merging this PR handles everything.
