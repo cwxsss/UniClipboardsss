@@ -304,3 +304,27 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - 使用 `npm.cmd run daemon:sidecar`、`npm.cmd run build` 与仅覆盖本机打包行为的临时 Tauri 配置重新生成 Windows x64 NSIS 安装包；临时配置已经删除。`target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe` 于 `2026-08-28 23:05:04` 生成，大小 `19,500,678` 字节，SHA-256 为 `91D089E8007E675F809E67685C737CBE70046A4F30F4FBF850911D86A1179E2F`。本机构建未生成便携版，也未生成需要私钥的在线更新签名产物。
 - 该 NSIS 包已先静默安装到项目内隔离目录并成功启动主程序与对应 `uniclipd` 侧车，随后已覆盖安装至 `E:/software/UniClipboard`；实际实例于 `2026-08-28 23:10` 启动并拉起新侧车。已安装的 `uniclipboard.exe` SHA-256 为 `D1065F97E6A2CE16E3EE322FCDAB19CF65490CC947E11B3BEA1362D8E4AA75DA`，`uniclipd.exe` SHA-256 为 `CD881A451F6F7EFD3BE41EF0F845A8F234681BFC76F8F9276371CA681B518318`。
 - 为避免覆盖用户正在使用的系统剪贴板，安装后仅验证了 GUI 与 daemon 的实际启动，没有自动写入测试文本；后续应在已连接空间中由用户复制一段任意文本，确认断线/重连后无需再重启桌面程序即可被捕获。
+
+## 2026-09-01 Engine rc8 入站配对收尾与鸿蒙构建验证
+
+- 根因已确认：在 Engine `SponsorAdmissionOrchestrator` 的入站配对链路中，`Candidate` 处理会串行等待 rendezvous 邀请目录的 best-effort 清理；该外部清理被网络阻塞时，会阻止随后已持久化的 `Prepared -> Commit -> Applied -> Complete` 阶段继续处理。表现为桌面和手机均通过候选和提交阶段，但加入端等待不到完成事件。
+- Engine 本地提交 `733ea64ea29775db0027e624099214cb46e56079` 将目录清理改为 5 秒有界后台任务，保留持久化协议事件的串行顺序；新增阻塞清理回归测试。并新增仅进程内的脱敏入站配对诊断（阶段、耗时、稳定失败类别、脱敏候选地址），不记录邀请码、口令或完整地址。
+- 版本问题的根因是桌面 `Cargo.lock` 锁定的 Engine Git 提交和鸿蒙 vendored HAR 是两个独立固定点；仅在桌面/鸿蒙仓库执行 `git pull` 不会自动获得 Engine 的新提交。本轮鸿蒙已固定到双架构 `v1.1.0-rc8` HAR，`sourceCommit` 为上述本地 Engine 提交；桌面端尚未更新，必须在 Engine 提交发布到选定远端后，显式更新其精确 Git 提交并重新构建，不能用本地路径依赖伪造最终交付。
+- 为避免本地提交被错误显示为已发布 GitHub 链接，Engine HAR staging 脚本的 `releaseUrl` 改为显式可选值；未发布时仅保留提交哈希。已有 rc8 vendored 目录不修改历史元数据，待该提交发布后其提交链接才成立。
+- `uc-engine`/NAPI 契约和 sponsor 编排测试均通过；鸿蒙依赖锁文件已解析到 rc8。DevEco 会拒绝中文工程路径，本轮在 ASCII 临时副本中执行 `ohpm install --all`、`assembleHap`，得到 `BUILD SUCCESSFUL`；随后使用本机 OpenHarmony 测试证书签名并通过 `verify-app`，验证包内包含 `arm64-v8a` 与 `x86_64` 两套原生库。未自动安装或覆盖真实手机现有应用。
+- 当前 HAP 仅用于内测：`C:/Users/chuai/AppData/Local/Temp/UniClipboardHarmonyOS-rc8-build-20260901/artifacts/sssUniClip-engine-rc8-debug-signed.hap`，SHA-256 `c32e35b00907ce4529469abd6006d7d19d47fcc57b817906632cbb1d6838b9e3`。构建保留既有 ArkTS 严格类型/API 可用性警告，未出现本轮 Engine rc8 接口或打包错误。
+- 本轮未推送 Engine/Harmony/桌面代码、未创建 Release、未覆盖真实设备。Engine 工作副本还存在由此前 DevEco 构建生成的未跟踪 `.ohos-build/`；未获清理授权前必须保留。
+
+## 2026-09-01 rc8 发布、桌面锁定与安装包验证
+
+- Engine 修复提交 `733ea64ea29775db0027e624099214cb46e56079` 已以快进方式推送到 `cwxsss/Engine` 的 `main`，拉取后远端 `main` 与该提交一致。桌面根 `Cargo.toml` 和 `Cargo.lock` 已将全部 Engine crate 从 rc7 精确锁定到该 rc8 提交；鸿蒙 vendored HAR 的 `sourceCommit` 相同，三端不再分别使用旧提交。
+- 桌面架构检查原先硬编码 `UniClipboard/Engine`，而产品当前明确使用已发布的 `cwxsss/Engine`；该不一致会使正确的锁定被误报为 provenance 失败。检查已改为当前唯一发布源，并重新通过“本地路径依赖、标签依赖、自动 LAN 回退”三组负向检查与完整 Engine 消费预检。
+- rc8 编译发现桌面 CLI `RedeemRequest` 适配遗漏：本地 HTTP DTO 已有可选 `device_name`，服务端会将它传入 `JoinSpaceInput`，但 CLI 仍保留“请求无该字段”的旧注释和 rc7 初始化。现在 CLI 将已解析并用于设置持久化的同一名称写入请求，未引入第二套名称来源。`cargo test -p uc-cli` 通过 125 项测试，`uniclip --help` 成功；工作区编译和 `uc-daemon` 回归也通过。既有 `uc-daemon-process` 未使用 `pid_path` 警告未在本轮扩大处理。
+- 新 Windows x64 内测 NSIS 安装包：`target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，生成时间 `2026-09-01 23:26:25`，大小 `19,496,658` 字节，SHA-256 `c0bf8bf4bfbf554843039592fbd5343005a487ae55db94f4e801ea023668d403`。打包使用 rc8 daemon sidecar；在线更新私钥未配置，因此仅关闭 updater 签名产物，不影响 NSIS 安装包。
+- 尝试在已连接手机上用 rc8 HAP 执行保留数据的覆盖安装时，设备返回 `9568257 fail to verify pkcs7 file`；该 HAP 使用 DevEco 自带 OpenHarmony 测试签名，与手机当前安装应用签名不匹配。随后启动也因手机锁屏和开发者模式限制被 HDC 拒绝。尚未卸载旧应用或清除任何设备数据，因此真实手机配对/剪贴板回归仍未执行；必须先配置 `com.sss.uniclipboard` 的设备认可签名并解锁手机，不能将此结果归因为配对协议失败。
+
+### 2026-09-01 最终本地验证边界
+
+- 在 rc8 桌面锁定更新后，`cargo check --workspace --locked --quiet` 通过；`cargo test -p uc-daemon --locked --quiet` 通过 123 个单元测试和 10 个契约测试。唯一输出为既有 `uc-daemon-process` 的未使用 `pid_path` 警告，未扩大本轮范围处理。
+- 鸿蒙 `tools/verify-engine-release.ps1` 已确认 vendored 双架构 HAR 为 `v1.1.0-rc8`，`sourceCommit` 与已推送的 `cwxsss/Engine` `733ea64ea29775db0027e624099214cb46e56079` 一致。桌面 NSIS 包为 `target/release/bundle/nsis/UniClipboard_1.0.0-alpha.7_x64-setup.exe`，SHA-256 为 `C0BF8BF4BFBF554843039592FBD5343005A487AE55DB94F4E801EA023668D403`；测试签名 HAP 的 SHA-256 为 `C32E35B00907CE4529469ABD6006D7D19D47FCC57B817906632CBB1D6838B9E3`。
+- 不应将直接运行 release `uniclipd.exe` 的日志目录访问拒绝当作安装包运行失败：该命令绕过正常 GUI/daemon 启动和应用数据目录初始化，只作为错误调用被停止。尚未关闭用户当前运行的已安装 GUI，也未覆盖安装新 NSIS 包；对新安装包的 GUI 启动和跨设备配对仍需在用户允许关闭现有实例并提供可覆盖的应用签名后完成。

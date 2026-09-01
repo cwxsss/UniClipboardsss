@@ -790,8 +790,8 @@ async fn run_redeem(
         }
     };
 
-    // Set device name via settings BEFORE redeem — RedeemRequest has no
-    // device_name field; the daemon reads it from persisted settings.
+    // Persist the chosen name so the local settings and redeem request share
+    // the same device-name source.
     let patch = SettingsPatchDto {
         general: Some(GeneralSettingsPatchDto {
             device_name: Some(Some(device_name.clone())),
@@ -801,13 +801,14 @@ async fn run_redeem(
     };
     if let Err(err) = ctx.settings_client().update_settings(patch).await {
         ui::warn(&format!("Failed to set device name: {err}"));
-        // non-fatal — redeem might still work with hostname default
+        // Non-fatal: the redeem request carries the resolved device name.
     }
 
     let spinner = ui::spinner("Dialing sponsor and running handshake...");
     let req = RedeemRequest {
         code: code_str,
         passphrase: passphrase_str,
+        device_name: Some(device_name.clone()),
     };
 
     let setup_client = ctx.setup_v2_client();
