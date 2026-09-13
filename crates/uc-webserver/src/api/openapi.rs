@@ -11,6 +11,9 @@
 //! `ApiErrorResponse`. There are no bespoke `{data,ts}` wrapper structs anymore
 //! (per §0.1 — they were deleted by the per-domain P2 agents).
 
+use uc_daemon_contract::api::dto::device::{
+    ConnectivityOpportunity, ConnectivityOpportunityRequest,
+};
 use utoipa::{Modify, OpenApi};
 
 // ── Payload + request DTOs referenced by the enveloped aliases ──────────────
@@ -22,8 +25,13 @@ use crate::api::dto::clipboard::{
 };
 use crate::api::dto::device::LocalDeviceInfoDto;
 use crate::api::dto::diagnostics::{
-    DebugStatusDto, LogExportRequestDto, LogExportResultDto, UpdateDebugModeRequestDto,
-    UpdateDebugModeResultDto,
+    DebugStatusDto, DiagnosticArchiveCollectionDto, DiagnosticCaptureEndReasonDto,
+    DiagnosticCaptureModeDto, DiagnosticCaptureStartRequestDto, DiagnosticCaptureStateDto,
+    DiagnosticCaptureStopRequestDto, DiagnosticCaptureStopResultDto,
+    DiagnosticExportPreparationDto, DiagnosticFileSourceCountsDto, DiagnosticSetupStatusDto,
+    DiagnosticSignalResultDto, DiagnosticSourceCapabilityDto, DiagnosticSourceCollectionDto,
+    DiagnosticSourceCoverageDto, DiagnosticSourceDto, DiagnosticStatusDto, LogExportRequestDto,
+    LogExportResultDto, UpdateDebugModeRequestDto, UpdateDebugModeResultDto,
 };
 use crate::api::dto::encryption::{
     EncryptionActionResponse, EncryptionStateResponse, KeychainAccessResponse, UnlockSpaceRequest,
@@ -31,14 +39,17 @@ use crate::api::dto::encryption::{
 };
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::member::{
-    DecideDeviceTrustRequestDto, DeviceCompatibilityDto, DeviceGroupRelationshipDto,
+    ChooseDeviceGroupRequestDto, DeviceCompatibilityDto, DeviceGroupChangeDto,
+    DeviceGroupChangeKindDto, DeviceGroupChangeSideDto, DeviceGroupChoiceDeviceDto,
+    DeviceGroupChoiceImpactDto, DeviceGroupChoiceIssueDto, DeviceGroupChoiceMemberDto,
+    DeviceGroupChoiceOptionDto, DeviceGroupChoiceOutcomeDto, DeviceGroupChoiceReasonDto,
+    DeviceGroupChoiceReasonKindDto, DeviceGroupChoiceResultDto, DeviceGroupChoicesDto,
+    DeviceGroupDecisionDto, DeviceGroupRelationshipDto, DeviceGroupRemovalDecisionDto,
     DeviceMembershipDto, DeviceReachabilityDto, DeviceSyncRelationshipDto, DeviceTrustActionDto,
-    DeviceTrustChangeDto, DeviceTrustChoiceDto, DeviceTrustDecisionDto, DeviceTrustImpactDto,
-    DeviceTrustRelationshipDto, DeviceTrustSnapshotDto, DeviceTrustUnavailableReasonDto,
-    MemberProtectionDto, MemberProtectionStatusDto, MemberSyncPreferencesDto,
-    MemberSyncPreferencesPatchDto, MemberSyncResultDto, PendingInboundMemberDto,
-    SpaceProtectionDto, SpaceProtectionModeDto, WorkspaceConvergenceDto,
-    WorkspaceConvergenceFailureCategoryDto, WorkspaceConvergencePhaseDto,
+    DeviceTrustChangeDto, DeviceTrustChoiceDto, DeviceTrustImpactDto, DeviceTrustRelationshipDto,
+    DeviceTrustSnapshotDto, DeviceTrustUnavailableReasonDto, MemberProtectionDto,
+    MemberProtectionStatusDto, MemberSyncPreferencesDto, MemberSyncPreferencesPatchDto,
+    MemberSyncResultDto, PendingInboundMemberDto, SpaceProtectionDto, SpaceProtectionModeDto,
 };
 use crate::api::dto::mobile_sync::{
     LanInterfaceViewDto, MobileDeviceViewDto, MobileSyncActionResultDto, MobileSyncSettingsViewDto,
@@ -88,24 +99,25 @@ use uc_daemon_contract::api::dto::config::{
 use uc_daemon_contract::api::dto::envelope::{
     AckUpgradeEnvelope, CancelEntryReceiveEnvelope, CancelTransferEnvelope,
     CaptureCurrentClipboardEnvelope, CaptureUiEventEnvelope, ClearCacheEnvelope,
-    ClearHistoryEnvelope, ClipboardStatsEnvelope, DebugStatusEnvelope, DeviceTrustDecisionEnvelope,
-    DeviceTrustEnvelope, DispatchOutcomeEnvelope, EncryptionActionEnvelope,
-    EncryptionStateEnvelope, EntryDeliveryViewEnvelope, EntryDetailEnvelope,
-    EntryReceiveProgressEnvelope, EntryReceiveProgressListEnvelope, EntryResourceEnvelope,
-    ExportConfigEnvelope, ImportConfigEnvelope, KeychainAccessEnvelope, LanInterfaceListEnvelope,
-    LifecycleStatusEnvelope, ListEntriesEnvelope, LocalDeviceInfoEnvelope, LogExportEnvelope,
-    MemberSyncPreferencesEnvelope, MemberSyncResultEnvelope, MobileDeviceListEnvelope,
-    MobileSyncActionEnvelope, MobileSyncSettingsEnvelope, NetworkRecoveryStatusEnvelope,
-    PeerSnapshotListEnvelope, PresenceRefreshEnvelope, PreviewImportEnvelope,
-    RegisterMobileDeviceEnvelope, RelayCredentialStatusEnvelope, RelayProbeOutcomeEnvelope,
-    RelaySaveResultEnvelope, ResendEnvelope, RestartAcceptedEnvelope, RestoreEntryEnvelope,
-    RotateMobilePasswordEnvelope, SearchQueryEnvelope, SearchRebuildEnvelope, SearchStatusEnvelope,
-    SearchTagsEnvelope, SessionTokenEnvelope, SettingsEnvelope, SettingsUpdateResultEnvelope,
-    SetupCancelJoinEnvelope, SetupInitializeEnvelope, SetupIssueInvitationEnvelope,
-    SetupRedeemEnvelope, SetupStateEnvelope, SetupSwitchSpaceEnvelope, SpaceMemberListEnvelope,
-    SpaceProtectionEnvelope, StatusEnvelope, StorageStatsEnvelope, ToggleFavoriteEnvelope,
-    UnlockSpaceEnvelope, UpdateDebugModeEnvelope, UpdateMobileDeviceEnvelope,
-    UpdateMobileSyncSettingsEnvelope, UpgradeStatusEnvelope, WorkspaceConvergenceEnvelope,
+    ClearHistoryEnvelope, ClipboardStatsEnvelope, DebugStatusEnvelope,
+    DeviceGroupChoiceResultEnvelope, DeviceGroupChoicesEnvelope, DeviceTrustEnvelope,
+    DiagnosticCaptureStopEnvelope, DiagnosticStatusEnvelope, DispatchOutcomeEnvelope,
+    EncryptionActionEnvelope, EncryptionStateEnvelope, EntryDeliveryViewEnvelope,
+    EntryDetailEnvelope, EntryReceiveProgressEnvelope, EntryReceiveProgressListEnvelope,
+    EntryResourceEnvelope, ExportConfigEnvelope, ImportConfigEnvelope, KeychainAccessEnvelope,
+    LanInterfaceListEnvelope, LifecycleStatusEnvelope, ListEntriesEnvelope,
+    LocalDeviceInfoEnvelope, LogExportEnvelope, MemberSyncPreferencesEnvelope,
+    MemberSyncResultEnvelope, MobileDeviceListEnvelope, MobileSyncActionEnvelope,
+    MobileSyncSettingsEnvelope, NetworkRecoveryStatusEnvelope, PeerSnapshotListEnvelope,
+    PresenceRefreshEnvelope, PreviewImportEnvelope, RegisterMobileDeviceEnvelope,
+    RelayCredentialStatusEnvelope, RelayProbeOutcomeEnvelope, RelaySaveResultEnvelope,
+    ResendEnvelope, RestartAcceptedEnvelope, RestoreEntryEnvelope, RotateMobilePasswordEnvelope,
+    SearchQueryEnvelope, SearchRebuildEnvelope, SearchStatusEnvelope, SearchTagsEnvelope,
+    SessionTokenEnvelope, SettingsEnvelope, SettingsUpdateResultEnvelope, SetupCancelJoinEnvelope,
+    SetupInitializeEnvelope, SetupIssueInvitationEnvelope, SetupRedeemEnvelope, SetupStateEnvelope,
+    SetupSwitchSpaceEnvelope, SpaceMemberListEnvelope, SpaceProtectionEnvelope, StatusEnvelope,
+    StorageStatsEnvelope, ToggleFavoriteEnvelope, UnlockSpaceEnvelope, UpdateDebugModeEnvelope,
+    UpdateMobileDeviceEnvelope, UpdateMobileSyncSettingsEnvelope, UpgradeStatusEnvelope,
 };
 use uc_daemon_contract::api::dto::storage::{
     ClearCacheRequest, ClearCacheResponse, StorageStatsDto,
@@ -191,8 +203,8 @@ impl Modify for ContractMeta {
         crate::api::member::get_member_sync_preferences_handler,
         crate::api::member::update_member_sync_preferences_handler,
         crate::api::member::get_space_protection_handler,
-        crate::api::member::get_device_trust_handler,
-        crate::api::member::decide_device_trust_handler,
+        crate::api::member::get_device_group_choices_handler,
+        crate::api::member::choose_device_group_handler,
         // ── mobile-sync ────────────────────────────────────────────
         crate::api::mobile_sync::register_mobile_device_handler,
         crate::api::mobile_sync::list_mobile_devices_handler,
@@ -219,6 +231,9 @@ impl Modify for ContractMeta {
         crate::api::settings::save_relay_handler,
         crate::api::diagnostics::get_debug_status_handler,
         crate::api::diagnostics::update_debug_mode_handler,
+        crate::api::diagnostics::get_capture_status_handler,
+        crate::api::diagnostics::start_capture_handler,
+        crate::api::diagnostics::stop_capture_handler,
         crate::api::diagnostics::export_logs_handler,
         // ── lifecycle ──────────────────────────────────────────────
         crate::api::lifecycle::get_lifecycle_status_handler,
@@ -236,6 +251,7 @@ impl Modify for ContractMeta {
         crate::api::routes::peers,
         crate::api::routes::paired_devices,
         crate::api::routes::refresh_presence,
+        crate::api::routes::notify_connectivity_opportunity,
         crate::api::routes::network_recovery_status,
         crate::api::routes::recover_network,
         crate::api::ws::router,
@@ -255,6 +271,8 @@ impl Modify for ContractMeta {
         schemas(
             // ── canonical error body ───────────────────────────────
             ApiErrorResponse,
+            ConnectivityOpportunity,
+            ConnectivityOpportunityRequest,
             // ── clipboard: enveloped aliases ───────────────────────
             ListEntriesEnvelope,
             EntryDetailEnvelope,
@@ -330,18 +348,30 @@ impl Modify for ContractMeta {
             MemberSyncPreferencesEnvelope,
             MemberSyncResultEnvelope,
             SpaceProtectionEnvelope,
-            WorkspaceConvergenceEnvelope,
             DeviceTrustEnvelope,
-            DeviceTrustDecisionEnvelope,
+            DeviceGroupChoicesEnvelope,
+            DeviceGroupChoiceResultEnvelope,
             MemberSyncPreferencesDto,
             MemberSyncResultDto,
             MemberSyncPreferencesPatchDto,
             SpaceProtectionDto,
             SpaceProtectionModeDto,
-            WorkspaceConvergenceDto,
-            WorkspaceConvergencePhaseDto,
-            WorkspaceConvergenceFailureCategoryDto,
-            DecideDeviceTrustRequestDto,
+            DeviceGroupChoicesDto,
+            DeviceGroupChoiceIssueDto,
+            DeviceGroupChoiceOptionDto,
+            DeviceGroupChoiceDeviceDto,
+            DeviceGroupChoiceMemberDto,
+            DeviceGroupChoiceImpactDto,
+            DeviceGroupChoiceReasonKindDto,
+            DeviceGroupChangeSideDto,
+            DeviceGroupChangeKindDto,
+            DeviceGroupRemovalDecisionDto,
+            DeviceGroupChangeDto,
+            DeviceGroupDecisionDto,
+            DeviceGroupChoiceReasonDto,
+            ChooseDeviceGroupRequestDto,
+            DeviceGroupChoiceOutcomeDto,
+            DeviceGroupChoiceResultDto,
             DeviceMembershipDto,
             DeviceReachabilityDto,
             DeviceGroupRelationshipDto,
@@ -354,7 +384,6 @@ impl Modify for ContractMeta {
             DeviceTrustChangeDto,
             DeviceTrustRelationshipDto,
             DeviceTrustSnapshotDto,
-            DeviceTrustDecisionDto,
             PendingInboundMemberDto,
             MemberProtectionDto,
             MemberProtectionStatusDto,
@@ -478,6 +507,24 @@ impl Modify for ContractMeta {
             HealthResponse,
             StatusResponse,
             DebugStatusDto,
+            DiagnosticCaptureModeDto,
+            DiagnosticCaptureEndReasonDto,
+            DiagnosticCaptureStopResultDto,
+            DiagnosticSignalResultDto,
+            DiagnosticSetupStatusDto,
+            DiagnosticSourceDto,
+            DiagnosticSourceCapabilityDto,
+            DiagnosticSourceCollectionDto,
+            DiagnosticCaptureStateDto,
+            DiagnosticSourceCoverageDto,
+            DiagnosticStatusDto,
+            DiagnosticFileSourceCountsDto,
+            DiagnosticExportPreparationDto,
+            DiagnosticArchiveCollectionDto,
+            DiagnosticCaptureStartRequestDto,
+            DiagnosticCaptureStopRequestDto,
+            DiagnosticStatusEnvelope,
+            DiagnosticCaptureStopEnvelope,
             UpdateDebugModeRequestDto,
             UpdateDebugModeResultDto,
             LogExportRequestDto,
@@ -627,8 +674,8 @@ mod assembly_smoke_tests {
         // `GET /clipboard/entries/{id}/file`: +1 path, +1 operation → 57 / 62.
         // The mobile-device edit feature added `PATCH /mobile-sync/devices/{device_id}`
         // onto the existing DELETE-only path: +0 paths, +1 operation → 57 / 63.
-        // Diagnostics added `/diagnostics/debug` GET+PUT and
-        // `/diagnostics/log-export` POST: +2 paths, +3 operations → 59 / 66.
+        // Diagnostics added debug, capture status/start/stop, and log export:
+        // +5 paths, +6 operations → 62 / 69.
         // Config migration (issue #1110) added `POST /config/export`,
         // `POST /config/import/preview`, and `POST /config/import`: +3 paths,
         // +3 operations → 62 / 69. The unified-search work added
@@ -638,9 +685,9 @@ mod assembly_smoke_tests {
         // exact cancellation: +3 paths, +3 operations → 67 / 74. Relay credential
         // status and atomic save add two paths and two operations → 69 / 76.
         // Engine-owned space protection adds GET /member/protection and the
-        // workspace convergence migration replaces the former member-removal,
-        // convergence, and shared-device-refresh routes with one
-        // Device trust query and decision endpoints: 73 paths / 81 operations.
+        // device-group migration replaces the former query and decision paths
+        // with GET and POST on one resource: 75 paths / 84 operations.
+        // Connectivity opportunities add one path and operation: 76 / 85.
         const HTTP_METHODS: [&str; 7] =
             ["get", "put", "post", "delete", "patch", "head", "options"];
         let paths = value
@@ -649,8 +696,8 @@ mod assembly_smoke_tests {
             .expect("OpenAPI doc must declare paths");
         assert_eq!(
             paths.len(),
-            73,
-            "expected exactly 73 path templates, found {}: {:?}",
+            76,
+            "expected exactly 76 path templates, found {}: {:?}",
             paths.len(),
             paths.keys().collect::<Vec<_>>()
         );
@@ -664,8 +711,8 @@ mod assembly_smoke_tests {
             })
             .sum();
         assert_eq!(
-            operation_count, 81,
-            "expected exactly 81 operations across all paths, found {operation_count}"
+            operation_count, 85,
+            "expected exactly 85 operations across all paths, found {operation_count}"
         );
 
         // A few frozen operationIds (§D) must be present somewhere in the doc.
@@ -680,8 +727,8 @@ mod assembly_smoke_tests {
             "getEntryReceiveProgress",
             "cancelEntryReceive",
             "getSpaceProtection",
-            "getDeviceTrust",
-            "decideDeviceTrust",
+            "getDeviceGroupChoices",
+            "chooseDeviceGroup",
         ] {
             assert!(
                 json.contains(&format!("\"{op}\"")),

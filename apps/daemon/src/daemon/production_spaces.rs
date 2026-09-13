@@ -497,11 +497,13 @@ async fn wait_for_join_completion(
                     ));
                 }
                 tokio::time::sleep(JOIN_POLL_INTERVAL).await;
-                status = match engine.execute(Operation::QueryDeviceTrust).await {
-                    Ok(OperationResult::DeviceTrust(snapshot)) => match snapshot.current_join {
-                        Some(candidate) if join_id_of(&candidate) == expected_join_id => candidate,
-                        _ => continue,
-                    },
+                status = match engine.execute(Operation::QueryDeviceGroupChoices).await {
+                    Ok(OperationResult::DeviceGroupChoices(choices)) => {
+                        match choices.device_trust.current_join {
+                            Some(candidate) if join_id_of(&candidate) == expected_join_id => candidate,
+                            _ => continue,
+                        }
+                    }
                     _ => continue,
                 };
             }

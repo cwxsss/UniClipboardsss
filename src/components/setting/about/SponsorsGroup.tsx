@@ -1,5 +1,5 @@
 import { Heart, Star } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { fetchSponsors, type Sponsor } from '@/api/sponsors'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -45,7 +45,7 @@ function SponsorCard({ sponsor, goldLabel }: { sponsor: Sponsor; goldLabel: stri
         <AvatarFallback>{initialsFor(sponsor.name)}</AvatarFallback>
       </Avatar>
       <div className="w-full min-w-0 space-y-1">
-        <p className="truncate text-sm font-medium">{sponsor.name}</p>
+        <p className="truncate text-ui-body font-medium">{sponsor.name}</p>
         {isGold ? (
           <Badge
             variant="secondary"
@@ -54,7 +54,9 @@ function SponsorCard({ sponsor, goldLabel }: { sponsor: Sponsor; goldLabel: stri
             {goldLabel}
           </Badge>
         ) : (
-          sponsor.note && <p className="truncate text-xs text-muted-foreground">{sponsor.note}</p>
+          sponsor.note && (
+            <p className="truncate text-ui-caption text-muted-foreground">{sponsor.note}</p>
+          )
         )}
       </div>
     </div>
@@ -94,6 +96,7 @@ const SKELETON_CARD_COUNT = 3
  * placeholder.
  */
 export function SponsorsGroup() {
+  const titleId = useId()
   const { t } = useTranslation()
   const [sponsors, setSponsors] = useState<Sponsor[] | null>(null)
   const isLoading = sponsors === null
@@ -114,14 +117,14 @@ export function SponsorsGroup() {
   if (sponsors?.length === 0) return null
 
   return (
-    <div className="space-y-1.5">
-      <h3 className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+    <section aria-labelledby={titleId} className="min-w-0">
+      <h2 id={titleId} className="mb-4 px-1 text-ui-section font-semibold">
         {t('settings.sections.about.sponsors.title')}
-      </h3>
-      <div className="space-y-4 rounded-lg border border-border/60 bg-card p-4">
+      </h2>
+      <div className="space-y-4 px-1">
         <div className="flex items-center gap-2">
           <Heart className="size-4 shrink-0 fill-rose-500/20 text-rose-500" />
-          <p className="text-xs leading-snug text-muted-foreground">
+          <p className="text-ui-caption text-muted-foreground">
             {t('settings.sections.about.sponsors.thanks')}
           </p>
         </div>
@@ -147,7 +150,7 @@ export function SponsorsGroup() {
                 href={SPONSOR_CHANNEL_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-primary transition-colors hover:bg-muted/50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-ui-body text-primary transition-colors hover:bg-muted/50"
               >
                 <Heart className="size-3.5" />
                 {t('settings.sections.about.sponsors.becomeSponsor')}
@@ -156,7 +159,7 @@ export function SponsorsGroup() {
                 href={GITHUB_REPOSITORY_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-primary transition-colors hover:bg-muted/50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-ui-body text-primary transition-colors hover:bg-muted/50"
               >
                 <Star className="size-3.5" />
                 {t('settings.sections.about.sponsors.githubStar')}
@@ -165,6 +168,6 @@ export function SponsorsGroup() {
           </>
         )}
       </div>
-    </div>
+    </section>
   )
 }

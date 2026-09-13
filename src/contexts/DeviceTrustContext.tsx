@@ -1,72 +1,149 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import {
-  decideDeviceTrust as submitDecision,
-  getDeviceTrust,
-  type DeviceTrustChoice,
-  type DeviceTrustSnapshot,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useReducer,
+  useRef,
+  type ReactNode,
+} from 'react'
+import {
+  chooseDeviceGroup,
+  getDeviceGroupChoices,
+  type DeviceGroupChoiceOutcome,
+  type DeviceGroupChoices,
 } from '@/api/daemon/device-trust'
+import { decisionFingerprint } from '@/components/device/device-group-presentation'
+import { DeviceTrustContext, type DeviceGroupDecision } from '@/contexts/device-trust-context'
 import { daemonWs } from '@/lib/daemon-ws'
-import { DeviceTrustContext } from './device-trust-context'
 
 interface DeviceTrustState {
-  snapshot: DeviceTrustSnapshot | null
+  deviceGroups: DeviceGroupChoices | null
   loading: boolean
   decisionBusy: boolean
   decisionError: string | null
-  localRemovalConfirmationChangeId: string | null
+  localRemovalConfirmationIssueId: string | null
+  localRemovalConfirmationChoiceId: string | null
+  decision: DeviceGroupDecision | null
+  acknowledging: boolean
 }
 
 type DeviceTrustStateAction =
   | { type: 'refresh_started' }
-  | { type: 'refresh_finished'; snapshot: DeviceTrustSnapshot }
+  | { type: 'refresh_finished'; deviceGroups: DeviceGroupChoices }
   | { type: 'refresh_failed'; error: string }
-  | { type: 'decision_started' }
+  | { type: 'choice_started'; decision: DeviceGroupDecision }
+  | { type: 'acknowledged' }
+  | { type: 'confirmation_cancelled' }
+  | { type: 'choice_outdated' }
   | {
-      type: 'decision_finished'
-      snapshot: DeviceTrustSnapshot
-      stateChanged: boolean
-      localRemovalConfirmationChangeId: string | null
+      type: 'choice_finished'
+      outcome: DeviceGroupChoiceOutcome
+      issueId: string
     }
-  | { type: 'decision_failed'; error: string }
+  | { type: 'choice_failed'; error: string }
 
 const initialState: DeviceTrustState = {
-  snapshot: null,
+  deviceGroups: null,
   loading: false,
   decisionBusy: false,
   decisionError: null,
-  localRemovalConfirmationChangeId: null,
+  localRemovalConfirmationIssueId: null,
+  localRemovalConfirmationChoiceId: null,
+  decision: null,
+  acknowledging: false,
+}
+
+function issueStillCurrent(deviceGroups: DeviceGroupChoices, issueId: string | null): boolean {
+  return issueId !== null && deviceGroups.issues.some(issue => issue.issueId === issueId)
+}
+
+function confirmationStillCurrent(
+  previous: DeviceGroupChoices | null,
+  current: DeviceGroupChoices,
+  issueId: string | null
+): boolean {
+  const before = previous?.issues.find(issue => issue.issueId === issueId)
+  const after = current.issues.find(issue => issue.issueId === issueId)
+  return !!before && !!after && decisionFingerprint(before) === decisionFingerprint(after)
 }
 
 function stateReducer(state: DeviceTrustState, action: DeviceTrustStateAction): DeviceTrustState {
   switch (action.type) {
     case 'refresh_started':
       return { ...state, loading: true }
-    case 'refresh_finished': {
-      const currentChangeId = action.snapshot.currentChange?.changeId ?? null
+    case 'refresh_finished':
       return {
         ...state,
-        snapshot: action.snapshot,
+        deviceGroups: action.deviceGroups,
+        decision: state.acknowledging ? null : state.decision,
+        acknowledging: false,
         loading: false,
-        decisionError: null,
-        localRemovalConfirmationChangeId:
-          state.localRemovalConfirmationChangeId === currentChangeId ? currentChangeId : null,
+        decisionError:
+          state.decisionError === 'device_state_changed' && action.deviceGroups.issues.length > 0
+            ? state.decisionError
+            : null,
+        localRemovalConfirmationIssueId: confirmationStillCurrent(
+          state.deviceGroups,
+          action.deviceGroups,
+          state.localRemovalConfirmationIssueId
+        )
+          ? state.localRemovalConfirmationIssueId
+          : null,
       }
-    }
     case 'refresh_failed':
-      return { ...state, loading: false, decisionError: action.error }
-    case 'decision_started':
-      return { ...state, decisionBusy: true, decisionError: null }
-    case 'decision_finished':
+      return { ...state, loading: false, acknowledging: false, decisionError: action.error }
+    case 'choice_started':
+      return { ...state, decisionBusy: true, decisionError: null, decision: action.decision }
+    case 'acknowledged':
       return {
         ...state,
-        snapshot: action.snapshot,
-        loading: false,
-        decisionBusy: false,
-        decisionError: action.stateChanged ? 'device_state_changed' : null,
-        localRemovalConfirmationChangeId: action.localRemovalConfirmationChangeId,
+        acknowledging: true,
+        localRemovalConfirmationIssueId: null,
+        localRemovalConfirmationChoiceId: null,
       }
-    case 'decision_failed':
-      return { ...state, decisionBusy: false, decisionError: action.error }
+    case 'confirmation_cancelled':
+      return {
+        ...state,
+        localRemovalConfirmationIssueId: null,
+        localRemovalConfirmationChoiceId: null,
+      }
+    case 'choice_outdated':
+      return {
+        ...state,
+        decisionError: 'device_state_changed',
+        localRemovalConfirmationIssueId: null,
+        localRemovalConfirmationChoiceId: null,
+      }
+    case 'choice_finished':
+      return {
+        ...state,
+        decisionBusy: false,
+        localRemovalConfirmationChoiceId:
+          action.outcome === 'local_device_confirmation_required'
+            ? (state.decision?.choiceId ?? null)
+            : null,
+        decision:
+          action.outcome === 'state_changed' ||
+          action.outcome === 'local_device_confirmation_required'
+            ? null
+            : state.decision && { ...state.decision, outcome: action.outcome },
+        decisionError:
+          action.outcome === 'state_changed' ? 'device_state_changed' : state.decisionError,
+        localRemovalConfirmationIssueId:
+          action.outcome === 'local_device_confirmation_required' &&
+          state.deviceGroups !== null &&
+          issueStillCurrent(state.deviceGroups, action.issueId)
+            ? action.issueId
+            : null,
+      }
+    case 'choice_failed':
+      return {
+        ...state,
+        decisionBusy: false,
+        decisionError: action.error,
+        decision: state.decision && { ...state.decision, outcome: 'uncertain' },
+      }
   }
 }
 
@@ -82,7 +159,7 @@ export function DeviceTrustProvider({
   children: ReactNode
 }) {
   const [state, dispatch] = useReducer(stateReducer, initialState)
-  const snapshotRef = useRef<DeviceTrustSnapshot | null>(null)
+  const deviceGroupsRef = useRef<DeviceGroupChoices | null>(null)
   const decisionBusyRef = useRef(false)
   const refreshSequenceRef = useRef(0)
 
@@ -91,59 +168,106 @@ export function DeviceTrustProvider({
     const sequence = ++refreshSequenceRef.current
     dispatch({ type: 'refresh_started' })
     try {
-      const snapshot = await getDeviceTrust()
+      const deviceGroups = await getDeviceGroupChoices()
       if (sequence !== refreshSequenceRef.current) return
-      snapshotRef.current = snapshot
-      dispatch({ type: 'refresh_finished', snapshot })
+      deviceGroupsRef.current = deviceGroups
+      dispatch({ type: 'refresh_finished', deviceGroups })
     } catch (error) {
       if (sequence !== refreshSequenceRef.current) return
       dispatch({ type: 'refresh_failed', error: errorMessage(error) })
     }
   }, [enabled])
 
-  useEffect(() => {
-    if (!enabled) return
-    void refresh()
-    return daemonWs.subscribe(['device-trust'], () => void refresh())
-  }, [enabled, refresh])
+  const refreshFromSubscription = useEffectEvent(() => void refresh())
 
   useEffect(() => {
     if (!enabled) return
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void refresh()
+    const unsubscribe = daemonWs.subscribe(['device-trust', 'system'], refreshFromSubscription)
+    const reconnect = daemonWs.onReconnect(refreshFromSubscription)
+    refreshFromSubscription()
+    return () => {
+      unsubscribe()
+      reconnect()
     }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [enabled, refresh])
+  }, [enabled])
 
-  const decide = useCallback(
-    async (choice: DeviceTrustChoice, confirmLocalRemoval: boolean) => {
-      const change = snapshotRef.current?.currentChange
-      if (!change || decisionBusyRef.current || !change.allowedChoices.includes(choice)) return
+  const refreshWhenVisible = useEffectEvent(() => {
+    if (document.visibilityState === 'visible') void refresh()
+  })
+  const refreshOnFocus = useEffectEvent(() => {
+    void refresh()
+  })
+
+  useEffect(() => {
+    if (!enabled) return
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshOnFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshOnFocus)
+    }
+  }, [enabled])
+
+  const choose = useCallback(
+    async (issueId: string, choiceId: string, confirmLocalRemoval: boolean) => {
+      const deviceGroups = state.deviceGroups
+      const issue = deviceGroups?.issues.find(candidate => candidate.issueId === issueId)
+      if (
+        !deviceGroups ||
+        !issue?.choices.some(choice => choice.choiceId === choiceId) ||
+        decisionBusyRef.current
+      ) {
+        return
+      }
+      if (deviceGroupsRef.current?.revision !== deviceGroups.revision) {
+        await refresh()
+        dispatch({ type: 'choice_outdated' })
+        return
+      }
       decisionBusyRef.current = true
       refreshSequenceRef.current += 1
-      dispatch({ type: 'decision_started' })
+      dispatch({
+        type: 'choice_started',
+        decision: { groups: deviceGroups, issueId, choiceId, outcome: 'submitting' },
+      })
       try {
-        const result = await submitDecision(change.changeId, choice, confirmLocalRemoval)
-        refreshSequenceRef.current += 1
-        snapshotRef.current = result.snapshot
+        const result = await chooseDeviceGroup(
+          issueId,
+          choiceId,
+          deviceGroups.revision,
+          confirmLocalRemoval
+        )
+        await refresh()
         dispatch({
-          type: 'decision_finished',
-          snapshot: result.snapshot,
-          stateChanged: result.kind === 'state_changed',
-          localRemovalConfirmationChangeId:
-            result.kind === 'local_device_confirmation_required' ? result.changeId : null,
+          type: 'choice_finished',
+          outcome: result.outcome,
+          issueId,
         })
       } catch (error) {
         await refresh()
-        dispatch({ type: 'decision_failed', error: errorMessage(error) })
+        dispatch({ type: 'choice_failed', error: errorMessage(error) })
       } finally {
         decisionBusyRef.current = false
       }
     },
-    [refresh]
+    [refresh, state.deviceGroups]
   )
 
-  const value = useMemo(() => ({ ...state, refresh, decide }), [state, refresh, decide])
+  const acknowledgeDecision = useCallback(async () => {
+    dispatch({ type: 'acknowledged' })
+    await refresh()
+  }, [refresh])
+
+  const value = useMemo(
+    () => ({
+      ...state,
+      snapshot: state.deviceGroups?.deviceTrust ?? null,
+      refresh,
+      choose,
+      acknowledgeDecision,
+      cancelLocalConfirmation: () => dispatch({ type: 'confirmation_cancelled' }),
+    }),
+    [state, refresh, choose, acknowledgeDecision]
+  )
   return <DeviceTrustContext value={value}>{children}</DeviceTrustContext>
 }

@@ -33,10 +33,14 @@ export type SetupCompletion =
       sponsorDeviceId: string
       peerDeviceId: string | null
     }
-  | { kind: 'pairing_succeeded'; role: 'joiner'; redeem: ActiveJoinSpaceResponse }
+  | {
+      kind: 'pairing_succeeded'
+      role: 'joiner'
+      redeem: ActiveJoinSpaceResponse
+    }
 
 export type SetupFlow =
-  /** Initial fetch in progress; setup gate stays active. */
+  /** Initial fetch in progress; the app startup screen owns this state. */
   | { kind: 'loading' }
   /** No space initialised yet — show the entry / initialise / redeem screens. */
   | { kind: 'entry' }
@@ -90,11 +94,6 @@ function flowFromState(
   state: SetupStateResponse,
   completion: SetupCompletion | null = null
 ): SetupFlow {
-  // A completed device can issue invitations from the main device screen.
-  // Such invitations must not reopen the onboarding gate after first setup.
-  if (state.hasCompleted) {
-    return { kind: 'completed', deviceName: state.deviceName, completion }
-  }
   if (state.currentInvitation) {
     return {
       kind: 'invitation_pending',
@@ -104,14 +103,10 @@ function flowFromState(
       completion,
     }
   }
+  if (state.hasCompleted) {
+    return { kind: 'completed', deviceName: state.deviceName, completion }
+  }
   return { kind: 'entry' }
-}
-
-function ownsOnboardingInvitation(flow: SetupFlow): boolean {
-  return (
-    flow.kind === 'invitation_pending' ||
-    (flow.kind === 'completed' && flow.completion?.kind === 'space_ready')
-  )
 }
 
 function update(flow: SetupFlow, hydrated = true, rePairingRequired = snapshot.rePairingRequired) {
@@ -132,8 +127,6 @@ function deviceNameFromFlow(flow: SetupFlow): string | null {
 }
 
 export function applyIssuedInvitation(invitation: CurrentInvitation) {
-  if (!ownsOnboardingInvitation(snapshot.flow)) return
-
   // An API response and its matching WebSocket event carry the same canonical
   // invitation. Apply both through one store transition so the page never
   // needs a parallel optimistic screen state.
@@ -152,8 +145,6 @@ function applyInvitationIssued(event: SetupInvitationIssuedEvent) {
 }
 
 function applyInvitationRevoked(_event: SetupInvitationRevokedEvent) {
-  if (!ownsOnboardingInvitation(snapshot.flow)) return
-
   // Invitation cancelled or expired — refresh from the server to discover
   // whether `hasCompleted` is true (sponsor stays in `completed`) or false
   // (this device hasn't initialised yet, drop back to entry).

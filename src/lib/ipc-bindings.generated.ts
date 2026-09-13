@@ -13,6 +13,30 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	getVisualEffects: (trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<EffectsSnapshot, string>(__TAURI_INVOKE("get_visual_effects", { trace })),
+	setVisualEffectsMode: (mode: EffectsMode, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<EffectsSnapshot, string>(__TAURI_INVOKE("set_visual_effects_mode", { mode, trace })),
+	reportVisualEffectsEnvironment: (sessionId: string, systemMotion: SystemMotion, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<EffectsSnapshot, string>(__TAURI_INVOKE("report_visual_effects_environment", { sessionId, systemMotion, trace })),
+	beginVisualEffectsSample: (sessionId: string, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<{
+	sampleId: number,
+	revision: number,
+	sessionId: string,
+} | null, string>(__TAURI_INVOKE("begin_visual_effects_sample", { sessionId, trace })),
+	reportVisualEffectsSample: (sample: EffectsSample, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<EffectsSnapshot, string>(__TAURI_INVOKE("report_visual_effects_sample", { sample, trace })),
 	/**
 	 *  Update tray menu labels to match the UI language.
 	 * 
@@ -88,6 +112,16 @@ export const commands = {
 	observedVersion: string | null,
 	expectedVersion: string | null,
 } | null, CommandError>(__TAURI_INVOKE("get_daemon_bootstrap_failure", { trace })),
+	/**  Read authenticated startup state without requiring a working business API. */
+	getDaemonStartupStatus: (trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<{
+	package_version: string,
+	service_ready: boolean,
+	service_failed: boolean,
+	progress: StartupSnapshotDto,
+} | null, CommandError>(__TAURI_INVOKE("get_daemon_startup_status", { trace })),
 	/**
 	 *  Consume the pending deep-link route recorded by native UI surfaces.
 	 * 
@@ -101,6 +135,11 @@ export const commands = {
 	trace_id: string,
 	timestamp: number,
 } | null) => typedError<string | null, CommandError>(__TAURI_INVOKE("take_pending_navigation", { trace })),
+	/**  The current main document has committed useful content or an actionable failure. */
+	mainWindowPresentationReady: (generation: string, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => __TAURI_INVOKE<void>("main_window_presentation_ready", { generation, trace }),
 	/**
 	 *  Restarts the running Tauri application to apply settings changes.
 	 * 
@@ -298,6 +337,10 @@ export const commands = {
 	trace_id: string,
 	timestamp: number,
 } | null) => typedError<null, CommandError>(__TAURI_INVOKE("open_logs_directory", { trace })),
+	exportStartupLogs: (trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<string | null, CommandError>(__TAURI_INVOKE("export_startup_logs", { trace })),
 	/**
 	 *  Reveal a file or directory in the system file manager, opening its
 	 *  containing folder with the item selected (Finder / Explorer / file
@@ -504,9 +547,16 @@ export const commands = {
 	trace_id: string,
 	timestamp: number,
 } | null) => typedError<null, string>(__TAURI_INVOKE("set_traffic_light_position", { offsetX, offsetY, trace })),
+	/**  Acknowledge the first frontend commit for one main-window generation. */
+	markMainWindowReady: (generation: string, trace: {
+	trace_id: string,
+	timestamp: number,
+} | null) => typedError<null, string>(__TAURI_INVOKE("mark_main_window_ready", { generation, trace })),
 };
 
 /* Types */
+export type AutoResult = "effects" | "smooth";
+
 /**
  *  Typed command error taxonomy for Tauri command boundary.
  * 
@@ -616,6 +666,13 @@ export type DaemonSessionPayload = {
 	refreshAtSecs: number,
 };
 
+export type DaemonStartupStatus = {
+	package_version: string,
+	service_ready: boolean,
+	service_failed: boolean,
+	progress: StartupSnapshotDto,
+};
+
 /**
  *  暴露给 webview 的设备和应用元数据，用于补齐前端 Sentry scope。
  * 
@@ -685,6 +742,35 @@ export type DownloadProgressSnapshot = {
 	date: string | null,
 };
 
+export type EffectsMode = "auto" | "effects" | "smooth";
+
+export type EffectsPersistence = "saved" | "session_only";
+
+export type EffectsReason = "manual" | "system" | "platform_default" | "hardware" | "unknown" | "runtime";
+
+export type EffectsSample = {
+	sessionId: string,
+	sampleId: number,
+	revision: number,
+	frames: number,
+	durationMs: number | null,
+	longFrames: number,
+	longestMs: number | null,
+};
+
+export type EffectsSnapshot = {
+	sessionId: string,
+	revision: number,
+	mode: EffectsMode,
+	autoForSession: AutoResult,
+	nextAuto: AutoResult | null,
+	systemMotion: SystemMotion,
+	reduceMotion: boolean,
+	lowEffects: boolean,
+	reason: EffectsReason,
+	persistence: EffectsPersistence,
+};
+
 /**
  *  Result of [`export_config_package`].
  * 
@@ -747,7 +833,60 @@ export type QuickPanelExpandSide = "right" | "left";
  */
 export type QuickPanelPositionArg = "center" | "follow_cursor";
 
+export type SamplePermit = {
+	sampleId: number,
+	revision: number,
+	sessionId: string,
+};
+
 export type ShortcutKeyDto = string | string[];
+
+export type StartupActionsDto = {
+	retry: boolean,
+	export_diagnostics: boolean,
+};
+
+export type StartupFailureDto = {
+	reason: StartupFailureReasonDto,
+	retryable: boolean,
+};
+
+export type StartupFailureReasonDto = "storage_full" | "permission_denied" | "storage_unavailable" | "protection_unavailable" | "corrupt_data" | "source_changed" | "already_running" | "startup_failed";
+
+export type StartupSnapshotDto = {
+	attempt_id: string,
+	sequence: number,
+	state: StartupStateDto,
+	elapsed_ms: number,
+	upgrade: StartupUpgradeDto | null,
+	failure: StartupFailureDto | null,
+	allowed_actions: StartupActionsDto,
+};
+
+export type StartupStateDto = "preparing" | "upgrading" | "starting_services" | "ready" | "failed" | "interrupted";
+
+export type StartupStepDto = "checking" | "converting_contents" | "converting_large_contents" | "converting_related_records" | "verifying" | "preparing";
+
+export type StartupStepProgressDto = {
+	step: StartupStepDto,
+	processed: number,
+	total: number | null,
+	unit: StartupUnitDto | null,
+	warning_count: number | null,
+	completed: boolean,
+};
+
+export type StartupUnitDto = "content_representations" | "large_contents" | "related_records";
+
+export type StartupUpgradeDto = {
+	required: boolean,
+	recovering: boolean,
+	completed: boolean,
+	current_step: StartupStepDto | null,
+	steps: StartupStepProgressDto[],
+};
+
+export type SystemMotion = "reduce" | "allow" | "unknown";
 
 /**  Trace context supplied by the webview for one Tauri command invocation. */
 export type TraceMetadata = {

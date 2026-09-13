@@ -74,17 +74,24 @@ enum Commands {
         /// Run as a headless server node (VPS / container): no system
         /// clipboard and no clipboard watcher. The node still syncs over
         /// iroh as a normal Space member and serves the mobile-sync gateway.
-        /// Join the Space first (`uniclip join`) before starting.
+        /// Join the Space first (`uniclip space join`) before starting.
         #[arg(long)]
         server: bool,
     },
     /// Stop the running daemon
     Stop,
     /// Show application status
+    #[command(hide = true)]
     Status,
+    /// Manage the current encrypted space.
+    Space {
+        #[command(subcommand)]
+        command: SpaceCommands,
+    },
     /// Create a new encrypted space for this profile.
     ///
     /// Use this on the first device before inviting other devices.
+    #[command(hide = true)]
     Init {
         /// Space passphrase. If omitted, prompts interactively with
         /// confirmation. Pass this flag only in non-interactive contexts
@@ -99,9 +106,10 @@ enum Commands {
     /// Issue a pairing invitation and wait for a joiner (sponsor side).
     ///
     /// Silently resumes the local session from the KEK cached in
-    /// keychain (or `--dev`'s file secure storage) by a prior `init` /
+    /// keychain (or `--dev`'s file secure storage) by a prior `space init` /
     /// `unlock` — no passphrase re-entry needed. Fails if the profile
     /// has not been initialized yet.
+    #[command(hide = true)]
     Invite,
     /// Join a space with an invitation code and passphrase.
     ///
@@ -117,7 +125,7 @@ enum Commands {
     /// for confirmation; pass `--yes` to skip the prompt in non-interactive
     /// contexts. A daemon crash mid-migration auto-resumes on the next
     /// `uniclip` invocation thanks to `MigrationStatePort` persistence.
-    #[command(args_conflicts_with_subcommands = true)]
+    #[command(args_conflicts_with_subcommands = true, hide = true)]
     Join {
         /// Invitation code printed by the sponsor's `invite`. Prompted
         /// interactively when omitted.
@@ -350,15 +358,13 @@ enum MemberCommands {
     /// Record an irreversible, offline-first removal intent for one member.
     ///
     /// Immediately stops sending new content to the peer and prints the full
-    /// Engine-owned convergence state. Pass `--json` for the raw DTO.
+    /// Engine-owned device relationship state. Pass `--json` for the raw DTO.
     Remove {
         /// Peer device ID to remove.
         #[arg(value_name = "PEER-ID")]
         peer_id: String,
     },
-    /// Query the current space-wide member removal state.
-    RemovalStatus,
-    /// Inspect or decide the current Engine-owned device trust change.
+    /// Inspect or choose among current Engine-owned device groups.
     Trust {
         #[command(subcommand)]
         command: MemberTrustCommands,
@@ -379,23 +385,70 @@ enum JoinCommands {
 }
 
 #[derive(Subcommand)]
-enum MemberTrustCommands {
-    /// Show the current device trust state and pending change.
+enum SpaceCommands {
+    /// Show application status.
     Status,
-    /// Apply the current device group change.
-    Apply {
-        /// Expected change ID. Required for JSON and non-interactive use.
-        #[arg(long, value_name = "CHANGE-ID")]
-        change: Option<String>,
+    /// Create a new encrypted space for this profile.
+    Init {
+        /// Space passphrase. If omitted, prompts interactively with confirmation.
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Display name advertised to paired peers.
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+    /// Issue a pairing invitation and wait for a joiner.
+    Invite,
+    /// Rebuild this profile as a new one-device space while keeping local history.
+    Reset {
+        /// Confirm the permanent loss of all existing device relationships.
+        #[arg(long, required = true)]
+        yes: bool,
+    },
+    /// Join a space with an invitation code and passphrase.
+    #[command(args_conflicts_with_subcommands = true)]
+    Join {
+        /// Invitation code printed by the sponsor's `space invite`.
+        #[arg(long)]
+        code: Option<String>,
+        /// Space passphrase.
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Display name advertised to the sponsor on first-time join.
+        #[arg(long)]
+        device_name: Option<String>,
+        /// Switch to a different space and migrate local history.
+        #[arg(long)]
+        switch: bool,
+        /// Skip the confirmation prompt for a destructive space switch.
+        #[arg(long)]
+        yes: bool,
+        /// Keep local history records that cannot be read during a space switch.
+        #[arg(long, requires = "switch")]
+        preserve_unreadable_history: bool,
+        /// Return after Engine accepts a pending join instead of waiting for a final result.
+        #[arg(long)]
+        no_wait: bool,
+        #[command(subcommand)]
+        command: Option<JoinCommands>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemberTrustCommands {
+    /// Show the current device relationship state and pending group choices.
+    Status,
+    /// Choose one option from the current device-group query.
+    Choose {
+        /// Opaque issue ID from `member trust status`.
+        #[arg(long, value_name = "ISSUE-ID")]
+        issue: Option<String>,
+        /// Opaque choice ID from the selected issue.
+        #[arg(long, value_name = "CHOICE-ID")]
+        choice: Option<String>,
         /// Explicitly allow this device to be removed by the change.
         #[arg(long)]
         confirm_local_removal: bool,
-    },
-    /// Keep the current device group instead of applying the change.
-    Keep {
-        /// Expected change ID. Required for JSON and non-interactive use.
-        #[arg(long, value_name = "CHANGE-ID")]
-        change: Option<String>,
     },
 }
 
@@ -408,6 +461,62 @@ enum OnOff {
 impl From<OnOff> for bool {
     fn from(value: OnOff) -> Self {
         matches!(value, OnOff::On)
+    }
+}
+
+fn warn_legacy_space_command(command: &str, replacement: &str) {
+    ui::warn(&format!(
+        "`uniclip {command}` is deprecated; use `uniclip {replacement}` instead. This alias will be removed in a future release."
+    ));
+}
+
+async fn run_space_command(command: SpaceCommands, json: bool, verbose: bool) -> i32 {
+    match command {
+        SpaceCommands::Status => commands::status::run(json, verbose).await,
+        SpaceCommands::Init {
+            passphrase,
+            device_name,
+        } => {
+            commands::init::run(
+                commands::init::InitArgs {
+                    passphrase,
+                    device_name,
+                },
+                verbose,
+            )
+            .await
+        }
+        SpaceCommands::Invite => commands::invite::run(verbose).await,
+        SpaceCommands::Reset { yes: _ } => commands::reset_space::run(json, verbose).await,
+        SpaceCommands::Join {
+            code,
+            passphrase,
+            device_name,
+            switch,
+            yes,
+            preserve_unreadable_history,
+            no_wait,
+            command,
+        } => match command {
+            Some(JoinCommands::Status) => commands::join::status(json, verbose).await,
+            Some(JoinCommands::Cancel) => commands::join::cancel(json, verbose).await,
+            None => {
+                commands::join::run(
+                    commands::join::JoinArgs {
+                        code,
+                        passphrase,
+                        device_name,
+                        switch,
+                        yes,
+                        preserve_unreadable_history,
+                        no_wait,
+                    },
+                    json,
+                    verbose,
+                )
+                .await
+            }
+        },
     }
 }
 
@@ -479,11 +588,16 @@ fn main() -> anyhow::Result<()> {
                 commands::start::run(foreground, server, cli.json, cli.verbose).await
             }
             Commands::Stop => commands::stop::run(cli.json, cli.verbose).await,
-            Commands::Status => commands::status::run(cli.json, cli.verbose).await,
+            Commands::Status => {
+                warn_legacy_space_command("status", "space status");
+                commands::status::run(cli.json, cli.verbose).await
+            }
+            Commands::Space { command } => run_space_command(command, cli.json, cli.verbose).await,
             Commands::Init {
                 passphrase,
                 device_name,
             } => {
+                warn_legacy_space_command("init", "space init");
                 commands::init::run(
                     commands::init::InitArgs {
                         passphrase,
@@ -493,7 +607,10 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await
             }
-            Commands::Invite => commands::invite::run(cli.verbose).await,
+            Commands::Invite => {
+                warn_legacy_space_command("invite", "space invite");
+                commands::invite::run(cli.verbose).await
+            }
             Commands::Join {
                 code,
                 passphrase,
@@ -503,32 +620,33 @@ fn main() -> anyhow::Result<()> {
                 preserve_unreadable_history,
                 no_wait,
                 command,
-            } => {
-                match command {
-                    Some(JoinCommands::Status) => {
-                        commands::join::status(cli.json, cli.verbose).await
-                    }
-                    Some(JoinCommands::Cancel) => {
-                        commands::join::cancel(cli.json, cli.verbose).await
-                    }
-                    None => {
-                        commands::join::run(
-                            commands::join::JoinArgs {
-                                code,
-                                passphrase,
-                                device_name,
-                                switch,
-                                yes,
-                                preserve_unreadable_history,
-                                no_wait,
-                            },
-                            cli.json,
-                            cli.verbose,
-                        )
-                        .await
-                    }
+            } => match command {
+                Some(JoinCommands::Status) => {
+                    warn_legacy_space_command("join status", "space join status");
+                    commands::join::status(cli.json, cli.verbose).await
                 }
-            }
+                Some(JoinCommands::Cancel) => {
+                    warn_legacy_space_command("join cancel", "space join cancel");
+                    commands::join::cancel(cli.json, cli.verbose).await
+                }
+                None => {
+                    warn_legacy_space_command("join", "space join");
+                    commands::join::run(
+                        commands::join::JoinArgs {
+                            code,
+                            passphrase,
+                            device_name,
+                            switch,
+                            yes,
+                            preserve_unreadable_history,
+                            no_wait,
+                        },
+                        cli.json,
+                        cli.verbose,
+                    )
+                    .await
+                }
+            },
             Commands::Members { probe } => {
                 commands::members::run(probe, cli.json, cli.verbose).await
             }
@@ -536,31 +654,19 @@ fn main() -> anyhow::Result<()> {
                 MemberCommands::Remove { peer_id } => {
                     commands::member::remove(peer_id, cli.json, cli.verbose).await
                 }
-                MemberCommands::RemovalStatus => {
-                    commands::member::removal_status(cli.json, cli.verbose).await
-                }
                 MemberCommands::Trust { command } => match command {
                     MemberTrustCommands::Status => {
                         commands::member_trust::status(cli.json, cli.verbose).await
                     }
-                    MemberTrustCommands::Apply {
-                        change,
+                    MemberTrustCommands::Choose {
+                        issue,
+                        choice,
                         confirm_local_removal,
                     } => {
-                        commands::member_trust::decide(
-                            uc_daemon_contract::api::dto::member::DeviceTrustChoiceDto::ApplyChange,
-                            change,
+                        commands::member_trust::choose(
+                            issue,
+                            choice,
                             confirm_local_removal,
-                            cli.json,
-                            cli.verbose,
-                        )
-                        .await
-                    }
-                    MemberTrustCommands::Keep { change } => {
-                        commands::member_trust::decide(
-                            uc_daemon_contract::api::dto::member::DeviceTrustChoiceDto::KeepCurrentDeviceGroup,
-                            change,
-                            false,
                             cli.json,
                             cli.verbose,
                         )
@@ -673,7 +779,7 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::{
         commands, Cli, Commands, JoinCommands, MemberCommands, MemberSyncCommands,
-        MemberTrustCommands,
+        MemberTrustCommands, SpaceCommands,
     };
     use clap::{CommandFactory, Parser};
 
@@ -682,6 +788,25 @@ mod tests {
         let command = Cli::command();
 
         assert_eq!(command.get_name(), "uniclip");
+    }
+
+    #[test]
+    fn detailed_capture_commands_parse_with_bounded_minutes() {
+        let started =
+            Cli::try_parse_from(["uniclip", "debug", "capture", "start", "--minutes", "15"])
+                .expect("capture start must parse");
+        assert!(matches!(
+            started.command,
+            Some(Commands::Debug {
+                subcommand: commands::debug::DebugCommands::Capture {
+                    command: commands::debug::CaptureCommands::Start { minutes: 15 }
+                }
+            })
+        ));
+
+        let invalid =
+            Cli::try_parse_from(["uniclip", "debug", "capture", "start", "--minutes", "16"]);
+        assert!(invalid.is_err());
     }
 
     #[test]
@@ -714,6 +839,129 @@ mod tests {
             result.is_err(),
             "switch-space is merged into `join`; the standalone command must be gone"
         );
+    }
+
+    #[test]
+    fn space_status_is_the_canonical_status_command() {
+        let cli =
+            Cli::try_parse_from(["uniclip", "space", "status"]).expect("space status must parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Status
+            })
+        ));
+    }
+
+    #[test]
+    fn legacy_space_commands_remain_parseable() {
+        for args in [
+            vec!["uniclip", "status"],
+            vec!["uniclip", "init"],
+            vec!["uniclip", "invite"],
+            vec!["uniclip", "join"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_ok(),
+                "legacy command should remain parseable"
+            );
+        }
+    }
+
+    #[test]
+    fn space_join_status_and_cancel_are_nested_commands() {
+        let status = Cli::try_parse_from(["uniclip", "space", "join", "status"])
+            .expect("space join status must parse");
+        assert!(matches!(
+            status.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Join {
+                    command: Some(JoinCommands::Status),
+                    ..
+                }
+            })
+        ));
+
+        let cancel = Cli::try_parse_from(["uniclip", "space", "join", "cancel"])
+            .expect("space join cancel must parse");
+        assert!(matches!(
+            cancel.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Join {
+                    command: Some(JoinCommands::Cancel),
+                    ..
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn space_init_and_join_keep_existing_options() {
+        let init = Cli::try_parse_from([
+            "uniclip",
+            "space",
+            "init",
+            "--passphrase",
+            "secret",
+            "--device-name",
+            "laptop",
+        ])
+        .expect("space init options must parse");
+        assert!(matches!(
+            init.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Init {
+                    passphrase: Some(passphrase),
+                    device_name: Some(device_name),
+                }
+            }) if passphrase == "secret" && device_name == "laptop"
+        ));
+
+        let join = Cli::try_parse_from([
+            "uniclip",
+            "space",
+            "join",
+            "--code",
+            "ABCD-1234",
+            "--passphrase",
+            "secret",
+            "--switch",
+            "--yes",
+            "--no-wait",
+        ])
+        .expect("space join options must parse");
+        assert!(matches!(
+            join.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Join {
+                    code: Some(code),
+                    passphrase: Some(passphrase),
+                    switch: true,
+                    yes: true,
+                    no_wait: true,
+                    command: None,
+                    ..
+                }
+            }) if code == "ABCD-1234" && passphrase == "secret"
+        ));
+    }
+
+    #[test]
+    fn space_reset_requires_explicit_confirmation() {
+        assert!(
+            Cli::try_parse_from(["uniclip", "space", "reset"]).is_err(),
+            "space reset must reject an unconfirmed rebuild"
+        );
+
+        let reset = Cli::try_parse_from(["uniclip", "space", "reset", "--yes"])
+            .expect("confirmed space reset must parse");
+        assert!(matches!(
+            reset.command,
+            Some(Commands::Space {
+                command: SpaceCommands::Reset { yes: true }
+            })
+        ));
     }
 
     #[test]
@@ -833,27 +1081,32 @@ mod tests {
             })
         ));
 
-        let apply = Cli::try_parse_from([
+        let choose = Cli::try_parse_from([
             "uniclip",
             "member",
             "trust",
+            "choose",
+            "--issue",
+            "p:issue-1",
+            "--choice",
             "apply",
-            "--change",
-            "change-1",
             "--confirm-local-removal",
         ])
-        .expect("member trust apply flags must parse");
+        .expect("member trust choose flags must parse");
         assert!(matches!(
-            apply.command,
+            choose.command,
             Some(Commands::Member {
                 command: MemberCommands::Trust {
-                    command: MemberTrustCommands::Apply {
-                        change: Some(_),
+                    command: MemberTrustCommands::Choose {
+                        issue: Some(_),
+                        choice: Some(_),
                         confirm_local_removal: true,
                     }
                 }
             })
         ));
+
+        assert!(Cli::try_parse_from(["uniclip", "member", "trust", "apply"]).is_err());
     }
 
     #[test]
@@ -1130,10 +1383,9 @@ mod tests {
     }
 
     #[test]
-    fn member_removal_status_parses() {
-        // `member removal-status` 无参数即可查询空间级移除状态。
-        let ok = Cli::try_parse_from(["uniclip", "member", "removal-status"]);
-        assert!(ok.is_ok(), "expected `member removal-status` to parse");
+    fn retired_member_removal_status_is_rejected() {
+        let result = Cli::try_parse_from(["uniclip", "member", "removal-status"]);
+        assert!(result.is_err(), "retired removal status must not parse");
     }
 
     #[test]

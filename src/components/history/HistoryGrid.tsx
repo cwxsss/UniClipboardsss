@@ -2,8 +2,11 @@ import { Loader2, Search } from 'lucide-react'
 import React from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type StateSnapshot, type VirtuosoHandle } from 'react-virtuoso'
+import { HistoryScroller, HistoryList } from '@/components/history/history-scroll-components'
 import HistoryGridRow from '@/components/history/HistoryGridRow'
 import type { DisplayClipboardItem } from '@/lib/clipboard-entry'
+
+const historyScrollComponents = { Scroller: HistoryScroller, List: HistoryList }
 
 interface HistoryGridProps {
   items: DisplayClipboardItem[]
@@ -60,11 +63,11 @@ const HistoryGrid: React.FC<HistoryGridProps> = ({
   const { t } = useTranslation()
 
   return (
-    <div className="no-scrollbar flex-1 min-h-0 overflow-y-auto">
+    <div className="flex-1 min-h-0 overflow-hidden">
       {searchLoading && items.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3 pb-10">
           <Loader2 className="size-5 text-muted-foreground/40 animate-spin" />
-          <p className="text-[12px] text-muted-foreground/50">{t('clipboard.search.searching')}</p>
+          <p className="text-ui-body text-muted-foreground/50">{t('clipboard.search.searching')}</p>
         </div>
       ) : items.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3 pb-10">
@@ -74,19 +77,19 @@ const HistoryGrid: React.FC<HistoryGridProps> = ({
           <div className="text-center space-y-1">
             {isSearchActive ? (
               <>
-                <p className="text-[13px] font-medium">
+                <p className="text-ui-section">
                   {submittedQuery.trim()
                     ? t('clipboard.search.noResults', { query: submittedQuery })
                     : t('clipboard.search.noResultsFiltered')}
                 </p>
-                <p className="text-[12px] text-muted-foreground/50">
+                <p className="text-ui-body text-muted-foreground/50">
                   {t('clipboard.search.noResultsSub')}
                 </p>
               </>
             ) : (
               <>
-                <p className="text-[13px] font-medium">{t('clipboard.content.noClipboardItems')}</p>
-                <p className="text-[12px] text-muted-foreground/70">
+                <p className="text-ui-section">{t('clipboard.content.noClipboardItems')}</p>
+                <p className="text-ui-body text-muted-foreground/70">
                   {t('clipboard.content.emptyDescription')}
                 </p>
               </>
@@ -96,9 +99,10 @@ const HistoryGrid: React.FC<HistoryGridProps> = ({
       ) : (
         <Virtuoso
           ref={listRef}
+          components={historyScrollComponents}
           data={items}
           style={{ height: '100%' }}
-          className="no-scrollbar flex-1 min-h-0"
+          className="flex-1 min-h-0"
           computeItemKey={(_index, item) => item.id}
           restoreStateFrom={restoreStateFrom ?? undefined}
           increaseViewportBy={{ top: 240, bottom: 480 }}

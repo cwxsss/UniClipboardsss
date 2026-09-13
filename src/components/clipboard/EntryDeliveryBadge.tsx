@@ -38,13 +38,10 @@ import type {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useResendAction, type UseResendActionResult } from '@/hooks/useResendAction'
-import type { ClipboardEntryType } from '@/lib/clipboard-entry'
 import { cn } from '@/lib/utils'
 
 interface EntryDeliveryBadgeProps {
   delivery: EntryDeliveryView | null
-  /** Media is resent only to an explicitly selected peer. */
-  entryType?: ClipboardEntryType
 }
 
 type SyncSummary =
@@ -114,10 +111,7 @@ function summarize(targets: readonly EntryDeliveryTargetView[]): SyncSummary | n
   return 'pending'
 }
 
-const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({
-  delivery,
-  entryType = 'text',
-}) => {
+const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({ delivery }) => {
   const { t } = useTranslation()
   // Resend 触发器与 toast 副作用; remote/historical 视图层据 `resendable`
   // 隐藏 UI,后端再做最终守护(返回 ENTRY_NOT_RESENDABLE.remoteOrigin)。
@@ -131,7 +125,6 @@ const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({
   // 看出这条从哪里来"的设计目标。
   const summary = source.tag === 'historical' ? null : summarize(deliveries)
   const resendable = source.tag === 'local'
-  const explicitTargetOnly = entryType === 'image' || entryType === 'file'
 
   return (
     <TooltipProvider delay={150}>
@@ -144,7 +137,6 @@ const EntryDeliveryBadge: React.FC<EntryDeliveryBadgeProps> = ({
             t={t}
             entryId={entryId}
             resendable={resendable}
-            broadcastAllowed={!explicitTargetOnly}
             resendAction={resendAction}
           />
         )}
@@ -197,7 +189,7 @@ const SourceBadge: React.FC<SourceBadgeProps> = ({ source }) => {
         }
       >
         <Icon className={cn('size-3.5 transition-colors group-hover:text-foreground/80', tone)} />
-        <span className="text-[11px] font-semibold tabular-nums text-muted-foreground/60 transition-colors group-hover:text-foreground/80">
+        <span className="text-ui-caption font-semibold tabular-nums text-muted-foreground/60 transition-colors group-hover:text-foreground/80">
           {label}
         </span>
       </TooltipTrigger>
@@ -216,8 +208,6 @@ interface SyncBadgeProps {
    * remote / historical 不渲染任何 resend UI,避免误导用户。
    */
   resendable: boolean
-  /** Text can use the diff-set fan-out; media must name a target device. */
-  broadcastAllowed: boolean
   resendAction: UseResendActionResult
 }
 
@@ -227,7 +217,6 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
   t,
   entryId,
   resendable,
-  broadcastAllowed,
   resendAction,
 }) => {
   const { Icon, label, tone, spin } = useMemo(() => {
@@ -302,7 +291,7 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
         <Icon className={cn('size-3.5 transition-colors', tone, spin && 'animate-spin')} />
         <span
           className={cn(
-            'text-[11px] font-semibold tabular-nums transition-colors',
+            'text-ui-caption font-semibold tabular-nums transition-colors',
             tone,
             'opacity-80 group-hover:opacity-100'
           )}
@@ -318,7 +307,7 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
         data-delivery-popover=""
       >
         <div className="mb-1 flex items-center justify-between gap-2 px-1">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+          <span className="text-ui-caption font-medium uppercase text-muted-foreground/80">
             {t('delivery.popover.title')}
           </span>
           {resendable && (
@@ -327,7 +316,6 @@ const SyncBadge: React.FC<SyncBadgeProps> = ({
               entryId={entryId}
               action={resendAction}
               t={t}
-              broadcastAllowed={broadcastAllowed}
             />
           )}
         </div>
@@ -367,10 +355,7 @@ const DeliveryRow: React.FC<DeliveryRowProps> = ({ target, resendable, entryId, 
       target.status.tag === 'pending')
 
   return (
-    <li
-      className="flex items-center gap-2 p-1 text-[11px] leading-tight"
-      data-status={target.status.tag}
-    >
+    <li className="flex items-center gap-2 p-1 text-ui-caption" data-status={target.status.tag}>
       <span className={cn('shrink-0', tone.icon)} aria-hidden>
         <StatusIcon status={target.status} />
       </span>
@@ -400,7 +385,6 @@ interface ResendEntryButtonProps {
   entryId: string
   action: UseResendActionResult
   t: (key: string, opts?: Record<string, unknown>) => string
-  broadcastAllowed: boolean
 }
 
 /** entry-level "Resend" —— 仅当有至少一条非 Delivered / 非 Duplicate 时启用。 */
@@ -409,9 +393,7 @@ const ResendEntryButton: React.FC<ResendEntryButtonProps> = ({
   entryId,
   action,
   t,
-  broadcastAllowed,
 }) => {
-  if (!broadcastAllowed) return null
   // 所有可信 peer 都已成功 (Delivered/Duplicate) 时 disable,避免误触
   // 触发 `NoEligibleTargets`。
   const eligible = deliveries.some(
@@ -434,7 +416,7 @@ const ResendEntryButton: React.FC<ResendEntryButtonProps> = ({
       onClick={() => void action.resendAll(entryId)}
       data-resend-entry=""
       className={cn(
-        'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
+        'inline-flex items-center gap-1 rounded px-2 py-0.5 text-ui-body font-medium transition-colors',
         disabled
           ? 'cursor-default text-muted-foreground/40'
           : 'text-sky-600 hover:bg-sky-500/10 dark:text-sky-400'

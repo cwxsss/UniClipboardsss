@@ -21,9 +21,14 @@ use axum::response::Response;
 use axum::Router;
 use tokio::sync::{broadcast, Semaphore};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use uc_daemon_contract::api::dto::diagnostics::{
+    DiagnosticCaptureStartRequestDto, DiagnosticCaptureStopResultDto,
+    DiagnosticExportPreparationDto, DiagnosticStatusDto, LogExportResultDto,
+};
 use uc_engine::{
-    DeviceMembershipSummary, Engine, HostFileHandle, NetworkRecoveryPhaseSummary,
-    NetworkRecoveryStatusSummary, Operation, OperationResult, PeerConnectionChannelSummary,
+    Engine, HostFileHandle, NetworkRecoveryPhaseSummary, NetworkRecoveryStatusSummary, Operation,
+    OperationResult, PeerConnectionChannelSummary,
 };
 use uc_observability::analytics::{AnalyticsPort, NoopAnalyticsSink};
 use utoipa::OpenApi;
@@ -60,9 +65,12 @@ fn network_recovery_status_response(
 
 #[derive(Clone)]
 pub struct DaemonApiState {
+    pub startup_ready: Option<Arc<AtomicBool>>,
     pub auth_token: DaemonAuthToken,
     pub engine: Arc<Engine>,
     pub file_handles: Arc<dyn DaemonFileHandles>,
+    pub diagnostics_runtime: Option<Arc<dyn DaemonDiagnosticsRuntime>>,
+    pub diagnostic_archive: Option<Arc<dyn DaemonDiagnosticArchive>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     pub started_at: Instant,
     /// Gate controlling clipboard capture in the daemon.
@@ -143,9 +151,12 @@ impl DaemonApiState {
         // both so a coordinator `request()`/`abort()` is observed by every gate.
         let quiescing = Arc::new(AtomicBool::new(false));
         Self {
+            startup_ready: None,
             auth_token,
             engine,
             file_handles,
+            diagnostics_runtime: None,
+            diagnostic_archive: None,
             event_tx,
             started_at: Instant::now(),
             clipboard_capture_gate: None,
@@ -181,36 +192,21 @@ impl DaemonApiState {
         self
     }
 
+    pub fn with_diagnostics(
+        mut self,
+        runtime: Arc<dyn DaemonDiagnosticsRuntime>,
+        archive: Arc<dyn DaemonDiagnosticArchive>,
+    ) -> Self {
+        self.diagnostics_runtime = Some(runtime);
+        self.diagnostic_archive = Some(archive);
+        self
+    }
+
     pub async fn execute(
         &self,
         operation: Operation,
     ) -> Result<OperationResult, uc_engine::EngineError> {
         self.engine.execute(operation).await
-    }
-
-    async fn peer_connections_or_empty_after_local_removal(
-        &self,
-    ) -> anyhow::Result<OperationResult> {
-        match self.execute(Operation::QueryPeerConnections).await {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                let local_device_removed = matches!(
-                    self.execute(Operation::QueryDeviceTrust).await,
-                    Ok(OperationResult::DeviceTrust(snapshot))
-                        if local_device_removal_allows_empty_peer_projection(
-                            snapshot.local_membership
-                        )
-                );
-                if local_device_removed {
-                    tracing::warn!(
-                        error_code = error.code(),
-                        "returning an empty peer projection because the local device was removed"
-                    );
-                    return Ok(OperationResult::PeerConnections(Vec::new()));
-                }
-                Err(error.into())
-            }
-        }
     }
 
     pub async fn health_response(&self) -> HealthResponse {
@@ -266,7 +262,7 @@ impl DaemonApiState {
     }
 
     pub async fn peer_snapshots(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
-        let result = self.peer_connections_or_empty_after_local_removal().await?;
+        let result = self.execute(Operation::QueryPeerConnections).await?;
         let OperationResult::PeerConnections(peers) = result else {
             anyhow::bail!("engine returned an unexpected peer connection result");
         };
@@ -292,6 +288,25 @@ impl DaemonApiState {
     /// peer 都重新发起一次 iroh 拨号——在线 peer 拨号成功后丢弃新连接保留
     /// 旧的；离线 peer 拨号失败会立刻 `broadcast(Offline)`，进而触发
     /// `peers.changed` 推送、前端重拉 `/paired-devices`、UI 切灰。
+    pub async fn notify_connectivity_opportunity(
+        &self,
+        reason: uc_daemon_contract::api::dto::device::ConnectivityOpportunity,
+    ) -> anyhow::Result<()> {
+        use uc_daemon_contract::api::dto::device::ConnectivityOpportunity as Reason;
+        let reason = match reason {
+            Reason::Foreground => uc_engine::ConnectivityOpportunity::Foreground,
+            Reason::SystemWake => uc_engine::ConnectivityOpportunity::SystemWake,
+            Reason::NetworkChanged => uc_engine::ConnectivityOpportunity::NetworkChanged,
+        };
+        match self
+            .execute(Operation::NotifyConnectivityOpportunity { reason })
+            .await?
+        {
+            OperationResult::ConnectivityOpportunityAccepted => Ok(()),
+            _ => anyhow::bail!("engine returned an unexpected connectivity result"),
+        }
+    }
+
     pub async fn refresh_presence(&self) -> anyhow::Result<PresenceRefreshResponse> {
         let result = self.execute(Operation::RefreshPeerConnections).await?;
         let OperationResult::PeerConnectionsRefreshed(report) = result else {
@@ -335,7 +350,7 @@ impl DaemonApiState {
         // 反映 IrohPresenceAdapter 中由 ensure_reachable / connection.closed()
         // 维护的 last_state 缓存。list_members() 不查 PresencePort，所以
         // 拿不到 connected。同时 list_peer_snapshots() 已过滤本机。
-        let result = self.peer_connections_or_empty_after_local_removal().await?;
+        let result = self.execute(Operation::QueryPeerConnections).await?;
         let OperationResult::PeerConnections(snapshots) = result else {
             anyhow::bail!("engine returned an unexpected peer connection result");
         };
@@ -377,14 +392,38 @@ impl DaemonApiState {
     }
 }
 
-fn local_device_removal_allows_empty_peer_projection(membership: DeviceMembershipSummary) -> bool {
-    matches!(membership, DeviceMembershipSummary::Removed)
-}
-
 pub trait DaemonFileHandles: Send + Sync {
     fn register_input(&self, path: &Path) -> anyhow::Result<HostFileHandle>;
     fn register_output(&self, path: &Path) -> anyhow::Result<HostFileHandle>;
-    fn register_diagnostic_output(&self) -> anyhow::Result<(HostFileHandle, String)>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonDiagnosticError {
+    InvalidInput,
+    Unavailable,
+    AlreadyShutdown,
+}
+
+pub trait DaemonDiagnosticsRuntime: Send + Sync {
+    fn status(&self) -> Result<DiagnosticStatusDto, DaemonDiagnosticError>;
+    fn start(
+        &self,
+        request: DiagnosticCaptureStartRequestDto,
+    ) -> Result<DiagnosticStatusDto, DaemonDiagnosticError>;
+    fn stop(
+        &self,
+        capture_id: &str,
+    ) -> Result<DiagnosticCaptureStopResultDto, DaemonDiagnosticError>;
+    fn prepare_export(&self) -> Result<DiagnosticExportPreparationDto, DaemonDiagnosticError>;
+}
+
+#[async_trait::async_trait]
+pub trait DaemonDiagnosticArchive: Send + Sync {
+    async fn export(
+        &self,
+        since_hours: Option<u32>,
+        engine_preparation: DiagnosticExportPreparationDto,
+    ) -> anyhow::Result<LogExportResultDto>;
 }
 
 fn peer_channel_to_wire(channel: PeerConnectionChannelSummary) -> &'static str {
@@ -409,14 +448,6 @@ pub(crate) fn ensure_not_quiescing(quiescing: &AtomicBool) -> Result<(), ApiErro
 }
 
 pub fn build_router(state: DaemonApiState) -> Router {
-    build_router_with_extra_l2(state, Router::new())
-}
-
-/// Build the daemon router with extension routes protected as L2 endpoints.
-pub fn build_router_with_extra_l2(
-    state: DaemonApiState,
-    extra_l2: Router<DaemonApiState>,
-) -> Router {
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
 
     #[cfg(debug_assertions)]
@@ -428,7 +459,7 @@ pub fn build_router_with_extra_l2(
     Router::new()
         .merge(swagger)
         .merge(routes::router_l1(state.clone()))
-        .merge(routes::router_l2_plus_with_extra(state.clone(), extra_l2))
+        .merge(routes::router_l2_plus(state.clone()))
         .merge(crate::security::connect::router())
         .merge(ws::router())
         .layer(middleware::from_fn(cors_middleware))
@@ -450,86 +481,77 @@ pub(crate) async fn request_tracing_middleware(request: Request<Body>, next: Nex
     let query_redacted = redact_query_secrets(request.uri().query());
     let request_id = format!("{:016x}", rand::random::<u64>());
     let start = Instant::now();
+    let span = tracing::info_span!(
+        "daemon.http.request",
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        query = %query_redacted,
+    );
 
-    if method == Method::OPTIONS {
-        tracing::debug!(
-            request_id = %request_id,
-            method = %method,
-            path = %path,
-            query = %query_redacted,
-            "daemon http preflight received"
-        );
-    } else {
-        tracing::info!(
-            request_id = %request_id,
-            method = %method,
-            path = %path,
-            query = %query_redacted,
-            "daemon http request received"
-        );
-    }
+    async move {
+        if method == Method::OPTIONS {
+            tracing::debug!("daemon http preflight received");
+        } else {
+            tracing::info!("daemon http request received");
+        }
 
-    let response = next.run(request).await;
-    let status = response.status();
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+        let response = next.run(request).await;
+        let status = response.status();
+        let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    let level_action = if status.is_server_error() {
-        "server_error"
-    } else if status.is_client_error() {
-        "client_error"
-    } else {
-        "ok"
-    };
+        let level_action = if status.is_server_error() {
+            "server_error"
+        } else if status.is_client_error() {
+            "client_error"
+        } else {
+            "ok"
+        };
 
-    match level_action {
-        // Access-log echo only — root cause lives in the handler that mapped
-        // the facade error to ApiError, not here. Earlier UNICLIPBOARD-RUST-5
-        // tried to fingerprint 5xx by status code, but a per-status static
-        // template ("daemon http upstream unavailable" etc.) is just a reskin
-        // of the HTTP status — it carries no signal beyond `status` itself
-        // and crowds out the real ERROR emitted upstream. Keep this at WARN
-        // so the Log channel still has a query handle for 5xx rate, but stop
-        // creating Sentry Issues from a layer that doesn't know the cause.
-        "server_error" => tracing::warn!(
-            request_id = %request_id,
-            method = %method,
-            path = %path,
-            status = status.as_u16(),
-            elapsed_ms,
-            "daemon http response 5xx"
-        ),
-        "client_error" => tracing::info!(
-            request_id = %request_id,
-            method = %method,
-            path = %path,
-            status = status.as_u16(),
-            elapsed_ms,
-            "daemon http request rejected (client error)"
-        ),
-        _ => {
-            if method == Method::OPTIONS {
-                tracing::debug!(
-                    request_id = %request_id,
-                    method = %method,
-                    path = %path,
-                    status = status.as_u16(),
-                    elapsed_ms,
-                    "daemon http preflight completed"
-                );
-            } else {
-                tracing::info!(
-                    request_id = %request_id,
-                    method = %method,
-                    path = %path,
-                    status = status.as_u16(),
-                    elapsed_ms,
-                    "daemon http request completed"
-                );
+        match level_action {
+            // Access-log echo only — root cause lives in the handler that mapped
+            // the facade error to ApiError, not here. Earlier UNICLIPBOARD-RUST-5
+            // tried to fingerprint 5xx by status code, but a per-status static
+            // template ("daemon http upstream unavailable" etc.) is just a reskin
+            // of the HTTP status — it carries no signal beyond `status` itself
+            // and crowds out the real ERROR emitted upstream. Keep this at WARN
+            // so the Log channel still has a query handle for 5xx rate, but stop
+            // creating Sentry Issues from a layer that doesn't know the cause.
+            "server_error" => tracing::warn!(
+                status = status.as_u16(),
+                elapsed_ms,
+                outcome = "server_error",
+                "daemon http response 5xx"
+            ),
+            "client_error" => tracing::info!(
+                status = status.as_u16(),
+                elapsed_ms,
+                outcome = "client_error",
+                "daemon http request rejected (client error)"
+            ),
+            _ => {
+                if method == Method::OPTIONS {
+                    tracing::debug!(
+                        status = status.as_u16(),
+                        elapsed_ms,
+                        outcome = "ok",
+                        "daemon http preflight completed"
+                    );
+                } else {
+                    tracing::info!(
+                        status = status.as_u16(),
+                        elapsed_ms,
+                        outcome = "ok",
+                        "daemon http request completed"
+                    );
+                }
             }
         }
-    }
 
-    response
+        response
+    }
+    .instrument(span)
+    .await
 }
 
 /// Redact every query value before logging. Query parameters can carry both
@@ -630,9 +652,50 @@ fn is_allowed_cors_origin(origin: &str) -> bool {
 
 #[cfg(test)]
 mod request_log_redaction_tests {
-    use axum::http::Uri;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
 
-    use super::{redact_query_secrets, sanitize_uri_for_log};
+    use axum::body::Body;
+    use axum::http::Uri;
+    use axum::http::{Request, StatusCode};
+    use axum::middleware;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    use super::{redact_query_secrets, request_tracing_middleware, sanitize_uri_for_log};
+
+    #[derive(Clone, Default)]
+    struct CapturedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured writer lock")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedWriter {
+        type Writer = CapturedWriter;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl CapturedWriter {
+        fn output(&self) -> String {
+            String::from_utf8(self.0.lock().expect("captured writer lock").clone())
+                .expect("captured events should be UTF-8")
+        }
+    }
 
     #[test]
     fn redacts_all_query_values() {
@@ -677,20 +740,61 @@ mod request_log_redaction_tests {
             "/settings/relay-credential?url=<redacted>&safe=<redacted>"
         );
     }
+
+    #[test]
+    fn request_span_carries_request_id_into_handler_events() {
+        let writer = CapturedWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            runtime.block_on(async {
+                let router = Router::new()
+                    .route(
+                        "/correlation-test",
+                        get(|| async {
+                            tracing::info!(outcome = "ok", "correlated handler event");
+                            StatusCode::OK
+                        }),
+                    )
+                    .layer(middleware::from_fn(request_tracing_middleware));
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .uri("/correlation-test")
+                            .body(Body::empty())
+                            .expect("test request"),
+                    )
+                    .await
+                    .expect("test response");
+                assert_eq!(response.status(), StatusCode::OK);
+            });
+        });
+
+        let output = writer.output();
+        let handler_event = output
+            .lines()
+            .find(|line| line.contains("correlated handler event"))
+            .expect("handler event should be captured");
+        assert!(handler_event.contains("request_id="), "{handler_event}");
+        assert!(
+            handler_event.contains("path=/correlation-test"),
+            "{handler_event}"
+        );
+    }
 }
 
 pub async fn run_http_server(
     state: DaemonApiState,
     cancel: CancellationToken,
-) -> anyhow::Result<()> {
-    run_http_server_with_extra_l2(state, cancel, Router::new()).await
-}
-
-/// Run the HTTP server with daemon-owned routes inside the normal L2 boundary.
-pub async fn run_http_server_with_extra_l2(
-    state: DaemonApiState,
-    cancel: CancellationToken,
-    extra_l2: Router<DaemonApiState>,
 ) -> anyhow::Result<()> {
     // ADR-011: bind an ephemeral loopback port — the kernel picks a free one,
     // so no fixed port can ever collide with unrelated local services. The
@@ -714,6 +818,9 @@ pub async fn run_http_server_with_extra_l2(
     );
     uc_daemon_local::socket::write_daemon_conn_file(&conn)
         .context("failed to publish daemon connection file")?;
+    if let Some(ready) = &state.startup_ready {
+        ready.store(true, Ordering::Release);
+    }
     tracing::info!(
         base_url = %connection_info.base_url,
         ws_url = %connection_info.ws_url,
@@ -726,8 +833,7 @@ pub async fn run_http_server_with_extra_l2(
     // the socket address will be a default value (127.0.0.1:0) since there's no real
     // TCP connection. The SlidingWindowRateLimiter unit tests cover rate limiting logic
     // independently. IP-based rate limiting works correctly in production.
-    let make_service = build_router_with_extra_l2(state, extra_l2)
-        .into_make_service_with_connect_info::<SocketAddr>();
+    let make_service = build_router(state).into_make_service_with_connect_info::<SocketAddr>();
 
     axum::serve(listener, make_service)
         .with_graceful_shutdown(cancel.cancelled_owned())
@@ -786,26 +892,5 @@ mod quiescing_gate_tests {
         let err = ensure_not_quiescing(&quiescing).expect_err("must reject while quiescing");
         assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(err.code, "daemon_restarting");
-    }
-}
-
-#[cfg(test)]
-mod removed_local_peer_projection_tests {
-    use super::*;
-
-    #[test]
-    fn only_removed_local_membership_allows_an_empty_peer_projection() {
-        assert!(local_device_removal_allows_empty_peer_projection(
-            uc_engine::DeviceMembershipSummary::Removed
-        ));
-        assert!(!local_device_removal_allows_empty_peer_projection(
-            uc_engine::DeviceMembershipSummary::Active
-        ));
-        assert!(!local_device_removal_allows_empty_peer_projection(
-            uc_engine::DeviceMembershipSummary::Unavailable
-        ));
-        assert!(!local_device_removal_allows_empty_peer_projection(
-            uc_engine::DeviceMembershipSummary::Unknown
-        ));
     }
 }

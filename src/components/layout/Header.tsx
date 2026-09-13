@@ -49,7 +49,7 @@ const Header: React.FC<HeaderProps> = ({ onFilterChange, className }) => {
 
       <div data-tauri-drag-region className="relative z-10">
         {/* Filter Buttons */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-2 -mx-6 px-6 mask-linear-fade">
+        <div className="-mx-6 flex items-center gap-2 overflow-x-auto px-6 py-2 mask-linear-fade">
           {filterTypes.map(filter => {
             const Icon = filter.icon
             const isActive = activeFilter === filter.id
@@ -60,7 +60,7 @@ const Header: React.FC<HeaderProps> = ({ onFilterChange, className }) => {
                 key={filter.id}
                 onClick={() => handleFilterClick(filter.id)}
                 className={cn(
-                  'relative group flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-300 outline-none select-none',
+                  'relative group flex items-center gap-2 px-3.5 py-2 rounded-lg text-ui-body font-medium whitespace-nowrap transition-all duration-300 outline-none select-none',
                   isActive
                     ? 'text-primary-foreground'
                     : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'

@@ -13,7 +13,6 @@ import { useShortcutScope } from '@/hooks/useShortcutScope'
 import { useTransferProgress } from '@/hooks/useTransferProgress'
 import type { DisplayClipboardItem } from '@/lib/clipboard-entry'
 import { createLogger } from '@/lib/logger'
-import { SHORTCUT_DEFINITIONS } from '@/shortcuts/definitions'
 import { useAppDispatch } from '@/store/hooks'
 import { copyToClipboard, removeClipboardItem } from '@/store/slices/clipboardSlice'
 import { fetchSpaceMembers } from '@/store/slices/devicesSlice'
@@ -220,7 +219,7 @@ export function useHistoryController() {
   })
 
   useShortcut({
-    key: SHORTCUT_DEFINITIONS.find(def => def.id === 'clipboard.favorite')?.key ?? '',
+    key: 'f',
     id: 'clipboard.favorite',
     scope: 'clipboard',
     enabled: selectedItem !== null,

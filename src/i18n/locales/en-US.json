@@ -1,5 +1,108 @@
 {
+  "startupFailure": {
+    "unavailable": "Startup interrupted",
+    "title": "Unable to start right now",
+    "description": "The background service could not be reached. The app is temporarily unavailable.",
+    "updateTitle": "An app update is needed",
+    "updateDescription": "A newer version is running in the background. Update this app to continue.",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "export": "Export logs",
+    "exporting": "Exporting…",
+    "contact": "Contact author",
+    "update": "Open updater",
+    "details": "Error details",
+    "exported": "Logs saved to: {{path}}",
+    "exportFailed": "Could not export logs. Check the save location and available space, then try again.",
+    "contactFailed": "Could not open the support page. Contact address:",
+    "updateFailed": "Could not complete the update check. Please try again later.",
+    "contactOpened": "The support page is open in your browser."
+  },
+  "appearanceLayout": {
+    "effectsHelp": "Balance visual effects and performance.",
+    "scaleHelp": "Adjust the size of text and interface elements.",
+    "themeHelp": {
+      "system": "Automatically switch between light and dark with your system.",
+      "light": "Always use a light appearance.",
+      "dark": "Always use a dark appearance."
+    },
+    "lightPalette": "Light colors",
+    "darkPalette": "Dark colors",
+    "theme": "Theme",
+    "palette": "Colors",
+    "effects": "Visual effects",
+    "display": "Display",
+    "customColors": "Custom colors",
+    "preview": "Current theme preview",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "saveFailed": "Could not save the change. Please try again."
+  },
+  "smoothMode": {
+    "title": "Smooth Mode",
+    "auto": "Auto",
+    "effects": "Effects first",
+    "smooth": "Smooth first",
+    "currentSmooth": "Currently using reduced effects",
+    "currentEffects": "Currently prioritizing effects",
+    "notSaved": "Applied for this session, but could not save. Restarting may restore the previous choice.",
+    "unavailable": "Unable to read or save appearance preferences. Please try again.",
+    "reason": {
+      "manual": "Using your selection.",
+      "system": "Respecting reduced motion, including when the system preference is unavailable.",
+      "platform_default": "Auto uses reduced effects on Linux.",
+      "hardware": "Selected for this device.",
+      "unknown": "Device capability is unconfirmed; using reduced effects.",
+      "runtime": "Selected from previous runtime performance."
+    }
+  },
   "deviceTrust": {
+    "presentation": {
+      "localRemovalTitle": "{{actor}} wants to remove this device",
+      "leave": "Leave the device group",
+      "keep": "Keep existing devices",
+      "leaveEffect": "Stop syncing with all devices.",
+      "keepEffect": "Keep existing devices. Sync with {{names}} will pause.",
+      "showDevices": "View devices",
+      "hideDevices": "Hide devices",
+      "scope": "Expected sync scope: {{names}}.",
+      "title": "Choose a device group for {{name}}",
+      "local": "This device: {{name}}",
+      "localMember": "{{name}} (this device)",
+      "unnamed": "Unnamed device",
+      "members": "Group members",
+      "membersUnknown": "Member details are incomplete",
+      "impactUnknown": "Details about this choice's effects are incomplete.",
+      "detailsIncomplete": "Some change details are unavailable.",
+      "paused": "Sync with {{names}} will pause.",
+      "rejoin": "{{names}} must join again to sync within the selected group.",
+      "waiting": "Waiting for {{names}} to confirm.",
+      "removed": "{{actor}} proposed removing {{target}}.",
+      "added": "{{actor}} added {{target}}.",
+      "accepted": "{{actor}} accepted removing {{target}}.",
+      "rejected": "{{actor}} rejected removing {{target}}.",
+      "reason": {
+        "unknown": "The device groups differ. There is not enough information to explain why.",
+        "pending_removal": "A device removal needs your decision.",
+        "different_removals": "The two sides removed different devices.",
+        "removal_decision_disagreement": "The two sides made different decisions about the same removal.",
+        "diverged_history": "The two sides recorded different device group changes."
+      },
+      "select": "Choose a device group",
+      "back": "Back to choices",
+      "retry": "Check again",
+      "processing": "Submitting your choice",
+      "checking": "Checking the result",
+      "pending": "Your choice was received and is still being processed.",
+      "completed": "Device group updated",
+      "next": "Continue",
+      "done": "Done",
+      "more": "The previous choice is complete. {{count}} more need your decision.",
+      "uncertain": "The result could not be confirmed. Please check again.",
+      "changed": "The choices changed. Please review them again.",
+      "loading": "Checking device relationships",
+      "loadFailed": "Device relationships could not be loaded. Please retry."
+    },
     "listSeparator": ", ",
     "notification": {
       "title": "Review device relationship",
@@ -10,15 +113,22 @@
       "title": "Choose which devices to keep syncing with",
       "summary": "{{proposer}} wants to remove {{targets}}",
       "localSummary": "{{proposer}} wants to remove this device",
+      "groupConflictSummary": "These devices report different groups. Choose which group this device should use.",
+      "issueProgress": "Decision {{current}} of {{total}}",
       "applyTitle": "Accept this removal",
       "keepTitle": "Decline and keep the original devices",
       "leaveTitle": "Leave the device group",
       "stayTitle": "Stay in the current device group",
+      "useGroupTitle": "Use this device group",
       "continueSyncing": "Keep syncing",
       "stopSyncing": "Stop syncing",
       "noDevices": "None",
       "confirmLocalRemoval": "This removes this device from the space and stops syncing here. Confirm again to continue.",
+      "requiresRePairing": "Devices outside this group will need to pair again.",
+      "membersIncomplete": "This group may contain devices that are not shown here.",
       "stateChanged": "The device state changed. The latest situation is now shown.",
+      "choicePending": "Your choice is saved and is still being completed.",
+      "rePairingRequired": "The group changed. Affected devices need to be paired again.",
       "failed": "Your choice could not be saved. Check the background service and try again."
     },
     "actions": {
@@ -38,6 +148,8 @@
     }
   },
   "common": {
+    "notifications": "Notifications",
+    "dismissNotification": "Dismiss toast",
     "loading": "Loading...",
     "unknownSize": "Unknown size",
     "zeroBytes": "0 Bytes"
@@ -121,9 +233,25 @@
   "rePairingNotice": {
     "title": "Re-pair your devices",
     "body": "This version updates the device pairing scheme. Your previous pairings can no longer sync. Please open Devices to invite or re-join the other device.",
-    "goToDevices": "Open device management"
+    "goToDevices": "Open device management",
+    "dontShowAgain": "Don't show again"
   },
   "settings": {
+    "pageDescriptions": {
+      "general": "Configure startup, language, sound, and diagnostics.",
+      "appearance": "Adjust your theme, colors, and display.",
+      "shortcuts": "Customize keyboard shortcuts for common actions.",
+      "quickPanel": "Choose how to open and position the quick panel.",
+      "sync": "Manage clipboard and file synchronization.",
+      "security": "Manage automatic unlocking on this device.",
+      "network": "Configure connections, relay servers, and transfer performance.",
+      "storage": "Check space usage and manage history and caches.",
+      "about": "View the app version, updates, and project information."
+    },
+    "sectionHeadings": {
+      "syncBehavior": "Sync behavior",
+      "historyRetention": "History retention"
+    },
     "title": "Settings",
     "restartBanner": {
       "restartButton": "Restart now",
@@ -151,7 +279,7 @@
         "saveError": "Failed to save setting",
         "deviceName": {
           "label": "Device Name",
-          "description": "Used to identify this device on the local network",
+          "description": "Distinguish this device from your other devices.",
           "placeholder": "Enter device name"
         },
         "autoStart": {
@@ -159,6 +287,11 @@
           "description": "Start UniClipboard when the system boots"
         },
         "startupMode": {
+          "summaries": {
+            "normal": "Show the app window on startup.",
+            "silent": "Run in the background without opening a window.",
+            "lightweight": "On login, keep only background sync running. Reopen the interface when needed."
+          },
           "label": "Startup mode",
           "description": "Silent skips the window and runs straight in the background. Lightweight goes further — once sync is ready it exits the window and tray too, keeping just the background service and sending a notification; click the app icon again to reopen the window.",
           "options": {
@@ -168,8 +301,8 @@
           }
         },
         "restoreLastEntryOnStartup": {
-          "label": "Restore last entry on startup",
-          "description": "Once the background service is ready at launch, put the most recent history entry back on the system clipboard"
+          "label": "Restore clipboard on startup",
+          "description": "Put the most recent history entry back on the clipboard."
         },
         "language": {
           "title": "Language",
@@ -205,6 +338,15 @@
           "button": "Open in file manager"
         },
         "logs": {
+          "capture": {
+            "label": "Capture detailed logs",
+            "tooltip": "About {{minutes}} minutes remaining. You can turn this off manually.",
+            "loading": "Checking log recording status…",
+            "standard": "Record detailed logs temporarily. Stops automatically after 10 minutes.",
+            "active": "Recording detailed logs. Stops automatically in about {{minutes}} minutes.",
+            "unavailable": "Background service diagnostics are unavailable.",
+            "error": "Failed to change detailed capture"
+          },
           "debug": {
             "label": "Debug mode",
             "description": "Increase local diagnostic log detail after the app and daemon are restarted.",
@@ -219,10 +361,12 @@
           },
           "export": {
             "label": "Export logs",
-            "description": "Create a zip archive with GUI, daemon, and CLI logs from the last 24 hours in Downloads.",
+            "description": "Create a ZIP with recent app and Engine diagnostics plus a coverage report in Downloads.",
             "button": "Export logs",
             "exporting": "Exporting...",
             "success": "Logs exported",
+            "offlineSuccess": "The background service was unavailable. Existing logs were exported without a live flush confirmation.",
+            "partialSuccess": "The package was exported with incomplete refresh or file coverage. See its manifest for details.",
             "error": "Failed to export logs",
             "copyPath": "Copy path",
             "copySuccess": "Export path copied",
@@ -274,9 +418,12 @@
           "hexInputLabel": "Hex color value"
         },
         "windowFrame": {
-          "title": "Window appearance",
-          "useSystem": "Use system window frame",
-          "description": "Use the desktop title bar and window buttons, with search returned to the page."
+          "title": "Window title bar",
+          "description": "Automatic hides the title bar on niri and Hyprland. Your selection applies to this device, including during startup.",
+          "auto": "Automatic",
+          "custom": "App title bar",
+          "system": "System title bar",
+          "none": "No title bar"
         },
         "zoom": {
           "title": "Interface Scale",
@@ -386,6 +533,11 @@
         "loadError": "Failed to load settings:"
       },
       "network": {
+        "groups": {
+          "connection": "Connection",
+          "relays": "Relay servers",
+          "performance": "Transfer performance"
+        },
         "loadError": "Failed to load settings:",
         "lanOnly": {
           "label": "LAN-only Mode",
@@ -641,6 +793,7 @@
         "recording": "Press keys...",
         "chordHint": "Press another combo for a second step (press the same combo twice for a \"double tap\"), or confirm",
         "rerecord": "Re-record",
+        "save": "Save",
         "conflict": "Conflicts with: {{name}}",
         "confirmOverride": "Apply anyway (clears conflict)",
         "confirm": "Confirm",
@@ -1089,6 +1242,14 @@
       "pairedCount_other": "{{count}} paired",
       "onlineCount": "{{count}} online"
     },
+    "connectionRefresh": {
+      "action": "Refresh connections",
+      "checking": "Checking connections",
+      "failed": "Refresh failed. Please try again.",
+      "summary": "Checked {{total}} devices: {{online}} online, {{offline}} offline",
+      "errors": "{{count}} could not be checked; connection status is unconfirmed",
+      "listFailed": "Connection check complete. Could not update the device list. Please try again."
+    },
     "pairedDevices": {
       "title": "Paired devices"
     },
@@ -1112,7 +1273,18 @@
       "subtitle": "Enter this code on the computer or phone you're adding",
       "expiresIn": "Expires in {{remaining}}",
       "expired": "Invitation expired",
-      "qrAlt": "QR code containing the invitation code",
+      "passphraseHint": "The joining device also needs the space passphrase to finish pairing",
+      "rePairing": {
+        "title": "Confirm your space passphrase",
+        "subtitle": "This is required once after upgrading an older profile",
+        "description": "Your history is safe. Confirm the original space passphrase before creating a new invitation.",
+        "passphraseLabel": "Space passphrase",
+        "passphrasePlaceholder": "Enter the original passphrase",
+        "submit": "Confirm and generate code",
+        "submitting": "Checking passphrase…",
+        "wrongPassphrase": "That passphrase is incorrect.",
+        "failed": "The passphrase could not be confirmed. Please try again."
+      },
       "loading": "Generating invitation code…",
       "actions": {
         "cancel": "Cancel",
@@ -1491,6 +1663,21 @@
       }
     },
     "panel": {
+      "danger": {
+        "title": "Danger zone",
+        "description": "Keep local history and clear this device’s pairings.",
+        "reset": "Rebuild space",
+        "failed": "Could not rebuild the space. Try again or restart the app.",
+        "modal": {
+          "title": "Rebuild space",
+          "warning": "Create a new space containing only this device. Local history and settings are kept. Old space memberships, security state, and pending invitations are cleared. Pair other devices again to sync.",
+          "confirmPrompt": "Type RESET to confirm",
+          "confirmPlaceholder": "RESET",
+          "confirm": "Rebuild space",
+          "resetting": "Rebuilding...",
+          "cancel": "Cancel"
+        }
+      },
       "listTitle": "Devices",
       "counts": "{{online}}/{{total}} online · {{mobile}} mobile",
       "localBadge": "This device",
@@ -1548,6 +1735,20 @@
       },
       "sync": {
         "title": "Sync Settings",
+        "syncWithDevice": "Sync with {{deviceName}}",
+        "enabledDescription": "Copied content syncs automatically between both devices.",
+        "disabledDescription": "Sync with this device is off.",
+        "customize": "Customize synced content",
+        "allBoth": "All in both directions",
+        "customized": "Customized",
+        "customizeDescription": "Choose a sync direction for each content type.",
+        "directionLabel": "Sync direction for {{contentType}}",
+        "modes": {
+          "both": "Both directions",
+          "sendOnly": "Only send to {{deviceName}}",
+          "receiveOnly": "Only receive from {{deviceName}}",
+          "off": "Do not sync"
+        },
         "helpLabel": "About send and receive",
         "help": "Send controls what this computer can sync to this device. Receive controls what this computer can accept from this device.",
         "restoreDefaults": "Restore defaults",
@@ -1916,7 +2117,6 @@
   },
   "setup": {
     "page": {
-      "loadingSetupState": "Loading setup state...",
       "processing": "Processing...",
       "processingJoinSpace": {
         "title": "Connecting to device…",
@@ -2042,12 +2242,10 @@
       "subtitle": "Enter the invitation code shown on the other device, then provide the same passphrase used to create the space.",
       "labels": {
         "code": "Invitation code",
-        "passphrase": "Space passphrase",
-        "deviceName": "Device name"
+        "passphrase": "Space passphrase"
       },
       "placeholders": {
-        "passphrase": "Enter the passphrase from the host device",
-        "deviceName": "e.g. Windows desktop"
+        "passphrase": "Enter the passphrase from the host device"
       },
       "errors": {
         "invitationNotFound": "This invitation code has already been used or is no longer valid. Ask the host to issue a new one.",
@@ -2116,64 +2314,6 @@
       "actions": {
         "done": "Done"
       }
-    }
-  },
-  "spaces": {
-    "selector": {
-      "ariaLabel": "Spaces",
-      "loading": "Loading spaces…",
-      "empty": "No spaces available"
-    },
-    "actions": {
-      "add": "Add space",
-      "join": "Join space",
-      "create": "Create space",
-      "cancel": "Cancel",
-      "legacyRecovery": "Recover legacy space"
-    },
-    "status": {
-      "runtime": "Runtime: {{state}}",
-      "incoming": "Incoming: {{state}}",
-      "active": "{{name}}, active send space",
-      "setActive": "Set {{name}} as active send space"
-    },
-    "runtime": {
-      "stopped": "Stopped",
-      "starting": "Starting",
-      "running": "Running",
-      "locked": "Locked",
-      "failed": "Failed"
-    },
-    "incoming": {
-      "enabled": "Enabled",
-      "receiving": "Receiving",
-      "degraded": "Degraded",
-      "disabled": "Disabled"
-    },
-    "faults": {
-      "relayUnreachable": "Relay is unreachable",
-      "generic": "This space needs attention"
-    },
-    "errors": {
-      "load": "Couldn't load spaces",
-      "refresh": "The space list couldn't be refreshed",
-      "create": "Couldn't create the space",
-      "join": "Couldn't join the space. Check the invitation and passphrase, then try again.",
-      "activeSend": "Couldn't change the active send space",
-      "remove": "Couldn't remove the space"
-    },
-    "dialog": {
-      "title": "Add a space",
-      "subtitle": "Keep multiple spaces connected. Incoming sync stays enabled for every running space.",
-      "joinMode": "Join an existing space",
-      "createMode": "Create a new space",
-      "code": "Invitation code",
-      "passphrase": "Space passphrase",
-      "confirmPassphrase": "Confirm passphrase",
-      "deviceName": "Device name",
-      "passphraseMismatch": "Passphrases do not match",
-      "joining": "Joining…",
-      "creating": "Creating…"
     }
   }
 }

@@ -1,12 +1,15 @@
 import { m } from 'framer-motion'
-import { Search, X } from 'lucide-react'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import ClipboardActionBar from '@/components/clipboard/ClipboardActionBar'
 import ClipboardPreview from '@/components/clipboard/ClipboardPreview'
 import DeleteConfirmDialog from '@/components/clipboard/DeleteConfirmDialog'
-import { HistoryFilterPanel, HistorySearchPanel } from '@/components/history/composite-search'
+import {
+  HistoryFilterPanel,
+  HistoryMorphingSearch,
+  HistorySearchPanel,
+} from '@/components/history/composite-search'
 import { useCompositeSearchBar } from '@/components/history/composite-search/useCompositeSearchBar'
 import {
   HISTORY_ENTRY_ANIMATION,
@@ -17,7 +20,6 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { useSidebarSlot } from '@/contexts/sidebar-slot-context'
 import { useHistoryController } from '@/hooks/useHistoryController'
 import { useShortcut } from '@/hooks/useShortcut'
-import { SHORTCUT_DEFINITIONS } from '@/shortcuts/definitions'
 
 const HistoryPage: React.FC = () => {
   const { t } = useTranslation()
@@ -25,7 +27,6 @@ const HistoryPage: React.FC = () => {
   const c = useHistoryController()
   const [searchOpen, setSearchOpen] = useState(false)
   const searchControlRef = useRef<HTMLDivElement>(null)
-  const searchPanelRef = useRef<HTMLDivElement>(null)
   const compositeSearch = useCompositeSearchBar({
     contentFilter: c.filter.activeFilter,
     sourceFilter: c.filter.sourceFilter,
@@ -48,7 +49,7 @@ const HistoryPage: React.FC = () => {
 
   useShortcut({
     id: 'clipboard.search',
-    key: SHORTCUT_DEFINITIONS.find(def => def.id === 'clipboard.search')?.key ?? '',
+    key: 'mod+f',
     scope: 'clipboard',
     handler: () => setSearchOpen(true),
     enableOnFormTags: true,
@@ -60,52 +61,6 @@ const HistoryPage: React.FC = () => {
     handler: () => setSearchOpen(true),
     useKey: true,
   })
-
-  const searchBox = useMemo(
-    () => (
-      <HistorySearchPanel
-        contentFilter={c.filter.activeFilter}
-        sourceFilter={c.filter.sourceFilter}
-        tagFilter={c.filter.tagFilter}
-        timeRange={c.filter.timeRange}
-        extensionFilter={c.filter.extensionFilter}
-        onContentFilterChange={c.filterActions.setContentFilter}
-        onTagFilterChange={c.filterActions.setTagFilter}
-        onSourceFilterChange={c.filterActions.setSourceFilter}
-        onTimeRangeChange={c.filterActions.setTimeRange}
-        onExtensionFilterChange={c.filterActions.setExtensionFilter}
-        sourceOptions={c.sourceOptions}
-        tagOptions={c.searchableTags}
-        totalCount={c.browseCount}
-        searchOptions={compositeSearch.options}
-        searchHighlight={compositeSearch.clampedHighlight}
-        searchSuggestionsOpen={searchSuggestionsOpen}
-        onSearchOptionSelect={compositeSearch.selectOption}
-        onSearchOptionHighlight={compositeSearch.setHighlight}
-        onDismissSearchSuggestions={() => compositeSearch.setOpen(false)}
-        onClearAll={() => compositeSearch.clearAll()}
-        onClose={() => setSearchOpen(false)}
-      />
-    ),
-    [
-      c.filter.activeFilter,
-      c.filter.sourceFilter,
-      c.filter.tagFilter,
-      c.filter.timeRange,
-      c.filter.extensionFilter,
-      c.filterActions,
-      c.sourceOptions,
-      c.searchableTags,
-      c.browseCount,
-      compositeSearch.options,
-      compositeSearch.clampedHighlight,
-      compositeSearch.selectOption,
-      compositeSearch.setHighlight,
-      compositeSearch.setOpen,
-      compositeSearch.clearAll,
-      searchSuggestionsOpen,
-    ]
-  )
 
   const hasActiveSearch =
     c.filter.submittedQuery.trim().length > 0 ||
@@ -121,8 +76,7 @@ const HistoryPage: React.FC = () => {
     const frame = requestAnimationFrame(() => c.searchInputRef.current?.focus())
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node
-      if (searchPanelRef.current?.contains(target) || searchControlRef.current?.contains(target))
-        return
+      if (searchControlRef.current?.contains(target)) return
       setSearchOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -137,70 +91,6 @@ const HistoryPage: React.FC = () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [searchOpen, c.searchInputRef])
-
-  const searchControl = useMemo(
-    () => (
-      <m.div
-        data-tauri-drag-region="false"
-        ref={searchControlRef}
-        className={`flex shrink-0 items-center overflow-hidden transition-[background-color,border-radius,box-shadow] ${
-          searchOpen ? 'bg-muted/50 ring-1 ring-primary/40' : 'bg-transparent ring-0'
-        } ${searchOpen ? 'h-7 w-48 rounded-full' : 'size-8 rounded-md'}`}
-      >
-        {searchOpen ? (
-          <div className="flex min-w-48 items-center gap-2 px-2.5">
-            <Search className="size-3.5 shrink-0 text-muted-foreground" />
-            <input
-              ref={c.searchInputRef}
-              value={compositeSearch.buffer}
-              onChange={compositeSearch.handleInputChange}
-              onKeyDown={compositeSearch.handleKeyDown}
-              aria-label={t('history.searchPlaceholder')}
-              autoCorrect="off"
-              autoCapitalize="off"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={t('history.searchPlaceholder')}
-              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-            />
-            <button
-              type="button"
-              aria-label={t('history.composite.close')}
-              onClick={() => setSearchOpen(false)}
-              className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            aria-label={t('history.composite.title')}
-            aria-expanded="false"
-            onClick={() => setSearchOpen(true)}
-            className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10"
-          >
-            <Search className="size-4" />
-            {hasActiveSearch && (
-              <span
-                aria-hidden
-                className="absolute right-1 top-1 size-1.5 rounded-full bg-primary"
-              />
-            )}
-          </button>
-        )}
-      </m.div>
-    ),
-    [
-      c.searchInputRef,
-      compositeSearch.buffer,
-      compositeSearch.handleInputChange,
-      compositeSearch.handleKeyDown,
-      hasActiveSearch,
-      searchOpen,
-      t,
-    ]
-  )
 
   return (
     <div className="relative flex h-full flex-col">
@@ -221,14 +111,52 @@ const HistoryPage: React.FC = () => {
                 sourceOptions={c.sourceOptions}
                 tagOptions={c.searchableTags}
               />
-              {searchControl}
+              <HistoryMorphingSearch
+                open={searchOpen}
+                active={hasActiveSearch}
+                containerRef={searchControlRef}
+                inputRef={c.searchInputRef}
+                value={compositeSearch.buffer}
+                suggestionsOpen={searchSuggestionsOpen}
+                suggestionsId={compositeSearch.panelId}
+                title={t('history.composite.title')}
+                placeholder={t('history.searchPlaceholder')}
+                resultsLabel={t('history.composite.results', { count: c.browseCount })}
+                clearAllLabel={t('history.composite.clearAll')}
+                onInputChange={compositeSearch.handleInputChange}
+                onInputKeyDown={compositeSearch.handleKeyDown}
+                onClearAll={() => compositeSearch.clearAll()}
+                onOpenChange={setSearchOpen}
+              >
+                <HistorySearchPanel
+                  contentFilter={c.filter.activeFilter}
+                  sourceFilter={c.filter.sourceFilter}
+                  tagFilter={c.filter.tagFilter}
+                  timeRange={c.filter.timeRange}
+                  extensionFilter={c.filter.extensionFilter}
+                  onContentFilterChange={c.filterActions.setContentFilter}
+                  onTagFilterChange={c.filterActions.setTagFilter}
+                  onSourceFilterChange={c.filterActions.setSourceFilter}
+                  onTimeRangeChange={c.filterActions.setTimeRange}
+                  onExtensionFilterChange={c.filterActions.setExtensionFilter}
+                  sourceOptions={c.sourceOptions}
+                  tagOptions={c.searchableTags}
+                  searchPanelId={compositeSearch.panelId}
+                  searchOptions={compositeSearch.options}
+                  searchHighlight={compositeSearch.clampedHighlight}
+                  searchSuggestionsOpen={searchSuggestionsOpen}
+                  onSearchOptionSelect={compositeSearch.selectOption}
+                  onSearchOptionHighlight={compositeSearch.setHighlight}
+                  onDismissSearchSuggestions={() => compositeSearch.setOpen(false)}
+                />
+              </HistoryMorphingSearch>
             </div>,
             contentToolbarHost
           )
         : null}
       {/* ── Degraded notice: index rebuilding, browse served from main store ─ */}
       {c.indexState === 'degraded' && (
-        <div className="shrink-0 mx-2 mb-2 rounded-md bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+        <div className="shrink-0 mx-2 mb-2 rounded-md bg-amber-500/10 px-3 py-1.5 text-ui-caption text-amber-600 dark:text-amber-400">
           {t('clipboard.search.degraded')}
         </div>
       )}
@@ -275,24 +203,13 @@ const HistoryPage: React.FC = () => {
               transition={HISTORY_PREVIEW_ENTRY_TRANSITION}
               className="relative flex h-full min-w-0 flex-col"
             >
-              {searchOpen && (
-                <m.div
-                  ref={searchPanelRef}
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                  className="absolute right-3 top-3 z-50 w-96 max-w-[calc(100%-1.5rem)]"
-                >
-                  {searchBox}
-                </m.div>
-              )}
               <ClipboardPreview
                 item={c.selectedItem}
-                actions={
+                actions={delivery => (
                   <ClipboardActionBar
-                    hasActiveItem={c.selectedItem !== null}
+                    item={c.selectedItem}
+                    delivery={delivery}
                     copySuccess={c.copySuccessId !== null && c.copySuccessId === c.selectedId}
-                    isFavorited={c.selectedItem?.isFavorited === true}
                     onCopy={() => {
                       if (c.selectedId) c.handleCopy(c.selectedId)
                     }}
@@ -308,7 +225,7 @@ const HistoryPage: React.FC = () => {
                       if (c.selectedId) c.requestDelete(c.selectedId)
                     }}
                   />
-                }
+                )}
               />
             </m.div>
           </ResizablePanel>

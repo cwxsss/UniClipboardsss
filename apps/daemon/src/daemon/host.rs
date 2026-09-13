@@ -20,10 +20,7 @@ use uc_daemon_local::process_metadata::{DaemonPidManager, DaemonProcessMode};
 use uc_engine::{ActiveClipboardChanged, Engine, HostFileHandle, Operation, OperationResult};
 use uc_observability::analytics::AnalyticsPort;
 use uc_webserver::api::auth::load_or_create_auth_token_from_conn;
-#[cfg(not(target_os = "windows"))]
 use uc_webserver::api::server::run_http_server;
-#[cfg(target_os = "windows")]
-use uc_webserver::api::server::run_http_server_with_extra_l2;
 use uc_webserver::api::server::{DaemonApiState, DaemonFileHandles};
 use uc_webserver::api::types::{DaemonResidency, DaemonWsEvent};
 use uc_webserver::security::{cleanup_rate_limiter_task, SecurityState};
@@ -63,21 +60,6 @@ impl DaemonFileHandles for DesktopDaemonFileHandles {
             .map_err(anyhow::Error::new)
     }
 
-    fn register_diagnostic_output(&self) -> anyhow::Result<(HostFileHandle, String)> {
-        let directory = dirs::download_dir()
-            .ok_or_else(|| anyhow::anyhow!("Downloads directory is unavailable"))?;
-        std::fs::create_dir_all(&directory)?;
-        let filename = format!(
-            "uniclipboard-diagnostics-{}.zip",
-            chrono::Utc::now().format("%Y%m%d-%H%M%S")
-        );
-        let path = directory.join(filename);
-        let handle = self
-            .handles
-            .register_output(path.clone())
-            .map_err(anyhow::Error::new)?;
-        Ok((handle, path.to_string_lossy().into_owned()))
-    }
 }
 
 /// Standalone daemon binary entry: start one shared engine and block until exit.
@@ -218,13 +200,6 @@ async fn run_daemon_surfaces(
     let http_cancel = cancel.child_token();
     let cleanup_cancel = cancel.child_token();
     let event_cancel = cancel.child_token();
-    #[cfg(target_os = "windows")]
-    let mut http_handle = tokio::spawn(run_http_server_with_extra_l2(
-        api_state,
-        http_cancel,
-        super::spaces_axum::router(multi_space.service.clone()),
-    ));
-    #[cfg(not(target_os = "windows"))]
     let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
     let _cleanup_handle = cleanup_rate_limiter_task(security, cleanup_cancel);
 

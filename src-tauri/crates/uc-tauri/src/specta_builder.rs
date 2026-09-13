@@ -40,6 +40,11 @@ pub fn build() -> Builder<tauri::Wry> {
     // daemon WS (`clipboard.delivery_status_changed`, GAP-WS-1), consumed by
     // the frontend `useEntryDelivery` via `daemonWs.subscribe`.
     Builder::<tauri::Wry>::new().commands(collect_commands![
+        crate::commands::visual_effects::get_visual_effects,
+        crate::commands::visual_effects::set_visual_effects_mode,
+        crate::commands::visual_effects::report_visual_effects_environment,
+        crate::commands::visual_effects::begin_visual_effects_sample,
+        crate::commands::visual_effects::report_visual_effects_sample,
         // ── tray ────────────────────────────────────────────────────────────
         crate::commands::tray::set_tray_language,
         // ── lifecycle / device ──────────────────────────────────────────────
@@ -49,7 +54,9 @@ pub fn build() -> Builder<tauri::Wry> {
         crate::commands::startup::get_daemon_connection_info,
         crate::commands::startup::get_daemon_session,
         crate::commands::startup::get_daemon_bootstrap_failure,
+        crate::commands::startup::get_daemon_startup_status,
         crate::commands::startup::take_pending_navigation,
+        crate::commands::window_chrome::main_window_presentation_ready,
         // ── restart ──────────────────────────────────────────────────────────
         crate::commands::restart::restart_app,
         crate::commands::restart::restart_daemon,
@@ -70,6 +77,7 @@ pub fn build() -> Builder<tauri::Wry> {
         // ── storage ─────────────────────────────────────────────────────────
         crate::commands::storage::open_data_directory,
         crate::commands::storage::open_logs_directory,
+        crate::commands::diagnostics::export_startup_logs,
         crate::commands::storage::reveal_path,
         // ── quick panel ─────────────────────────────────────────────────────
         crate::commands::quick_panel::paste_to_previous_app,
@@ -93,5 +101,6 @@ pub fn build() -> Builder<tauri::Wry> {
         crate::commands::config::import_config_package,
         // ── window chrome (macOS traffic lights) ────────────────────────────
         crate::commands::window_chrome::set_traffic_light_position,
+        crate::commands::window_chrome::mark_main_window_ready,
     ])
 }

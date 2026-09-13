@@ -1,22 +1,27 @@
-import type { DeviceTrustChoice, DeviceTrustSnapshot } from '@/api/daemon/device-trust'
+import type { DeviceGroupChoices } from '@/api/daemon/device-trust'
+import { decisionFingerprint } from '@/components/device/device-group-presentation'
 import { DeviceTrustDecisionContent } from '@/components/device/DeviceTrustDecisionContent'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 
 export function DeviceTrustDialog({
-  snapshot,
+  deviceGroups,
   busy,
   error,
-  localRemovalConfirmationChangeId = null,
-  onDecide,
+  localRemovalConfirmationIssueId = null,
+  onChoose,
+  onRefresh,
+  onBack,
 }: {
-  snapshot: DeviceTrustSnapshot
+  deviceGroups: DeviceGroupChoices
   busy: boolean
   error: string | null
-  localRemovalConfirmationChangeId?: string | null
-  onDecide: (choice: DeviceTrustChoice, confirmLocalRemoval: boolean) => void
+  localRemovalConfirmationIssueId?: string | null
+  onChoose: (issueId: string, choiceId: string, confirmLocalRemoval: boolean) => void
+  onRefresh?: () => void
+  onBack?: () => void
 }) {
-  const changeId = snapshot.currentChange?.changeId
-  if (!changeId) return null
+  const issueId = deviceGroups.issues[0]?.issueId
+  if (!issueId) return null
 
   return (
     <Dialog
@@ -24,14 +29,20 @@ export function DeviceTrustDialog({
       onOpenChange={(_open, eventDetails) => eventDetails.cancel()}
       disablePointerDismissal
     >
-      <DialogContent className="bg-card text-card-foreground sm:max-w-xl" showCloseButton={false}>
+      <DialogContent
+        data-testid="device-trust-dialog"
+        className="overflow-hidden bg-card text-card-foreground sm:max-w-xl"
+        showCloseButton={false}
+      >
         <DeviceTrustDecisionContent
-          key={changeId}
-          snapshot={snapshot}
+          key={`${decisionFingerprint(deviceGroups.issues[0])}:${error === 'device_state_changed'}`}
+          deviceGroups={deviceGroups}
           busy={busy}
           error={error}
-          localRemovalConfirmationChangeId={localRemovalConfirmationChangeId}
-          onDecide={onDecide}
+          localRemovalConfirmationIssueId={localRemovalConfirmationIssueId}
+          onChoose={onChoose}
+          onRefresh={onRefresh}
+          onBack={onBack}
         />
       </DialogContent>
     </Dialog>

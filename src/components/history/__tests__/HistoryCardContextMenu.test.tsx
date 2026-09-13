@@ -34,7 +34,7 @@ vi.mock('@/api/tauri-command/clipboard_delivery', async () => {
   return { ...actual, resendEntry: (...args: unknown[]) => resendEntryMock(...args) }
 })
 
-vi.mock('sonner', () => ({
+vi.mock('@/components/ui/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }))
 
@@ -121,7 +121,7 @@ describe('HistoryCardContextMenu', () => {
       name: new RegExp(i18n.t('clipboard.contextMenu.copy')),
     })
     expect(copyItem).not.toHaveAttribute('data-cuelume-hover')
-    expect(copyItem).toHaveAttribute('data-cuelume-toggle', 'release')
+    expect(copyItem.tagName).toBe('BUTTON')
 
     fireEvent.click(copyItem)
     expect(props.onCopy).toHaveBeenCalledWith('entry-1')

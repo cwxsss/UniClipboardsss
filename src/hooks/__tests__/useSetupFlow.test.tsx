@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSetupFlow } from '@/hooks/useSetupFlow'
 import type { SetupFlow } from '@/store/setupRealtimeStore'
 
-const getDeviceTrust = vi.hoisted(() => vi.fn())
+const getDeviceTrustSnapshot = vi.hoisted(() => vi.fn())
 const getSetupState = vi.hoisted(() => vi.fn())
 const issuePairingInvitation = vi.hoisted(() => vi.fn())
+const cancelInvitation = vi.hoisted(() => vi.fn())
 const redeemInvitation = vi.hoisted(() => vi.fn())
 const applyIssuedInvitation = vi.hoisted(() => vi.fn())
 const applyServerSetupState = vi.hoisted(() => vi.fn())
@@ -24,14 +25,14 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('@/components/ui/toast', () => ({ toast: { error: vi.fn() } }))
 
 vi.mock('@/api/daemon/device-trust', () => ({
-  getDeviceTrust: () => getDeviceTrust(),
+  getDeviceTrustSnapshot: () => getDeviceTrustSnapshot(),
 }))
 
 vi.mock('@/api/daemon/setupV2', () => ({
-  cancelInvitation: vi.fn(),
+  cancelInvitation: () => cancelInvitation(),
   getSetupState: () => getSetupState(),
   initializeSpace: vi.fn(),
   issuePairingInvitation: () => issuePairingInvitation(),
@@ -75,7 +76,7 @@ describe('useSetupFlow sponsor pairing completion', () => {
       reconnectHandler = callback
       return () => undefined
     })
-    getDeviceTrust.mockResolvedValue({
+    getDeviceTrustSnapshot.mockResolvedValue({
       localDeviceId: 'local',
       devices: [{ deviceId: 'local', membership: 'active' }],
     })
@@ -85,9 +86,10 @@ describe('useSetupFlow sponsor pairing completion', () => {
       deviceName: 'MacBook',
     })
     issuePairingInvitation.mockResolvedValue({
-      code: '123456789',
+      code: '012-345',
       expiresAtMs: 123_456,
     })
+    cancelInvitation.mockResolvedValue(undefined)
   })
 
   it('moves the sponsor to pairing complete after the issued invitation admits a device', async () => {
@@ -99,13 +101,13 @@ describe('useSetupFlow sponsor pairing completion', () => {
 
     flow = {
       kind: 'invitation_pending',
-      code: '123456789',
+      code: '012-345',
       expiresAtMs: 123_456,
       deviceName: 'MacBook',
       completion: { kind: 'space_ready' },
     }
     rerender()
-    getDeviceTrust.mockResolvedValue({
+    getDeviceTrustSnapshot.mockResolvedValue({
       localDeviceId: 'local',
       devices: [
         { deviceId: 'local', membership: 'active' },
@@ -129,19 +131,64 @@ describe('useSetupFlow sponsor pairing completion', () => {
     })
   })
 
+  it('moves the sponsor to pairing complete when the issued invitation is still reported', async () => {
+    const { result, rerender } = renderHook(() => useSetupFlow())
+
+    await act(async () => {
+      await result.current.issueInvitation()
+    })
+
+    flow = {
+      kind: 'invitation_pending',
+      code: '012-345',
+      expiresAtMs: 123_456,
+      deviceName: 'MacBook',
+      completion: { kind: 'space_ready' },
+    }
+    rerender()
+    getDeviceTrustSnapshot.mockResolvedValue({
+      localDeviceId: 'local',
+      devices: [
+        { deviceId: 'local', membership: 'active' },
+        { deviceId: 'peer', membership: 'active' },
+      ],
+    })
+    getSetupState.mockResolvedValue({
+      hasCompleted: true,
+      currentInvitation: { code: '012-345', expiresAtMs: 123_456 },
+      deviceName: 'MacBook',
+    })
+
+    await waitFor(() => expect(deviceTrustHandler).toBeTypeOf('function'))
+    act(() => deviceTrustHandler?.({ eventType: 'device-trust.changed' }))
+
+    await waitFor(() => {
+      expect(applyServerSetupState).toHaveBeenCalledWith(
+        expect.objectContaining({ currentInvitation: null }),
+        {
+          kind: 'pairing_succeeded',
+          role: 'sponsor',
+          sponsorDeviceId: 'local',
+          peerDeviceId: 'peer',
+        }
+      )
+    })
+    expect(cancelInvitation).toHaveBeenCalledOnce()
+  })
+
   it('rechecks sponsor completion after a WebSocket reconnect', async () => {
     const { result, rerender } = renderHook(() => useSetupFlow())
     await act(async () => result.current.issueInvitation())
 
     flow = {
       kind: 'invitation_pending',
-      code: '123456789',
+      code: '012-345',
       expiresAtMs: 123_456,
       deviceName: 'MacBook',
       completion: { kind: 'space_ready' },
     }
     rerender()
-    getDeviceTrust.mockResolvedValue({
+    getDeviceTrustSnapshot.mockResolvedValue({
       localDeviceId: 'local',
       devices: [
         { deviceId: 'local', membership: 'active' },
@@ -160,6 +207,11 @@ describe('useSetupFlow joiner admission', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     flow = { kind: 'entry' }
+    getDeviceTrustSnapshot.mockResolvedValue({
+      currentJoin: null,
+      localMembership: 'unavailable',
+      devices: [],
+    })
     redeemInvitation.mockResolvedValue({
       status: 'pending',
       joinId: 'join-123',
@@ -176,9 +228,8 @@ describe('useSetupFlow joiner admission', () => {
     act(() => result.current.startJoinSpace())
     await act(async () => {
       await result.current.redeemInvitation({
-        code: 'ABCD1234',
+        code: '012345',
         passphrase: 'passphrase',
-        deviceName: 'Windows desktop',
       })
     })
 
@@ -193,12 +244,11 @@ describe('useSetupFlow joiner admission', () => {
     act(() => result.current.startJoinSpace())
     await act(async () => {
       await result.current.redeemInvitation({
-        code: 'ABCD1234',
+        code: '012345',
         passphrase: 'passphrase',
-        deviceName: 'Windows desktop',
       })
     })
-    getDeviceTrust.mockResolvedValue({
+    getDeviceTrustSnapshot.mockResolvedValue({
       currentJoin: {
         status: 'active',
         joinId: 'join-123',

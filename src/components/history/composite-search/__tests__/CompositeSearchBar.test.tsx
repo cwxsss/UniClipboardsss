@@ -164,13 +164,6 @@ describe('HistoryFilterPanel', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('uses the title bar hover treatment for the active all filter', () => {
-    renderFilterPanel({ contentFilter: Filter.All })
-
-    const allButton = screen.getByRole('button', { name: 'history.filter.all', pressed: true })
-    expect(allButton).toHaveClass('hover:bg-foreground/10', 'focus-visible:bg-foreground/10')
-  })
-
   it('uses a restrained selected-row treatment', () => {
     renderFilterPanel()
 
@@ -180,7 +173,7 @@ describe('HistoryFilterPanel', () => {
     })
     const selectedIcon = selectedRow.querySelector('svg')
 
-    expect(selectedRow.className).toContain('bg-muted/50')
+    expect(selectedRow.querySelector('span[aria-hidden="true"]')).toHaveClass('bg-muted/50')
     expect(selectedRow.className).toContain('text-foreground')
     expect(selectedRow.className).not.toContain('bg-primary')
     expect(selectedRow.className).not.toContain('shadow')
@@ -188,17 +181,6 @@ describe('HistoryFilterPanel', () => {
     expect(selectedRow.className).not.toContain('font-medium')
     expect(selectedIcon).toHaveClass('opacity-80')
     expect(selectedRow).not.toHaveTextContent('history.filter.favorited')
-  })
-
-  it('uses the title bar hover treatment for inactive filters', () => {
-    renderFilterPanel({ contentFilter: Filter.All })
-
-    const inactiveFilter = screen.getByRole('button', {
-      name: 'history.filter.favorited',
-      pressed: false,
-    })
-
-    expect(inactiveFilter).toHaveClass('hover:bg-foreground/10', 'focus-visible:bg-foreground/10')
   })
 
   it('uses a fixed-width horizontal strip and maps the wheel to horizontal scrolling', () => {

@@ -6,28 +6,10 @@ describe('history shortcut definitions', () => {
     expect(SHORTCUT_DEFINITIONS).toContainEqual(
       expect.objectContaining({
         id: 'clipboard.search',
-        key: '',
+        key: 'mod+f',
         scope: 'clipboard',
         description: 'settings.sections.shortcuts.actions.searchHistory',
       })
     )
-  })
-
-  it('uses Alt+V as the default quick panel shortcut', () => {
-    expect(SHORTCUT_DEFINITIONS).toContainEqual(
-      expect.objectContaining({
-        id: 'global.toggleQuickPanel',
-        key: 'alt+v',
-        scope: 'global',
-      })
-    )
-  })
-
-  it('leaves every non-quick-panel shortcut unconfigured by default', () => {
-    expect(
-      SHORTCUT_DEFINITIONS.filter(definition => definition.id !== 'global.toggleQuickPanel').every(
-        definition => definition.key === ''
-      )
-    ).toBe(true)
   })
 })

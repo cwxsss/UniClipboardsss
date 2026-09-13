@@ -5,13 +5,12 @@ const mocks = vi.hoisted(() => {
   const render = vi.fn()
   return {
     applyPlatformEffectPreferences: vi.fn(),
-    applyPlatformTypographyScale: vi.fn(),
-    applyDeviceMetaToSentry: vi.fn(),
+    applyDiagnosticDeviceContext: vi.fn(),
     attachConsole: vi.fn(() => Promise.resolve()),
     connectDaemonWs: vi.fn(() => Promise.resolve()),
     createRoot: vi.fn(() => ({ render })),
     getDeviceMeta: vi.fn(() => Promise.resolve({})),
-    initSentry: vi.fn(),
+    initializeDiagnostics: vi.fn(),
     initializeWindowUi: vi.fn(),
     registerDaemonShutdownListener: vi.fn(() => Promise.resolve()),
     render,
@@ -38,16 +37,13 @@ vi.mock('@/lib/daemon-ws-bootstrap', () => ({
 
 vi.mock('@/lib/window-ui', () => ({
   applyPlatformEffectPreferences: mocks.applyPlatformEffectPreferences,
-  applyPlatformTypographyScale: mocks.applyPlatformTypographyScale,
   initializeWindowUi: mocks.initializeWindowUi,
 }))
 
-vi.mock('@/observability/sentry', () => ({
-  applyDeviceMetaToSentry: mocks.applyDeviceMetaToSentry,
-  initSentry: mocks.initSentry,
-  Sentry: {
-    ErrorBoundary: ({ children }: { children: ReactNode }) => children,
-  },
+vi.mock('@/observability/diagnostics', () => ({
+  applyDiagnosticDeviceContext: mocks.applyDiagnosticDeviceContext,
+  initializeDiagnostics: mocks.initializeDiagnostics,
+  DiagnosticsErrorBoundary: ({ children }: { children: ReactNode }) => children,
 }))
 
 vi.mock('@/store', () => ({
@@ -67,6 +63,7 @@ describe('main window bootstrap', () => {
 
   it('启动主窗口时应用已保存的窗口 UI 设置', async () => {
     await import('@/main')
+    await vi.dynamicImportSettled()
 
     expect(mocks.initializeWindowUi).toHaveBeenCalledTimes(1)
     expect(mocks.createRoot).toHaveBeenCalledWith(document.getElementById('root'))

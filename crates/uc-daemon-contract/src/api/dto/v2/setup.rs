@@ -56,8 +56,6 @@ pub struct IssueInvitationResponse {
 pub struct RedeemRequest {
     pub code: String,
     pub passphrase: String,
-    #[serde(default)]
-    pub device_name: Option<String>,
 }
 
 /// Stable outcome of a durable space admission.
@@ -73,6 +71,9 @@ pub enum JoinSpaceResponse {
         join_id: String,
         #[schema(rename = "joinedSpace")]
         joined_space: JoinedSpaceResponse,
+        #[serde(default)]
+        #[schema(rename = "peerUpgradeRequired")]
+        peer_upgrade_required: bool,
     },
     Pending {
         #[schema(rename = "joinId")]
@@ -85,6 +86,9 @@ pub enum JoinSpaceResponse {
         sponsor_identity_fingerprint: Option<String>,
         #[schema(rename = "cancelRequested")]
         cancel_requested: bool,
+        #[serde(default)]
+        #[schema(rename = "peerUpgradeRequired")]
+        peer_upgrade_required: bool,
     },
     Rejected {
         #[schema(rename = "joinId")]
@@ -218,10 +222,8 @@ mod tests {
         let req = RedeemRequest {
             code: "WXYZ-5678".to_string(),
             passphrase: "hunter22hunter22".to_string(),
-            device_name: Some("Windows desktop".to_string()),
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"deviceName\":\"Windows desktop\""));
         let decoded: RedeemRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, req);
     }
@@ -229,6 +231,7 @@ mod tests {
     #[test]
     fn join_space_active_response_carries_both_sides() {
         let resp = JoinSpaceResponse::Active {
+            peer_upgrade_required: true,
             join_id: "join-1".to_string(),
             joined_space: JoinedSpaceResponse {
                 sponsor_device_id: "sponsor-1".to_string(),
@@ -242,6 +245,8 @@ mod tests {
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["status"], "active");
+        assert_eq!(json["peerUpgradeRequired"], true);
+        assert!(json.get("peer_upgrade_required").is_none());
         assert_eq!(json["joinId"], "join-1");
         assert_eq!(json["joinedSpace"]["sponsorDeviceId"], "sponsor-1");
         assert_eq!(json["joinedSpace"]["spaceId"], "space-1");
@@ -308,6 +313,7 @@ mod tests {
     #[test]
     fn join_space_pending_response_preserves_the_join_id_and_camel_case_fields() {
         let response = JoinSpaceResponse::Pending {
+            peer_upgrade_required: true,
             join_id: "join-1".to_string(),
             target_space_id: Some("space-1".to_string()),
             sponsor_device_id: Some("sponsor-1".to_string()),
@@ -317,6 +323,8 @@ mod tests {
 
         let json = serde_json::to_value(response).unwrap();
         assert_eq!(json["status"], "pending");
+        assert_eq!(json["peerUpgradeRequired"], true);
+        assert!(json.get("peer_upgrade_required").is_none());
         assert_eq!(json["joinId"], "join-1");
         assert_eq!(json["targetSpaceId"], "space-1");
         assert_eq!(json["sponsorDeviceId"], "sponsor-1");

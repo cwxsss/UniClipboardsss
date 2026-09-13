@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
-import { getDeviceTrust } from '@/api/daemon/device-trust'
+import { getDeviceTrustSnapshot } from '@/api/daemon/device-trust'
 import {
   cancelJoinSpace,
   cancelInvitation,
@@ -15,11 +14,11 @@ import {
   type ActiveJoinSpaceResponse,
   type RedeemInvitationErrorKind,
   type InitializeSpaceErrorKind,
-  type JoinSpaceResponse,
   type JoinSpaceRejectionReason,
 } from '@/api/daemon/setupV2'
 import { activeDeviceIds, findNewActiveDeviceId } from '@/components/device/pairing-success-utils'
-import { useJoinAdmission } from '@/hooks/useJoinAdmission'
+import { toast } from '@/components/ui/toast'
+import { type JoinAdmissionResolution, useJoinAdmission } from '@/hooks/useJoinAdmission'
 import { daemonWs } from '@/lib/daemon-ws'
 import { createLogger } from '@/lib/logger'
 import { recordWdioE2eEvent } from '@/lib/wdio-test-bridge'
@@ -85,7 +84,6 @@ export interface UseSetupFlowReturn {
   redeemInvitation: (input: {
     code: string
     passphrase: string
-    deviceName: string
   }) => Promise<
     | { ok: true; redeem: ActiveJoinSpaceResponse | null }
     | { ok: false; kind: RedeemInvitationErrorKind; raw: string }
@@ -107,6 +105,7 @@ export function useSetupFlow(): UseSetupFlowReturn {
   const [pageScreen, setPageScreen] = useState<SetupScreen | null>(null)
   const [loading, setLoading] = useState(false)
   const invitationDeviceIdsRef = useRef<ReadonlySet<string> | null>(null)
+  const sponsorCompletionInFlightRef = useRef(false)
 
   const screen: SetupScreen = (() => {
     if (flow.kind === 'loading') return { kind: 'loading' }
@@ -141,52 +140,72 @@ export function useSetupFlow(): UseSetupFlowReturn {
   const startImportConfig = useCallback(() => setPageScreen({ kind: 'import_config' }), [])
 
   const confirmSponsorPairing = useEffectEvent(async () => {
-    if (flow.kind !== 'invitation_pending' || invitationDeviceIdsRef.current === null) return
+    if (
+      flow.kind !== 'invitation_pending' ||
+      invitationDeviceIdsRef.current === null ||
+      sponsorCompletionInFlightRef.current
+    ) {
+      return
+    }
     try {
-      const [state, trust] = await Promise.all([getSetupState(), getDeviceTrust()])
+      const trust = await getDeviceTrustSnapshot()
       const peerDeviceId = findNewActiveDeviceId(
         invitationDeviceIdsRef.current,
         activeDeviceIds(trust)
       )
-      if (state.currentInvitation !== null || peerDeviceId === null) return
-      applyServerSetupState(state, {
-        kind: 'pairing_succeeded',
-        role: 'sponsor',
-        sponsorDeviceId: trust.localDeviceId,
-        peerDeviceId,
-      })
+      if (peerDeviceId === null) return
+      sponsorCompletionInFlightRef.current = true
+      try {
+        await cancelInvitation()
+      } catch (err) {
+        log.warn({ err }, 'failed to clear completed sponsor invitation')
+      }
+      const state = await getSetupState()
+      applyServerSetupState(
+        { ...state, currentInvitation: null },
+        {
+          kind: 'pairing_succeeded',
+          role: 'sponsor',
+          sponsorDeviceId: trust.localDeviceId,
+          peerDeviceId,
+        }
+      )
     } catch (err) {
       log.warn({ err }, 'failed to verify completed sponsor invitation')
+      sponsorCompletionInFlightRef.current = false
     }
   })
 
-  const resolveJoinAdmission = useCallback(
-    async (result: Exclude<JoinSpaceResponse, { status: 'pending' }>) => {
-      if (result.status === 'rejected') {
-        setPageScreen({ kind: 'join_rejected', reason: result.reason })
-        return
-      }
-      try {
-        const next = await getSetupState()
-        applyServerSetupState(next, {
-          kind: 'pairing_succeeded',
-          role: 'joiner',
-          redeem: result,
-        })
-      } catch (err) {
-        log.warn({ err }, 'failed to apply completed durable admission')
-      }
-    },
-    []
-  )
+  const resolveJoinAdmission = useCallback(async (result: JoinAdmissionResolution) => {
+    if (result.status === 'rejected') {
+      setPageScreen({ kind: 'join_rejected', reason: result.reason })
+      return
+    }
+    try {
+      setPageScreen(null)
+      const next = await getSetupState()
+      applyServerSetupState(next, {
+        kind: 'pairing_succeeded',
+        role: 'joiner',
+        redeem: result,
+      })
+    } catch (err) {
+      log.warn({ err }, 'failed to apply completed durable admission')
+    }
+  }, [])
 
   const pendingJoinId = pageScreen?.kind === 'join_pending' ? pageScreen.joinId : null
   useJoinAdmission(pendingJoinId, resolveJoinAdmission)
 
   useEffect(() => {
     if (flow.kind !== 'invitation_pending') return
-    const unsubscribeDeviceTrust = daemonWs.subscribe(['device-trust'], event => {
-      if (event.eventType === 'device-trust.changed') void confirmSponsorPairing()
+    const unsubscribeDeviceTrust = daemonWs.subscribe(['device-trust', 'system'], event => {
+      if (
+        event.eventType === 'device-trust.changed' ||
+        event.eventType === 'system.refresh_required'
+      ) {
+        void confirmSponsorPairing()
+      }
     })
     const unsubscribeReconnect = daemonWs.onReconnect(() => void confirmSponsorPairing())
     return () => {
@@ -204,11 +223,10 @@ export function useSetupFlow(): UseSetupFlowReturn {
           passphraseConfirm: input.passphraseConfirm,
           deviceName: input.deviceName,
         })
-        // Space initialization completes onboarding. Device invitation is a
-        // normal main-screen workflow, so do not keep the setup gate open with
-        // a transient "space ready" summary.
+        // Space initialization and peer pairing are separate milestones. Keep
+        // setup open on the ready screen until the user invites a peer or exits.
         const next = await getSetupState()
-        applyServerSetupState(next)
+        applyServerSetupState(next, { kind: 'space_ready' })
         return { ok: true } as const
       } catch (err) {
         if (err instanceof SetupV2Error) {
@@ -237,7 +255,7 @@ export function useSetupFlow(): UseSetupFlowReturn {
     setLoading(true)
     recordWdioE2eEvent('setup.issue.started')
     try {
-      invitationDeviceIdsRef.current = activeDeviceIds(await getDeviceTrust())
+      invitationDeviceIdsRef.current = activeDeviceIds(await getDeviceTrustSnapshot())
       const out = await issuePairingInvitation()
       recordWdioE2eEvent('setup.issue.returned')
       // The response is already authoritative. The matching WebSocket event
@@ -290,13 +308,12 @@ export function useSetupFlow(): UseSetupFlowReturn {
   }, [t])
 
   const handleRedeem = useCallback(
-    async (input: { code: string; passphrase: string; deviceName: string }) => {
+    async (input: { code: string; passphrase: string }) => {
       setLoading(true)
       try {
         const redeem = await redeemInvitation({
           code: input.code,
           passphrase: input.passphrase,
-          deviceName: input.deviceName,
         })
         if (redeem.status === 'pending') {
           setPageScreen({ kind: 'join_pending', joinId: redeem.joinId })
@@ -345,7 +362,11 @@ export function useSetupFlow(): UseSetupFlowReturn {
       setLoading(true)
       try {
         const result = await cancelJoinSpace(joinId)
-        if (result.status !== 'pending') await resolveJoinAdmission(result)
+        if (result.status === 'active') {
+          await resolveJoinAdmission(result)
+        } else if (result.status === 'rejected') {
+          await resolveJoinAdmission(result)
+        }
       } catch (err) {
         log.error({ err, joinId }, 'cancelJoinSpace failed')
         toast.error(t('errors.operationFailed'))

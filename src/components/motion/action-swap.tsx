@@ -1,13 +1,8 @@
 'use client'
 
-import {
-  AnimatePresence,
-  m,
-  useReducedMotion,
-  type HTMLMotionProps,
-  type Variants,
-} from 'framer-motion'
+import { AnimatePresence, m, type HTMLMotionProps, type Variants } from 'framer-motion'
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useReducedMotion } from '@/hooks/useVisualEffects'
 import { EASE_OUT, EASE_OUT_CSS, SPRING_PRESS, SPRING_SWAP } from '@/lib/ease'
 import { cn } from '@/lib/utils'
 
@@ -155,9 +150,9 @@ const VARIANT_CLASS: Record<ActionSwapButtonVariant, string> = {
 }
 
 const SIZE_CLASS: Record<ActionSwapButtonSize, string> = {
-  sm: 'h-8 gap-1.5 rounded-full px-3 text-xs',
-  md: 'h-10 gap-2 rounded-full px-4 text-sm',
-  lg: 'h-12 gap-2.5 rounded-full px-5 text-base',
+  sm: 'h-8 gap-1.5 rounded-full px-3 text-ui-body',
+  md: 'h-10 gap-2 rounded-full px-4 text-ui-body',
+  lg: 'h-12 gap-2.5 rounded-full px-5 text-ui-body',
   icon: 'h-10 w-10 rounded-full',
 }
 

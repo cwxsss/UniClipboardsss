@@ -136,6 +136,48 @@ describe('clipboardEventReducer', () => {
     })
   })
 
+  it('invalidates history for a new inbound notice but ignores duplicates', () => {
+    const state = createInitialClipboardEventReducerState()
+    const incoming = reduce(
+      state,
+      {
+        topic: 'clipboard',
+        eventType: 'clipboard.inbound_notice',
+        payload: { action: 'new_entry' },
+      },
+      1000
+    )
+    expect(incoming.effects).toEqual([{ type: 'invalidateRemote' }])
+
+    const duplicate = reduce(
+      incoming.state,
+      {
+        topic: 'clipboard',
+        eventType: 'clipboard.inbound_notice',
+        payload: { action: 'duplicate_ignored' },
+      },
+      1100
+    )
+    expect(duplicate.effects).toEqual([])
+  })
+
+  it.each(['completed', 'cancelled', 'failed'])(
+    'settles an unowned %s transfer without creating a history entry',
+    status => {
+      const reduced = reduce(
+        createInitialClipboardEventReducerState(),
+        {
+          topic: 'file-transfer',
+          eventType: 'file-transfer.status_changed',
+          payload: { transferId: 'mobile-lan:duplicate', entryId: null, status },
+        },
+        1000
+      )
+      expect(reduced.actions).toHaveLength(1)
+      expect(reduced.actions[0].payload).toMatchObject({ transferId: 'mobile-lan:duplicate' })
+    }
+  )
+
   it('turns file-transfer status and progress events into store actions', () => {
     const state = createInitialClipboardEventReducerState()
 

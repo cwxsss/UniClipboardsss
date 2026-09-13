@@ -9,15 +9,13 @@ interface SettingGroupProps {
 
 export function SettingGroup({ title, children, className }: SettingGroupProps) {
   return (
-    <div className={cn('space-y-1.5', className)}>
+    <fieldset data-slot="setting-group" className={cn('min-w-0', className)}>
       {title && (
-        <h3 className="text-xs font-medium text-muted-foreground px-1 uppercase tracking-wider">
+        <legend data-slot="setting-group-title" className="mb-4 px-1 text-ui-section font-semibold">
           {title}
-        </h3>
+        </legend>
       )}
-      <div className="rounded-lg border border-border/60 bg-card divide-y divide-border/40 overflow-hidden">
-        {children}
-      </div>
-    </div>
+      <div className="min-w-0 divide-y divide-border/25 text-card-foreground">{children}</div>
+    </fieldset>
   )
 }

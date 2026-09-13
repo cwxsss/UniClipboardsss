@@ -8,9 +8,12 @@ const mockUpdateGeneralSetting = vi.hoisted(() => vi.fn().mockResolvedValue(unde
 const mockSetupSnapshot = vi.hoisted(() => ({ rePairingRequired: false }))
 
 vi.mock('@/hooks/useSetting', () => ({
-  useSetting: () => ({
-    updateGeneralSetting: mockUpdateGeneralSetting,
-  }),
+  useSettingSelector: (
+    selector: (value: { updateGeneralSetting: typeof mockUpdateGeneralSetting }) => unknown
+  ) =>
+    selector({
+      updateGeneralSetting: mockUpdateGeneralSetting,
+    }),
 }))
 
 vi.mock('@/store/setupRealtimeStore', () => ({
@@ -53,7 +56,7 @@ describe('StartupModals', () => {
 
     renderStartupModals()
 
-    expect(await screen.findByText('rePairingNotice.title')).toBeInTheDocument()
+    expect(await screen.findByText('rePairingNotice.title')).toBeVisible()
     expect(
       screen.queryByText('settings.sections.general.telemetry.notice.title')
     ).not.toBeInTheDocument()
@@ -77,6 +80,40 @@ describe('StartupModals', () => {
       await screen.findByText('settings.sections.general.telemetry.notice.title')
     ).toBeInTheDocument()
     expect(screen.queryByText('rePairingNotice.title')).not.toBeInTheDocument()
+  })
+
+  it('remembers do not show again across startup remounts without navigating', async () => {
+    mockSetupSnapshot.rePairingRequired = true
+    const user = userEvent.setup()
+    const view = renderStartupModals()
+
+    await user.click(await screen.findByText('rePairingNotice.dontShowAgain'))
+
+    expect(screen.queryByText('rePairingNotice.title')).not.toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/)
+    expect(
+      await screen.findByText('settings.sections.general.telemetry.notice.title')
+    ).toBeVisible()
+
+    view.unmount()
+    renderStartupModals()
+
+    expect(screen.queryByText('rePairingNotice.title')).not.toBeInTheDocument()
+    expect(
+      await screen.findByText('settings.sections.general.telemetry.notice.title')
+    ).toBeVisible()
+  })
+
+  it('still reminds on next startup when only opening devices', async () => {
+    mockSetupSnapshot.rePairingRequired = true
+    const user = userEvent.setup()
+    const view = renderStartupModals()
+
+    await user.click(await screen.findByText('rePairingNotice.goToDevices'))
+    view.unmount()
+    renderStartupModals()
+
+    expect(await screen.findByText('rePairingNotice.title')).toBeVisible()
   })
 
   it('does not show telemetry when it was already dismissed', async () => {

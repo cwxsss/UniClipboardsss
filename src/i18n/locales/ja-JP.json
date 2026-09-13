@@ -1,5 +1,108 @@
 {
+  "startupFailure": {
+    "unavailable": "起動時に問題が発生しました",
+    "title": "起動できません",
+    "description": "バックグラウンドサービスに接続できないため、現在アプリを利用できません。",
+    "updateTitle": "アプリの更新が必要です",
+    "updateDescription": "新しいバージョンがバックグラウンドで実行されています。アプリを更新してください。",
+    "retry": "再試行",
+    "retrying": "再試行中…",
+    "export": "ログをエクスポート",
+    "exporting": "エクスポート中…",
+    "contact": "作者に連絡",
+    "update": "更新を開く",
+    "details": "エラーの詳細",
+    "exported": "ログの保存先：{{path}}",
+    "exportFailed": "ログをエクスポートできませんでした。保存先と空き容量を確認して再試行してください。",
+    "contactFailed": "サポートページを開けませんでした。連絡先：",
+    "updateFailed": "更新を確認できませんでした。後でもう一度お試しください。",
+    "contactOpened": "ブラウザーでサポートページを開きました。"
+  },
+  "appearanceLayout": {
+    "effectsHelp": "視覚効果と動作の快適さを調整します。",
+    "scaleHelp": "文字や画面の要素の大きさを調整します。",
+    "themeHelp": {
+      "system": "システムに合わせてライトとダークを自動で切り替えます。",
+      "light": "常にライトモードを使用します。",
+      "dark": "常にダークモードを使用します。"
+    },
+    "lightPalette": "ライト配色",
+    "darkPalette": "ダーク配色",
+    "theme": "テーマ",
+    "palette": "配色",
+    "effects": "視覚効果",
+    "display": "表示",
+    "customColors": "色のカスタマイズ",
+    "preview": "現在のテーマのプレビュー",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "saveFailed": "変更を保存できませんでした。もう一度お試しください。"
+  },
+  "smoothMode": {
+    "title": "スムーズモード",
+    "auto": "自動",
+    "effects": "効果優先",
+    "smooth": "動作優先",
+    "currentSmooth": "現在：動作優先",
+    "currentEffects": "現在：効果優先",
+    "notSaved": "今回の変更は適用されましたが、保存できませんでした。再起動後に元の設定に戻る場合があります。",
+    "unavailable": "外観設定を読み込むか保存できません。後でもう一度お試しください。",
+    "reason": {
+      "manual": "選択した設定を使用しています。",
+      "system": "システムの動きを減らす設定に従います。取得できない場合も動きを減らします。",
+      "platform_default": "Linux の自動モードでは視覚効果を減らします。",
+      "hardware": "デバイスの性能に基づいて選択しました。",
+      "unknown": "デバイスの性能が未確認のため、視覚効果を減らしています。",
+      "runtime": "以前の動作状況に基づいて選択しました。"
+    }
+  },
   "deviceTrust": {
+    "presentation": {
+      "localRemovalTitle": "{{actor}} がこのデバイスを削除しようとしています",
+      "leave": "デバイスグループを離脱",
+      "keep": "既存のデバイスを保持",
+      "leaveEffect": "すべてのデバイスとの同期を停止します。",
+      "keepEffect": "既存のデバイスを保持します。{{names}} との同期は一時停止します。",
+      "showDevices": "デバイスを表示",
+      "hideDevices": "デバイスを非表示",
+      "scope": "選択後の同期範囲: {{names}}。",
+      "title": "{{name}} のデバイスグループを選択",
+      "local": "このデバイス: {{name}}",
+      "localMember": "{{name}}（このデバイス）",
+      "unnamed": "名前のないデバイス",
+      "members": "グループのメンバー",
+      "membersUnknown": "メンバーの詳細が不完全です",
+      "impactUnknown": "この選択による影響の詳細が不完全です。",
+      "detailsIncomplete": "一部の変更の詳細を取得できません。",
+      "paused": "{{names}} との同期は一時停止します。",
+      "rejoin": "選択したグループ内で同期するには、{{names}} が再参加する必要があります。",
+      "waiting": "{{names}} の確認を待っています。",
+      "removed": "{{actor}} が {{target}} の削除を提案しました。",
+      "added": "{{actor}} が {{target}} を追加しました。",
+      "accepted": "{{actor}} が {{target}} の削除を承認しました。",
+      "rejected": "{{actor}} が {{target}} の削除を拒否しました。",
+      "reason": {
+        "unknown": "デバイスグループが異なります。理由を説明する情報が不足しています。",
+        "pending_removal": "デバイスの削除について決定が必要です。",
+        "different_removals": "両側で異なるデバイスが削除されました。",
+        "removal_decision_disagreement": "同じ削除について両側で異なる決定が行われました。",
+        "diverged_history": "両側で異なるデバイスグループの変更が記録されています。"
+      },
+      "select": "デバイスグループを選択",
+      "back": "選択肢に戻る",
+      "retry": "もう一度確認",
+      "processing": "選択を送信しています",
+      "checking": "結果を確認しています",
+      "pending": "選択を受け付け、引き続き処理しています。",
+      "completed": "デバイスグループを更新しました",
+      "next": "続行",
+      "done": "完了",
+      "more": "前の選択は完了しました。あと {{count}} 件の決定が必要です。",
+      "uncertain": "結果を確認できませんでした。もう一度確認してください。",
+      "changed": "選択肢が変更されました。もう一度確認してください。",
+      "loading": "デバイスの関係を確認しています",
+      "loadFailed": "デバイスの関係を読み込めませんでした。もう一度お試しください。"
+    },
     "listSeparator": "、",
     "notification": {
       "title": "デバイス関係の確認",
@@ -10,15 +113,22 @@
       "title": "このデバイスが同期を続ける相手を選択",
       "summary": "{{proposer}} が {{targets}} を削除しようとしています",
       "localSummary": "{{proposer}} がこのデバイスを削除しようとしています",
+      "groupConflictSummary": "デバイスが異なるグループを報告しています。このデバイスで使用するグループを選択してください。",
+      "issueProgress": "{{total}} 件中 {{current}} 件目",
       "applyTitle": "削除を受け入れる",
       "keepTitle": "拒否して元のデバイスを維持",
       "leaveTitle": "デバイスグループから退出",
       "stayTitle": "現在のデバイスグループに残る",
+      "useGroupTitle": "このデバイスグループを使用",
       "continueSyncing": "同期を継続",
       "stopSyncing": "同期を停止",
       "noDevices": "なし",
       "confirmLocalRemoval": "このデバイスはスペースから削除され、ここでの同期が停止します。続行するにはもう一度確認してください。",
+      "requiresRePairing": "このグループ外のデバイスは再ペアリングが必要です。",
+      "membersIncomplete": "このグループには表示されていないデバイスが含まれる場合があります。",
       "stateChanged": "デバイス状態が変わりました。最新の状態を表示しています。",
+      "choicePending": "選択は保存され、現在処理中です。",
+      "rePairingRequired": "グループが変更されました。影響を受けるデバイスを再ペアリングしてください。",
       "failed": "選択を保存できませんでした。バックグラウンドサービスを確認して再試行してください。"
     },
     "actions": {
@@ -38,6 +148,8 @@
     }
   },
   "common": {
+    "notifications": "通知",
+    "dismissNotification": "通知を閉じる",
     "loading": "読み込み中...",
     "unknownSize": "不明なサイズ",
     "zeroBytes": "0 バイト"
@@ -119,11 +231,27 @@
     }
   },
   "rePairingNotice": {
+    "dontShowAgain": "今後表示しない",
     "title": "デバイスを再ペアリング",
     "body": "このバージョンでは、デバイス ペアリング スキームが更新されます。以前のペアリングは同期できなくなります。 [デバイス] を開いて、他のデバイスを招待または再参加してください。",
     "goToDevices": "デバイス管理を開く"
   },
   "settings": {
+    "pageDescriptions": {
+      "general": "起動、言語、サウンド、診断の設定を変更します。",
+      "appearance": "テーマ、配色、表示を調整します。",
+      "shortcuts": "よく使う操作のキーボードショートカットを変更します。",
+      "quickPanel": "クイックパネルの呼び出し方法と表示位置を設定します。",
+      "sync": "クリップボードとファイルの同期を設定します。",
+      "security": "このデバイスの自動ロック解除を設定します。",
+      "network": "接続方法、中継サーバー、転送性能を調整します。",
+      "storage": "容量の使用状況を確認し、履歴とキャッシュを管理します。",
+      "about": "アプリのバージョン、更新、プロジェクト情報を確認します。"
+    },
+    "sectionHeadings": {
+      "syncBehavior": "同期の動作",
+      "historyRetention": "履歴の保持"
+    },
     "title": "設定",
     "restartBanner": {
       "restartButton": "今すぐ再起動",
@@ -151,7 +279,7 @@
         "saveError": "設定の保存に失敗しました",
         "deviceName": {
           "label": "デバイス名",
-          "description": "ローカル ネットワーク上でこのデバイスを識別するために使用されます",
+          "description": "ほかのデバイスと区別するための名前です。",
           "placeholder": "デバイス名を入力してください"
         },
         "autoStart": {
@@ -159,6 +287,11 @@
           "description": "システム起動時に UniClipboard を開始します"
         },
         "startupMode": {
+          "summaries": {
+            "normal": "起動時にアプリのウィンドウを表示します。",
+            "silent": "ウィンドウを開かずにバックグラウンドで動作します。",
+            "lightweight": "ログイン時はバックグラウンド同期のみを起動します。画面は必要なときに開けます。"
+          },
           "label": "スタートアップ モード",
           "description": "サイレントはウィンドウをスキップし、バックグラウンドで直接実行します。軽量化はさらに進んでおり、同期の準備が完了するとウィンドウとトレイも終了し、バックグラウンド サービスだけを維持して通知を送信します。アプリ アイコンをもう一度クリックしてウィンドウを再度開きます。",
           "options": {
@@ -168,8 +301,8 @@
           }
         },
         "restoreLastEntryOnStartup": {
-          "label": "起動時に最後のエントリを復元する",
-          "description": "起動時にバックグラウンド サービスの準備ができたら、最新の履歴エントリをシステム クリップボードに戻します"
+          "label": "起動時にクリップボードを復元",
+          "description": "最新の履歴をクリップボードに戻します。"
         },
         "language": {
           "title": "言語",
@@ -205,6 +338,15 @@
           "button": "ファイル マネージャーで開く"
         },
         "logs": {
+          "capture": {
+            "label": "詳細ログを記録",
+            "tooltip": "残り約 {{minutes}} 分。手動でオフにできます。",
+            "loading": "バックグラウンドサービスの記録状態を確認しています…",
+            "standard": "詳細ログを一時的に記録し、10 分後に自動停止します。",
+            "active": "詳細ログを記録中です。約 {{minutes}} 分後に自動停止します。",
+            "unavailable": "バックグラウンドサービスの診断を利用できません。",
+            "error": "詳細記録を変更できませんでした"
+          },
           "debug": {
             "label": "デバッグ モード",
             "description": "アプリとデーモンの再起動後にローカル診断ログの詳細を増やします。",
@@ -219,10 +361,12 @@
           },
           "export": {
             "label": "ログのエクスポート",
-            "description": "ダウンロードで過去 24 時間の GUI、デーモン、および CLI ログを含む zip アーカイブを作成します。",
+            "description": "最近のアプリと Engine の診断記録、および収集範囲レポートを含む ZIP をダウンロードに作成します。",
             "button": "ログのエクスポート",
             "exporting": "エクスポート中...",
             "success": "ログのエクスポート",
+            "offlineSuccess": "バックグラウンドサービスを利用できないため、現在のログをライブ更新確認なしで書き出しました。",
+            "partialSuccess": "診断パッケージを書き出しましたが、更新またはファイルの範囲が不完全です。詳細はパッケージ内の一覧をご覧ください。",
             "error": "ログのエクスポートに失敗しました",
             "copyPath": "パスのコピー",
             "copySuccess": "エクスポート パスのコピーに失敗しました",
@@ -274,9 +418,12 @@
           "hexInputLabel": "16 進数のカラー値"
         },
         "windowFrame": {
-          "title": "ウィンドウの外観",
-          "useSystem": "システムのウィンドウ枠を使用",
-          "description": "デスクトップのタイトルバーとウィンドウボタンを使用し、検索欄をページ内に戻します。"
+          "title": "ウィンドウタイトルバー",
+          "description": "自動モードでは niri と Hyprland のタイトルバーを非表示にします。選択は起動時も含め、この端末に適用されます。",
+          "auto": "自動",
+          "custom": "アプリのタイトルバー",
+          "system": "システムのタイトルバー",
+          "none": "タイトルバーなし"
         },
         "zoom": {
           "title": "インターフェイス スケール",
@@ -386,6 +533,11 @@
         "loadError": "設定のロードに失敗しました:"
       },
       "network": {
+        "groups": {
+          "connection": "接続方法",
+          "relays": "リレーサーバー",
+          "performance": "転送パフォーマンス"
+        },
         "loadError": "設定のロードに失敗しました:",
         "lanOnly": {
           "label": "LAN専用モード",
@@ -641,6 +793,7 @@
         "recording": "キーを押してください...",
         "chordHint": "2 番目のステップとして別のコンボを押します (「ダブルタップ」するには同じコンボを 2 回押します)、または確認します",
         "rerecord": "再録音",
+        "save": "保存",
         "conflict": "次との競合: {{name}}",
         "confirmOverride": "とにかく適用 (競合をクリア)",
         "confirm": "確認",
@@ -1089,6 +1242,14 @@
       "pairedCount_other": "{{count}} 個がペアリングされました",
       "onlineCount": "{{count}} 台のオンライン"
     },
+    "connectionRefresh": {
+      "action": "接続を更新",
+      "checking": "接続を確認中",
+      "failed": "更新に失敗しました。再試行してください。",
+      "summary": "{{total}} 台を確認：オンライン {{online}} 台、オフライン {{offline}} 台",
+      "errors": "{{count}} 台の確認に失敗しました。接続状態は未確認です。",
+      "listFailed": "接続確認は完了しましたが、デバイス一覧を更新できませんでした。再試行してください。"
+    },
     "pairedDevices": {
       "title": "ペアリングされたデバイス"
     },
@@ -1130,7 +1291,18 @@
       "subtitle": "追加するコンピューターまたはスマートフォンでこのコードを入力してください",
       "expiresIn": "有効期限は {{remaining}}",
       "expired": "招待の有効期限が切れました",
-      "qrAlt": "招待コードを含むQRコード",
+      "passphraseHint": "参加デバイスでもペアリングを完了するにはスペース パスフレーズが必要です",
+      "rePairing": {
+        "title": "スペースのパスフレーズを確認",
+        "subtitle": "旧バージョンからの更新後に一度だけ必要です",
+        "description": "履歴は安全に保持されています。新しい招待コードを作成する前に、元のスペースのパスフレーズを確認してください。",
+        "passphraseLabel": "スペースのパスフレーズ",
+        "passphrasePlaceholder": "元のパスフレーズを入力",
+        "submit": "確認してコードを作成",
+        "submitting": "パスフレーズを確認中…",
+        "wrongPassphrase": "パスフレーズが正しくありません。",
+        "failed": "パスフレーズを確認できませんでした。もう一度お試しください。"
+      },
       "loading": "招待コードを生成中…",
       "actions": {
         "cancel": "キャンセル",
@@ -1491,6 +1663,21 @@
       }
     },
     "panel": {
+      "danger": {
+        "title": "危険な操作",
+        "description": "ローカル履歴を保持し、このデバイスのペアリングを解除します。",
+        "reset": "スペースを再構築",
+        "failed": "再構築に失敗しました。再試行するかアプリを再起動してください。",
+        "modal": {
+          "title": "スペースを再構築",
+          "warning": "このデバイスのみの新しいスペースを作成します。ローカル履歴と設定は保持されます。旧スペースのメンバー関係、セキュリティ状態、未完了の招待は消去されます。他のデバイスとの再ペアリングが必要です。",
+          "confirmPrompt": "確認のために RESET と入力してください",
+          "confirmPlaceholder": "RESET",
+          "confirm": "スペースを再構築",
+          "resetting": "再構築中...",
+          "cancel": "キャンセル"
+        }
+      },
       "listTitle": "デバイス",
       "counts": "{{online}}/{{total}} 個がオンライン · {{mobile}} 個のモバイル",
       "localBadge": "このデバイス",
@@ -1548,6 +1735,20 @@
       },
       "sync": {
         "title": "同期設定",
+        "syncWithDevice": "{{deviceName}} と同期",
+        "enabledDescription": "両方のデバイスでコピーした内容を自動的に同期します。",
+        "disabledDescription": "このデバイスとの同期はオフです。",
+        "customize": "同期する内容をカスタマイズ",
+        "allBoth": "すべて双方向",
+        "customized": "カスタマイズ済み",
+        "customizeDescription": "コンテンツごとに同期方向を選択します。",
+        "directionLabel": "{{contentType}} の同期方向",
+        "modes": {
+          "both": "双方向",
+          "sendOnly": "{{deviceName}} にのみ送信",
+          "receiveOnly": "{{deviceName}} からのみ受信",
+          "off": "同期しない"
+        },
         "helpLabel": "送信と受信について",
         "help": "送信では、このコンピューターからこのデバイスへ同期する内容を指定します。受信では、このデバイスから受け取る内容を指定します。",
         "restoreDefaults": "既定値に戻す",
@@ -1915,7 +2116,6 @@
   },
   "setup": {
     "page": {
-      "loadingSetupState": "セットアップ状態を読み込み中...",
       "processing": "処理中...",
       "processingJoinSpace": {
         "title": "デバイスに接続中...",
@@ -2041,12 +2241,10 @@
       "subtitle": "他のデバイスに表示される招待コードを入力し、スペースの作成に使用したものと同じパスフレーズを入力します。",
       "labels": {
         "code": "招待コード",
-        "passphrase": "スペース パスフレーズ",
-        "deviceName": "デバイス名"
+        "passphrase": "スペース パスフレーズ"
       },
       "placeholders": {
-        "passphrase": "ホスト デバイスからパスフレーズを入力してください",
-        "deviceName": "例: Windows デスクトップ"
+        "passphrase": "ホスト デバイスからパスフレーズを入力してください"
       },
       "errors": {
         "invitationNotFound": "この招待コードはすでに使用されているか、無効になっています。ホストに新しい招待状を発行するよう依頼してください。",
@@ -2115,64 +2313,6 @@
       "actions": {
         "done": "完了"
       }
-    }
-  },
-  "spaces": {
-    "selector": {
-      "ariaLabel": "スペース",
-      "loading": "スペースを読み込み中…",
-      "empty": "利用できるスペースがありません"
-    },
-    "actions": {
-      "add": "スペースを追加",
-      "join": "スペースに参加",
-      "create": "スペースを作成",
-      "cancel": "キャンセル",
-      "legacyRecovery": "旧スペースを復旧"
-    },
-    "status": {
-      "runtime": "実行状態: {{state}}",
-      "incoming": "受信状態: {{state}}",
-      "active": "{{name}}、現在の送信スペース",
-      "setActive": "{{name}} を現在の送信スペースに設定"
-    },
-    "runtime": {
-      "stopped": "停止",
-      "starting": "起動中",
-      "running": "実行中",
-      "locked": "ロック中",
-      "failed": "失敗"
-    },
-    "incoming": {
-      "enabled": "有効",
-      "receiving": "受信中",
-      "degraded": "一部障害",
-      "disabled": "無効"
-    },
-    "faults": {
-      "relayUnreachable": "リレーに接続できません",
-      "generic": "このスペースを確認してください"
-    },
-    "errors": {
-      "load": "スペースを読み込めませんでした",
-      "refresh": "スペース一覧を更新できませんでした",
-      "create": "スペースを作成できませんでした",
-      "join": "スペースに参加できませんでした。招待コードとパスフレーズを確認してください。",
-      "activeSend": "送信スペースを変更できませんでした",
-      "remove": "スペースを削除できませんでした"
-    },
-    "dialog": {
-      "title": "スペースを追加",
-      "subtitle": "複数のスペースを同時に接続し、実行中のすべてのスペースで受信を続けます。",
-      "joinMode": "既存のスペースに参加",
-      "createMode": "新しいスペースを作成",
-      "code": "招待コード",
-      "passphrase": "スペースのパスフレーズ",
-      "confirmPassphrase": "パスフレーズを確認",
-      "deviceName": "デバイス名",
-      "passphraseMismatch": "パスフレーズが一致しません",
-      "joining": "参加中…",
-      "creating": "作成中…"
     }
   }
 }

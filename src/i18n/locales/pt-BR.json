@@ -1,5 +1,108 @@
 {
+  "startupFailure": {
+    "unavailable": "Problema na inicialização",
+    "title": "Não foi possível iniciar",
+    "description": "Não foi possível conectar ao serviço em segundo plano. O aplicativo está temporariamente indisponível.",
+    "updateTitle": "É necessário atualizar o aplicativo",
+    "updateDescription": "Uma versão mais recente está em execução em segundo plano. Atualize este aplicativo para continuar.",
+    "retry": "Tentar novamente",
+    "retrying": "Tentando novamente…",
+    "export": "Exportar logs",
+    "exporting": "Exportando…",
+    "contact": "Contatar o autor",
+    "update": "Abrir atualização",
+    "details": "Detalhes do erro",
+    "exported": "Logs salvos em: {{path}}",
+    "exportFailed": "Não foi possível exportar os logs. Verifique o local de destino e o espaço disponível e tente novamente.",
+    "contactFailed": "Não foi possível abrir a página de suporte. Endereço de contato:",
+    "updateFailed": "Não foi possível verificar atualizações. Tente novamente mais tarde.",
+    "contactOpened": "A página de suporte foi aberta no navegador."
+  },
+  "appearanceLayout": {
+    "effectsHelp": "Equilibre os efeitos visuais e o desempenho.",
+    "scaleHelp": "Ajuste o tamanho do texto e dos elementos da interface.",
+    "themeHelp": {
+      "system": "Alterne entre claro e escuro seguindo o sistema.",
+      "light": "Sempre usar a aparência clara.",
+      "dark": "Sempre usar a aparência escura."
+    },
+    "lightPalette": "Cores claras",
+    "darkPalette": "Cores escuras",
+    "theme": "Tema",
+    "palette": "Cores",
+    "effects": "Efeitos visuais",
+    "display": "Exibição",
+    "customColors": "Cores personalizadas",
+    "preview": "Prévia do tema atual",
+    "zoomIn": "Ampliar",
+    "zoomOut": "Reduzir",
+    "saveFailed": "Não foi possível salvar a alteração. Tente novamente."
+  },
+  "smoothMode": {
+    "title": "Modo fluido",
+    "auto": "Automático",
+    "effects": "Priorizar efeitos",
+    "smooth": "Priorizar fluidez",
+    "currentSmooth": "Atual: priorizando fluidez",
+    "currentEffects": "Atual: priorizando efeitos",
+    "notSaved": "Aplicado nesta sessão, mas não foi possível salvar. Reiniciar pode restaurar a seleção anterior.",
+    "unavailable": "Não foi possível ler ou salvar as preferências de aparência. Tente novamente.",
+    "reason": {
+      "manual": "Usando sua seleção.",
+      "system": "Respeitando a preferência do sistema por movimento reduzido, inclusive quando ela está indisponível.",
+      "platform_default": "No Linux, o modo automático reduz os efeitos visuais.",
+      "hardware": "Selecionado conforme a capacidade do dispositivo.",
+      "unknown": "A capacidade do dispositivo não foi confirmada; usando efeitos reduzidos.",
+      "runtime": "Selecionado com base no desempenho anterior."
+    }
+  },
   "deviceTrust": {
+    "presentation": {
+      "localRemovalTitle": "{{actor}} quer remover este dispositivo",
+      "leave": "Sair do grupo de dispositivos",
+      "keep": "Manter os dispositivos existentes",
+      "leaveEffect": "Parar a sincronização com todos os dispositivos.",
+      "keepEffect": "Manter os dispositivos existentes. A sincronização com {{names}} será pausada.",
+      "showDevices": "Ver dispositivos",
+      "hideDevices": "Ocultar dispositivos",
+      "scope": "Escopo esperado de sincronização: {{names}}.",
+      "title": "Escolha um grupo de dispositivos para {{name}}",
+      "local": "Este dispositivo: {{name}}",
+      "localMember": "{{name}} (este dispositivo)",
+      "unnamed": "Dispositivo sem nome",
+      "members": "Membros do grupo",
+      "membersUnknown": "Os detalhes dos membros estão incompletos",
+      "impactUnknown": "Os detalhes dos efeitos desta escolha estão incompletos.",
+      "detailsIncomplete": "Alguns detalhes da alteração não estão disponíveis.",
+      "paused": "A sincronização com {{names}} será pausada.",
+      "rejoin": "{{names}} precisa entrar novamente para sincronizar no grupo selecionado.",
+      "waiting": "Aguardando a confirmação de {{names}}.",
+      "removed": "{{actor}} propôs remover {{target}}.",
+      "added": "{{actor}} adicionou {{target}}.",
+      "accepted": "{{actor}} aceitou remover {{target}}.",
+      "rejected": "{{actor}} recusou remover {{target}}.",
+      "reason": {
+        "unknown": "Os grupos de dispositivos são diferentes. Não há informações suficientes para explicar o motivo.",
+        "pending_removal": "Uma remoção de dispositivo precisa da sua decisão.",
+        "different_removals": "Os dois lados removeram dispositivos diferentes.",
+        "removal_decision_disagreement": "Os dois lados tomaram decisões diferentes sobre a mesma remoção.",
+        "diverged_history": "Os dois lados registraram alterações diferentes no grupo de dispositivos."
+      },
+      "select": "Escolha um grupo de dispositivos",
+      "back": "Voltar às opções",
+      "retry": "Verificar novamente",
+      "processing": "Enviando sua escolha",
+      "checking": "Verificando o resultado",
+      "pending": "Sua escolha foi recebida e ainda está sendo processada.",
+      "completed": "Grupo de dispositivos atualizado",
+      "next": "Continuar",
+      "done": "Concluído",
+      "more": "A escolha anterior foi concluída. Mais {{count}} precisam da sua decisão.",
+      "uncertain": "Não foi possível confirmar o resultado. Verifique novamente.",
+      "changed": "As opções mudaram. Revise-as novamente.",
+      "loading": "Verificando as relações entre dispositivos",
+      "loadFailed": "Não foi possível carregar as relações entre dispositivos. Tente novamente."
+    },
     "listSeparator": ", ",
     "notification": {
       "title": "Revise a relação dos dispositivos",
@@ -10,15 +113,22 @@
       "title": "Escolha com quais dispositivos continuar sincronizando",
       "summary": "{{proposer}} quer remover {{targets}}",
       "localSummary": "{{proposer}} quer remover este dispositivo",
+      "groupConflictSummary": "Os dispositivos informam grupos diferentes. Escolha qual grupo este dispositivo deve usar.",
+      "issueProgress": "Decisão {{current}} de {{total}}",
       "applyTitle": "Aceitar esta remoção",
       "keepTitle": "Recusar e manter os dispositivos originais",
       "leaveTitle": "Sair do grupo de dispositivos",
       "stayTitle": "Permanecer no grupo atual",
+      "useGroupTitle": "Usar este grupo de dispositivos",
       "continueSyncing": "Continuar sincronizando",
       "stopSyncing": "Parar de sincronizar",
       "noDevices": "Nenhum",
       "confirmLocalRemoval": "Isso remove este dispositivo do espaço e interrompe a sincronização nele. Confirme novamente para continuar.",
+      "requiresRePairing": "Dispositivos fora deste grupo precisarão ser pareados novamente.",
+      "membersIncomplete": "Este grupo pode conter dispositivos que não aparecem aqui.",
       "stateChanged": "O estado dos dispositivos mudou. A situação mais recente está sendo exibida.",
+      "choicePending": "Sua escolha foi salva e ainda está sendo concluída.",
+      "rePairingRequired": "O grupo mudou. Os dispositivos afetados precisam ser pareados novamente.",
       "failed": "Não foi possível salvar sua escolha. Verifique o serviço em segundo plano e tente novamente."
     },
     "actions": {
@@ -38,6 +148,8 @@
     }
   },
   "common": {
+    "notifications": "Notificações",
+    "dismissNotification": "Fechar notificação",
     "loading": "Carregando...",
     "unknownSize": "Tamanho desconhecido",
     "zeroBytes": "0 Bytes"
@@ -119,11 +231,27 @@
     }
   },
   "rePairingNotice": {
+    "dontShowAgain": "Não mostrar novamente",
     "title": "Pareie seus dispositivos novamente",
     "body": "Esta versão altera o esquema de pareamento de dispositivos. Seus pareamentos anteriores não sincronizam mais. Abra Dispositivos para convidar o outro dispositivo ou entrar novamente a partir dele.",
     "goToDevices": "Abrir gerenciamento de dispositivos"
   },
   "settings": {
+    "pageDescriptions": {
+      "general": "Configure a inicialização, o idioma, os sons e os diagnósticos.",
+      "appearance": "Ajuste o tema, as cores e a exibição.",
+      "shortcuts": "Personalize os atalhos de teclado para ações frequentes.",
+      "quickPanel": "Escolha como abrir e posicionar o painel rápido.",
+      "sync": "Gerencie a sincronização da área de transferência e de arquivos.",
+      "security": "Gerencie o desbloqueio automático neste dispositivo.",
+      "network": "Configure conexões, servidores de retransmissão e desempenho de transferência.",
+      "storage": "Veja o uso de espaço e gerencie o histórico e o cache.",
+      "about": "Veja a versão do aplicativo, as atualizações e as informações do projeto."
+    },
+    "sectionHeadings": {
+      "syncBehavior": "Comportamento da sincronização",
+      "historyRetention": "Retenção do histórico"
+    },
     "title": "Configurações",
     "restartBanner": {
       "restartButton": "Reiniciar agora",
@@ -151,7 +279,7 @@
         "saveError": "Falha ao salvar a configuração",
         "deviceName": {
           "label": "Nome do dispositivo",
-          "description": "Usado para identificar este dispositivo na rede local",
+          "description": "Identifique este dispositivo entre os seus dispositivos.",
           "placeholder": "Digite o nome do dispositivo"
         },
         "autoStart": {
@@ -159,6 +287,11 @@
           "description": "Iniciar o UniClipboard ao iniciar o sistema"
         },
         "startupMode": {
+          "summaries": {
+            "normal": "Mostrar a janela do aplicativo ao iniciar.",
+            "silent": "Executar em segundo plano sem abrir uma janela.",
+            "lightweight": "Ao entrar no sistema, manter apenas a sincronização em segundo plano. Abra a interface quando precisar."
+          },
           "label": "Modo de inicialização",
           "description": "O modo Silencioso pula a janela e roda direto em segundo plano. O modo Leve vai além — assim que a sincronização fica pronta, ele fecha a janela e também sai da bandeja do sistema, mantendo só o serviço em segundo plano e enviando uma notificação; clique no ícone do app de novo para reabrir a janela.",
           "options": {
@@ -168,8 +301,8 @@
           }
         },
         "restoreLastEntryOnStartup": {
-          "label": "Restaurar a última entrada ao iniciar",
-          "description": "Assim que o serviço em segundo plano estiver pronto na inicialização, coloca a entrada mais recente do histórico de volta na área de transferência do sistema"
+          "label": "Restaurar a área de transferência ao iniciar",
+          "description": "Colocar a entrada mais recente do histórico de volta na área de transferência."
         },
         "language": {
           "title": "Idioma",
@@ -205,6 +338,15 @@
           "button": "Abrir no gerenciador de arquivos"
         },
         "logs": {
+          "capture": {
+            "label": "Capturar logs detalhados",
+            "tooltip": "Restam cerca de {{minutes}} minutos. Você pode desativar manualmente.",
+            "loading": "Lendo o estado de captura do serviço em segundo plano…",
+            "standard": "Registra logs detalhados temporariamente e para automaticamente após 10 minutos.",
+            "active": "Registrando logs detalhados. Para automaticamente em cerca de {{minutes}} minutos.",
+            "unavailable": "O diagnóstico do serviço em segundo plano está indisponível.",
+            "error": "Não foi possível alterar a captura detalhada"
+          },
           "debug": {
             "label": "Modo de depuração",
             "description": "Aumenta o detalhamento dos logs locais de diagnóstico depois que o app e o daemon forem reiniciados.",
@@ -219,10 +361,12 @@
           },
           "export": {
             "label": "Exportar logs",
-            "description": "Cria na pasta Downloads um arquivo zip com os logs de GUI, daemon e CLI das últimas 24 horas.",
+            "description": "Cria em Downloads um ZIP com diagnósticos recentes do app e do Engine, além de um relatório de cobertura.",
             "button": "Exportar logs",
             "exporting": "Exportando...",
             "success": "Logs exportados",
+            "offlineSuccess": "O serviço em segundo plano estava indisponível. Os logs existentes foram exportados sem confirmação de atualização ao vivo.",
+            "partialSuccess": "O pacote foi exportado com atualização ou cobertura de arquivos incompleta. Consulte o manifesto para obter detalhes.",
             "error": "Falha ao exportar os logs",
             "copyPath": "Copiar caminho",
             "copySuccess": "Caminho da exportação copiado",
@@ -274,9 +418,12 @@
           "hexInputLabel": "Valor hexadecimal da cor"
         },
         "windowFrame": {
-          "title": "Aparência da janela",
-          "useSystem": "Usar moldura de janela do sistema",
-          "description": "Usa a barra de título e os botões do sistema e move a busca de volta para a página."
+          "title": "Barra de título",
+          "description": "O modo automático oculta a barra de título no niri e no Hyprland. A seleção vale para este dispositivo, inclusive durante a inicialização.",
+          "auto": "Automático",
+          "custom": "Barra do aplicativo",
+          "system": "Barra do sistema",
+          "none": "Sem barra de título"
         },
         "zoom": {
           "title": "Escala da interface",
@@ -386,6 +533,11 @@
         "loadError": "Falha ao carregar as configurações:"
       },
       "network": {
+        "groups": {
+          "connection": "Conexão",
+          "relays": "Servidores de retransmissão",
+          "performance": "Desempenho da transferência"
+        },
         "loadError": "Falha ao carregar as configurações:",
         "lanOnly": {
           "label": "LAN-only Mode",
@@ -641,6 +793,7 @@
         "recording": "Pressione as teclas...",
         "chordHint": "Pressione outra combinação para um segundo passo (pressione a mesma combinação duas vezes para um \"toque duplo\") ou confirme",
         "rerecord": "Regravar",
+        "save": "Salvar",
         "conflict": "Conflita com: {{name}}",
         "confirmOverride": "Aplicar mesmo assim (remove o conflito)",
         "confirm": "Confirmar",
@@ -1092,6 +1245,14 @@
       "pairedCount_many": "{{count}} pareados",
       "onlineCount": "{{count}} online"
     },
+    "connectionRefresh": {
+      "action": "Atualizar conexões",
+      "checking": "Verificando conexões",
+      "failed": "Falha ao atualizar. Tente novamente.",
+      "summary": "{{total}} dispositivos verificados: {{online}} online, {{offline}} offline",
+      "errors": "Não foi possível verificar {{count}} dispositivos; estado da conexão não confirmado",
+      "listFailed": "Verificação concluída. Não foi possível atualizar a lista de dispositivos. Tente novamente."
+    },
     "pairedDevices": {
       "title": "Dispositivos pareados"
     },
@@ -1133,7 +1294,18 @@
       "subtitle": "Digite este código no computador ou celular que você está adicionando",
       "expiresIn": "Expira em {{remaining}}",
       "expired": "Convite expirado",
-      "qrAlt": "Código QR com o código de convite",
+      "passphraseHint": "O dispositivo que vai entrar também precisa da frase secreta do Espaço para concluir o pareamento",
+      "rePairing": {
+        "title": "Confirme a frase secreta do Espaço",
+        "subtitle": "Isso é necessário uma vez após atualizar um perfil antigo",
+        "description": "Seu histórico foi preservado. Confirme a frase secreta original do Espaço antes de criar um novo código de convite.",
+        "passphraseLabel": "Frase secreta do Espaço",
+        "passphrasePlaceholder": "Digite a frase secreta original",
+        "submit": "Confirmar e gerar código",
+        "submitting": "Verificando frase secreta…",
+        "wrongPassphrase": "A frase secreta está incorreta.",
+        "failed": "Não foi possível confirmar a frase secreta. Tente novamente."
+      },
       "loading": "Gerando código de convite…",
       "actions": {
         "cancel": "Cancelar",
@@ -1494,6 +1666,21 @@
       }
     },
     "panel": {
+      "danger": {
+        "title": "Zona de perigo",
+        "description": "Mantenha o histórico local e remova os pareamentos deste dispositivo.",
+        "reset": "Reconstruir espaço",
+        "failed": "Não foi possível reconstruir o espaço. Tente novamente ou reinicie o aplicativo.",
+        "modal": {
+          "title": "Reconstruir espaço",
+          "warning": "Crie um novo espaço apenas com este dispositivo. O histórico local e as configurações serão mantidos. Vínculos, estado de segurança e convites pendentes do espaço antigo serão removidos. Pareie os outros dispositivos novamente.",
+          "confirmPrompt": "Digite RESET para confirmar",
+          "confirmPlaceholder": "RESET",
+          "confirm": "Reconstruir espaço",
+          "resetting": "Reconstruindo...",
+          "cancel": "Cancelar"
+        }
+      },
       "listTitle": "Dispositivos",
       "counts": "{{online}}/{{total}} online · {{mobile}} móveis",
       "localBadge": "Este dispositivo",
@@ -1552,6 +1739,20 @@
       },
       "sync": {
         "title": "Configurações de sincronização",
+        "syncWithDevice": "Sincronizar com {{deviceName}}",
+        "enabledDescription": "O conteúdo copiado é sincronizado automaticamente entre os dispositivos.",
+        "disabledDescription": "A sincronização com este dispositivo está desativada.",
+        "customize": "Personalizar conteúdo sincronizado",
+        "allBoth": "Tudo nas duas direções",
+        "customized": "Personalizado",
+        "customizeDescription": "Escolha uma direção para cada tipo de conteúdo.",
+        "directionLabel": "Direção de sincronização para {{contentType}}",
+        "modes": {
+          "both": "Nas duas direções",
+          "sendOnly": "Apenas enviar para {{deviceName}}",
+          "receiveOnly": "Apenas receber de {{deviceName}}",
+          "off": "Não sincronizar"
+        },
         "helpLabel": "Sobre enviar e receber",
         "help": "Enviar controla o que este computador pode sincronizar com este dispositivo. Receber controla o que este computador pode aceitar deste dispositivo.",
         "restoreDefaults": "Restaurar padrões",
@@ -1922,7 +2123,6 @@
   },
   "setup": {
     "page": {
-      "loadingSetupState": "Carregando o estado da configuração...",
       "processing": "Processando...",
       "processingJoinSpace": {
         "title": "Conectando ao dispositivo…",
@@ -2048,12 +2248,10 @@
       "subtitle": "Digite o código de convite exibido no outro dispositivo e informe a mesma frase secreta usada para criar o Espaço.",
       "labels": {
         "code": "Código de convite",
-        "passphrase": "Frase secreta do Espaço",
-        "deviceName": "Nome do dispositivo"
+        "passphrase": "Frase secreta do Espaço"
       },
       "placeholders": {
-        "passphrase": "Digite a frase secreta do dispositivo anfitrião",
-        "deviceName": "ex.: computador Windows"
+        "passphrase": "Digite a frase secreta do dispositivo anfitrião"
       },
       "errors": {
         "invitationNotFound": "Este código de convite já foi usado ou não é mais válido. Peça um novo código ao dispositivo anfitrião.",
@@ -2122,64 +2320,6 @@
       "actions": {
         "done": "Concluir"
       }
-    }
-  },
-  "spaces": {
-    "selector": {
-      "ariaLabel": "Espaços",
-      "loading": "Carregando espaços…",
-      "empty": "Nenhum espaço disponível"
-    },
-    "actions": {
-      "add": "Adicionar espaço",
-      "join": "Entrar no espaço",
-      "create": "Criar espaço",
-      "cancel": "Cancelar",
-      "legacyRecovery": "Recuperar espaço antigo"
-    },
-    "status": {
-      "runtime": "Execução: {{state}}",
-      "incoming": "Recebimento: {{state}}",
-      "active": "{{name}}, espaço ativo para envio",
-      "setActive": "Definir {{name}} como espaço ativo para envio"
-    },
-    "runtime": {
-      "stopped": "Parado",
-      "starting": "Iniciando",
-      "running": "Em execução",
-      "locked": "Bloqueado",
-      "failed": "Falhou"
-    },
-    "incoming": {
-      "enabled": "Ativado",
-      "receiving": "Recebendo",
-      "degraded": "Parcialmente indisponível",
-      "disabled": "Desativado"
-    },
-    "faults": {
-      "relayUnreachable": "O relay está inacessível",
-      "generic": "Este espaço precisa de atenção"
-    },
-    "errors": {
-      "load": "Não foi possível carregar os espaços",
-      "refresh": "Não foi possível atualizar a lista de espaços",
-      "create": "Não foi possível criar o espaço",
-      "join": "Não foi possível entrar no espaço. Verifique o convite e a senha.",
-      "activeSend": "Não foi possível alterar o espaço de envio",
-      "remove": "Não foi possível remover o espaço"
-    },
-    "dialog": {
-      "title": "Adicionar um espaço",
-      "subtitle": "Mantenha vários espaços conectados e recebendo conteúdo ao mesmo tempo.",
-      "joinMode": "Entrar em um espaço existente",
-      "createMode": "Criar um novo espaço",
-      "code": "Código do convite",
-      "passphrase": "Senha do espaço",
-      "confirmPassphrase": "Confirmar senha",
-      "deviceName": "Nome do dispositivo",
-      "passphraseMismatch": "As senhas não coincidem",
-      "joining": "Entrando…",
-      "creating": "Criando…"
     }
   }
 }

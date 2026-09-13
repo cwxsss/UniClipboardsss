@@ -154,7 +154,7 @@ function AddSpaceDialogInner({ open, onOpenChange }: AddSpaceDialogProps) {
                 autoComplete="new-password"
               />
               {passphrasesMismatch ? (
-                <p id="add-space-passphrase-error" className="text-xs text-destructive">
+                <p id="add-space-passphrase-error" className="text-ui-caption text-destructive">
                   {t('spaces.dialog.passphraseMismatch')}
                 </p>
               ) : null}
@@ -173,7 +173,7 @@ function AddSpaceDialogInner({ open, onOpenChange }: AddSpaceDialogProps) {
           </div>
 
           {mutationError ? (
-            <p role="alert" className="text-sm font-medium text-destructive">
+            <p role="alert" className="text-ui-body font-medium text-destructive">
               {t(mutationError)}
             </p>
           ) : null}

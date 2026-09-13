@@ -6,7 +6,7 @@ use reqwest::{Method, RequestBuilder, StatusCode};
 use crate::http::enveloped::enveloped_request;
 use crate::http::{authorized_daemon_request_with_type, encode_path_segment};
 use crate::DaemonConnectionState;
-use uc_daemon_contract::api::dto::member::WorkspaceConvergenceDto;
+use uc_daemon_contract::api::dto::member::DeviceTrustSnapshotDto;
 use uc_daemon_contract::api::dto::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
     PairingApiErrorResponse, PairingSessionCommandRequest, SetPairingDiscoverabilityRequest,
@@ -49,12 +49,12 @@ impl std::fmt::Display for DaemonPairingRequestError {
 impl std::error::Error for DaemonPairingRequestError {}
 
 impl DaemonPairingClient {
-    pub fn new(connection_state: DaemonConnectionState) -> Self {
-        Self {
-            http: Arc::new(reqwest::Client::new()),
+    pub fn new(connection_state: DaemonConnectionState) -> Result<Self> {
+        Ok(Self {
+            http: Arc::new(crate::build_local_http_client()?),
             connection_state,
             client_type: "gui".to_string(),
-        }
+        })
     }
 
     pub(crate) fn with_http_conn_state_and_type(
@@ -161,7 +161,7 @@ impl DaemonPairingClient {
         .await
     }
 
-    pub async fn unpair_device(&self, peer_id: String) -> Result<WorkspaceConvergenceDto> {
+    pub async fn unpair_device(&self, peer_id: String) -> Result<DeviceTrustSnapshotDto> {
         Ok(enveloped_request(
             &self.http,
             &self.connection_state,

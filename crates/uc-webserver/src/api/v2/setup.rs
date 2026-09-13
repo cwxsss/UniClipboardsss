@@ -147,7 +147,8 @@ fn map_create_engine_err(err: EngineError) -> ApiError {
     operation_id = "setupV2IssueInvitation",
     responses(
         (status = 200, description = "Invitation issued", body = SetupIssueInvitationEnvelope),
-        (status = 503, description = "Facade not assembled or network not started", body = ApiErrorResponse),
+        (status = 409, description = "Space state requires recovery or does not permit invitations", body = ApiErrorResponse),
+        (status = 503, description = "Service unavailable, network not started, or member changes pending", body = ApiErrorResponse),
         (status = 500, description = "Internal error", body = ApiErrorResponse),
     ),
 )]
@@ -176,9 +177,23 @@ pub(crate) async fn issue_invitation(
 
 fn map_issue_engine_err(err: EngineError) -> ApiError {
     let (variant, api): (&'static str, ApiError) = match err.category() {
-        EngineErrorCategory::InvalidState => (
+        EngineErrorCategory::InvalidState if err.code() == 1221 => (
             "network_not_started",
             ApiError::service_unavailable("network is not started"),
+        ),
+        EngineErrorCategory::InvalidState if err.code() == 1225 => (
+            "membership_reconciliation_pending",
+            ApiError::service_unavailable(
+                "device changes are still being completed; retry shortly",
+            ),
+        ),
+        EngineErrorCategory::InvalidState if err.code() == 1226 => (
+            "space_recovery_required",
+            ApiError::conflict("space membership needs recovery before inviting another device"),
+        ),
+        EngineErrorCategory::InvalidState => (
+            "invitation_invalid_state",
+            ApiError::conflict("the current space state does not allow inviting another device"),
         ),
         EngineErrorCategory::Unavailable => (
             "service_unavailable",
@@ -228,7 +243,7 @@ pub(crate) async fn redeem(
     let result = state
         .execute(Operation::JoinSpace(JoinSpaceInput {
             invitation_code: req.code,
-            device_name: req.device_name,
+            device_name: None,
             passphrase: SecretString::new(req.passphrase),
             preserve_unreadable_history: false,
         }))
@@ -660,8 +675,10 @@ pub(crate) fn join_space_response(status: JoinSpaceStatusSummary) -> JoinSpaceRe
         JoinSpaceStatusSummary::Active {
             join_id,
             joined_space,
+            peer_upgrade_required,
         } => JoinSpaceResponse::Active {
             join_id,
+            peer_upgrade_required,
             joined_space: JoinedSpaceResponse {
                 sponsor_device_id: joined_space.sponsor_device_id,
                 sponsor_identity_fingerprint: joined_space.sponsor_identity_fingerprint,
@@ -678,12 +695,14 @@ pub(crate) fn join_space_response(status: JoinSpaceStatusSummary) -> JoinSpaceRe
             sponsor_device_id,
             sponsor_identity_fingerprint,
             cancel_requested,
+            peer_upgrade_required,
         } => JoinSpaceResponse::Pending {
             join_id,
             target_space_id,
             sponsor_device_id,
             sponsor_identity_fingerprint,
             cancel_requested,
+            peer_upgrade_required,
         },
         JoinSpaceStatusSummary::Rejected { join_id, reason } => JoinSpaceResponse::Rejected {
             join_id,
@@ -724,6 +743,36 @@ mod tests {
     //! boundary ownership are covered in `uc-engine`.
 
     use super::*;
+
+    #[test]
+    fn invitation_failures_do_not_misreport_membership_as_network_startup() {
+        for (code, status, expected) in [
+            (1221, 503, "network is not started"),
+            (
+                1225,
+                503,
+                "device changes are still being completed; retry shortly",
+            ),
+            (
+                1226,
+                409,
+                "space membership needs recovery before inviting another device",
+            ),
+            (
+                1299,
+                409,
+                "the current space state does not allow inviting another device",
+            ),
+        ] {
+            let result = map_issue_engine_err(EngineError::new(
+                code,
+                EngineErrorCategory::InvalidState,
+                true,
+            ));
+            assert_eq!(result.status.as_u16(), status);
+            assert_eq!(result.message, expected);
+        }
+    }
 
     #[test]
     fn map_create_engine_err_branches() {

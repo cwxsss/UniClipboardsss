@@ -43,6 +43,14 @@ pub enum RowState {
     CancelPending,
 }
 
+/// The daemon's response to a user cancellation request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelResult {
+    Cancelled,
+    Inactive,
+    NotCancelled,
+}
+
 impl RowState {
     /// 终态:行最终会被 sweep 走,不应再被 progress 事件更新。
     pub fn is_terminal(&self) -> bool {
@@ -303,10 +311,6 @@ impl ActivityHudState {
         reason: Option<String>,
     ) -> bool {
         let now_ms = self.clock.now_ms();
-        let key = row_key(entry_id.unwrap_or(transfer_id), attempt_id, transfer_id);
-        let Some(row) = self.rows.get_mut(&key) else {
-            return false;
-        };
         let new_state = match status {
             "completed" => RowState::Completed,
             "failed" => RowState::Failed { reason },
@@ -314,6 +318,16 @@ impl ActivityHudState {
             // "transferring" / "pending" 不在 HUD 关心范围内 —— 进度由
             // Progress 事件驱动,这里只用 StatusChanged 处理终态。
             _ => return false,
+        };
+        if attempt_id.is_some() {
+            // Adoption gives the upload an attempt owner. Retire its provisional
+            // row even if the attempt row has already expired. Only attempt
+            // events may finish the aggregate row, which can contain more items.
+            return self.dismiss_scoped(transfer_id, None, transfer_id);
+        }
+        let key = row_key(entry_id.unwrap_or(transfer_id), None, transfer_id);
+        let Some(row) = self.rows.get_mut(&key) else {
+            return false;
         };
         if row.state == new_state {
             return false;
@@ -413,6 +427,36 @@ impl ActivityHudState {
         }
         row.state = RowState::CancelPending;
         row.state_entered_at_ms = now_ms;
+        true
+    }
+
+    /// Resolve only the pending request's row; late replies cannot change a terminal row.
+    pub fn resolve_cancel(
+        &mut self,
+        entry_id: &str,
+        attempt_id: Option<&str>,
+        transfer_id: &str,
+        result: CancelResult,
+    ) -> bool {
+        let key = row_key(entry_id, attempt_id, transfer_id);
+        let Some(row) = self.rows.get_mut(&key) else {
+            return false;
+        };
+        if row.state != RowState::CancelPending {
+            return false;
+        }
+        match result {
+            CancelResult::Inactive => {
+                return self.dismiss_scoped(entry_id, attempt_id, transfer_id)
+            }
+            CancelResult::Cancelled => {
+                row.state = RowState::Cancelled {
+                    reason: Some("local_user".into()),
+                }
+            }
+            CancelResult::NotCancelled => row.state = RowState::Receiving,
+        }
+        row.state_entered_at_ms = self.clock.now_ms();
         true
     }
 
@@ -718,6 +762,56 @@ mod tests {
         clock.advance(200);
         assert!(state.sweep());
         assert!(state.is_empty());
+    }
+
+    #[test]
+    fn adopted_upload_status_preserves_new_attempt_and_unfinished_uploads() {
+        let (mut state, _clock) = make_state();
+        state.apply_progress(
+            "upload",
+            "phone",
+            FileTransferDirection::Receiving,
+            100,
+            Some(100),
+        );
+        state.apply_scoped_incoming_pending("entry", Some("old"), "phone", vec![], Some(100));
+        state.apply_scoped_incoming_pending("entry", Some("new"), "phone", vec![], Some(200));
+        let before = state.snapshot();
+        assert!(!state.apply_scoped_status_changed(
+            "upload",
+            Some("entry"),
+            Some("old"),
+            "transferring",
+            None
+        ));
+        assert_eq!(state.snapshot(), before);
+        assert!(state.apply_scoped_status_changed(
+            "upload",
+            Some("entry"),
+            Some("old"),
+            "completed",
+            None
+        ));
+        let rows = state.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].attempt_id.as_deref(), Some("new"));
+        assert_eq!(rows[0].state, RowState::Receiving);
+        assert!(!state.apply_scoped_status_changed(
+            "upload",
+            Some("entry"),
+            Some("old"),
+            "completed",
+            None
+        ));
+        assert_eq!(state.snapshot(), rows);
+        assert!(!state.apply_scoped_status_changed(
+            "another-item",
+            Some("entry"),
+            Some("new"),
+            "completed",
+            None
+        ));
+        assert_eq!(state.snapshot(), rows);
     }
 
     #[test]

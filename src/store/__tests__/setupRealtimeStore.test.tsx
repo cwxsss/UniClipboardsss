@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RedeemResponse, SetupStateResponse } from '@/api/daemon/setupV2'
+import type { ActiveJoinSpaceResponse, SetupStateResponse } from '@/api/daemon/setupV2'
 import {
   acknowledgeSetupCompletion,
   applyIssuedInvitation,
@@ -35,7 +35,7 @@ const completedState: SetupStateResponse = {
   rePairingRequired: false,
 }
 
-const redeem: RedeemResponse = {
+const redeem: ActiveJoinSpaceResponse = {
   status: 'active',
   joinId: 'join-id',
   joinedSpace: {
@@ -84,13 +84,21 @@ describe('setupRealtimeStore completion ownership', () => {
     const { result } = renderHook(() => useSetupRealtimeStore())
 
     act(() =>
-      applyServerSetupState(completedState, { kind: 'pairing_succeeded', role: 'joiner', redeem })
+      applyServerSetupState(completedState, {
+        kind: 'pairing_succeeded',
+        role: 'joiner',
+        redeem,
+      })
     )
 
     expect(result.current.flow).toEqual({
       kind: 'completed',
       deviceName: 'MacBook',
-      completion: { kind: 'pairing_succeeded', role: 'joiner', redeem },
+      completion: {
+        kind: 'pairing_succeeded',
+        role: 'joiner',
+        redeem,
+      },
     })
   })
 
@@ -132,19 +140,6 @@ describe('setupRealtimeStore completion ownership', () => {
     act(() => applyServerSetupState(completedState, { kind: 'space_ready' }))
 
     act(() => acknowledgeSetupCompletion())
-
-    expect(result.current.flow).toEqual({
-      kind: 'completed',
-      deviceName: 'MacBook',
-      completion: null,
-    })
-  })
-
-  it('does not reopen onboarding for an invitation issued from the main app', () => {
-    const { result } = renderHook(() => useSetupRealtimeStore())
-
-    act(() => applyServerSetupState(completedState))
-    act(() => applyIssuedInvitation({ code: 'ABC123', expiresAtMs: 123_456 }))
 
     expect(result.current.flow).toEqual({
       kind: 'completed',

@@ -1,4 +1,4 @@
-//! 窗口外壳相关 Tauri 命令（目前仅 macOS 交通灯定位）。
+//! Window chrome positioning and main-window presentation commands.
 //!
 //! ## 为什么需要这个模块
 //!
@@ -30,6 +30,64 @@ use crate::commands::TraceMetadata;
 use tauri::Manager;
 use tauri::WebviewWindow;
 use tracing::{info_span, Instrument};
+
+/// Acknowledge the first frontend commit for one main-window generation.
+#[tauri::command]
+#[specta::specta]
+pub fn mark_main_window_ready(
+    window: WebviewWindow,
+    generation: String,
+    _trace: Option<TraceMetadata>,
+) -> Result<(), String> {
+    let span = info_span!(
+        "command.window_chrome.mark_main_window_ready",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+    );
+    record_trace_fields(&span, &_trace);
+    span.in_scope(|| {
+        if window.label() != crate::main_window::MAIN_WINDOW_LABEL {
+            tracing::warn!(
+                error_kind = "unexpected_window",
+                "Ignoring readiness from a non-main window"
+            );
+            return Err("Only the main window may report startup readiness".into());
+        }
+        let generation = generation.parse::<u64>().map_err(|_| {
+            tracing::warn!(
+                error_kind = "invalid_window_generation",
+                "Invalid main window generation"
+            );
+            "Invalid main window generation".to_string()
+        })?;
+        tracing::debug!(generation, "Main window frontend committed");
+        crate::main_window::handle_frontend_ready(&window, generation);
+        Ok(())
+    })
+}
+
+/// The current main document has committed useful content or an actionable failure.
+#[tauri::command]
+#[specta::specta]
+pub async fn main_window_presentation_ready(
+    window: WebviewWindow,
+    generation: String,
+    _trace: Option<TraceMetadata>,
+) {
+    let span = info_span!(
+        "command.window_chrome.presentation_ready",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty
+    );
+    record_trace_fields(&span, &_trace);
+    async move {
+        if let Ok(generation) = generation.parse::<u64>() {
+            crate::main_window::mark_presentation_ready(&window, generation);
+        }
+    }
+    .instrument(span)
+    .await;
+}
 
 #[cfg(target_os = "macos")]
 mod imp {

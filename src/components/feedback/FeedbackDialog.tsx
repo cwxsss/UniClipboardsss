@@ -1,7 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -12,9 +11,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { toast } from '@/components/ui/toast'
 import { createLogger } from '@/lib/logger'
 import { cn } from '@/lib/utils'
-import { Sentry } from '@/observability/sentry'
+import { submitDiagnosticFeedback } from '@/observability/diagnostics'
 
 const log = createLogger('feedback-dialog')
 
@@ -44,13 +44,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 
     setIsSubmitting(true)
     try {
-      const eventId = Sentry.captureMessage('User Feedback')
-      Sentry.captureFeedback({
-        message: content,
-        name: 'User',
-        email: email || undefined,
-        associatedEventId: eventId,
-      })
+      await submitDiagnosticFeedback({ message: content, email: email || undefined })
 
       if (email.trim()) {
         try {
@@ -85,7 +79,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
           <div className="grid gap-2">
             <label
               htmlFor="feedback-content"
-              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              className="text-ui-body font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
             >
               {t('feedback.modal.label.content')}
             </label>
@@ -93,7 +87,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
               id="feedback-content"
               aria-label={t('feedback.modal.label.content')}
               className={cn(
-                'flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+                'flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-ui-body ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
               )}
               placeholder={t('feedback.modal.placeholder.content')}
               value={content}
@@ -104,7 +98,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
           <div className="grid gap-2">
             <label
               htmlFor="feedback-email"
-              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              className="text-ui-body font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
             >
               {t('feedback.modal.label.email')}
             </label>
@@ -119,7 +113,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
               <div className="flex justify-end">
                 <button
                   type="button"
-                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  className="text-ui-body text-muted-foreground underline underline-offset-2 hover:text-foreground"
                   onClick={() => setEmail(savedEmail)}
                 >
                   {t('feedback.modal.useSavedEmail')}

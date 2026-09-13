@@ -82,6 +82,23 @@ describe('ClipboardPreview', () => {
     }
   })
 
+  it('omits the action bar when the caller supplies no actions', async () => {
+    render(<ClipboardPreview item={createImageFileItem()} />)
+
+    await screen.findByRole('img', { name: 'screenshot.png' })
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.getByTestId('clipboard-detail').querySelector('.bottom-4')).toBeNull()
+  })
+
+  it('renders caller actions using the current delivery information', async () => {
+    const actions = vi.fn(() => <button type="button">Caller action</button>)
+    render(<ClipboardPreview item={createImageFileItem()} actions={actions} />)
+
+    await screen.findByRole('img', { name: 'screenshot.png' })
+    expect(screen.getByRole('button', { name: 'Caller action' })).toBeInTheDocument()
+    expect(actions).toHaveBeenCalledWith(null)
+  })
+
   it('renders a direct image preview with filename for image files', async () => {
     render(<ClipboardPreview item={createImageFileItem()} />)
 
@@ -286,7 +303,7 @@ describe('ClipboardPreview', () => {
     expect(codePreview).not.toHaveClass('p-6')
     expect(codePreview.querySelector('.rounded-xl')).not.toBeInTheDocument()
     expect(detail).toHaveClass('bg-muted/15')
-    expect(codePreview).toHaveClass('bg-transparent', 'text-foreground/85')
+    expect(codePreview).toHaveClass('bg-card', 'text-foreground/85')
     expect(codePreview.className).not.toContain('bg-[#0d1117]')
   })
 })

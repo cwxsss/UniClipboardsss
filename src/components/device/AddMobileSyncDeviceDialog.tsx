@@ -37,6 +37,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { useDialogSessionReset } from '@/hooks/useDialogSessionReset'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('add-mobile-sync-device-dialog')
@@ -52,13 +53,19 @@ type FieldErrorKey = 'label' | 'username' | 'password'
 type FieldErrors = Partial<Record<FieldErrorKey, string>>
 
 const AddMobileSyncDeviceDialog: React.FC<Props> = props => {
-  // 用 `open` 作 React `key`,关→开 时整个内部组件重挂载,自然带回默认
-  // state(尤其密码不留)。这里替换原来的 reset-all-state on open useEffect
-  // (踩 no-reset-all-state-on-prop-change)。
-  return <AddMobileSyncDeviceDialogInner key={props.open ? 'open' : 'closed'} {...props} />
+  const { sessionKey, onOpenChangeComplete } = useDialogSessionReset()
+  return (
+    <AddMobileSyncDeviceDialogInner
+      key={sessionKey}
+      {...props}
+      onOpenChangeComplete={onOpenChangeComplete}
+    />
+  )
 }
 
-const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, onSuccess }) => {
+const AddMobileSyncDeviceDialogInner: React.FC<
+  Props & { onOpenChangeComplete: (open: boolean) => void }
+> = ({ open, onOpenChange, onSuccess, onOpenChangeComplete }) => {
   const { t } = useTranslation()
 
   const [label, setLabel] = useState('')
@@ -115,6 +122,7 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
 
   return (
     <Dialog
+      onOpenChangeComplete={onOpenChangeComplete}
       open={open}
       onOpenChange={next => {
         if (!submitting) onOpenChange(next)
@@ -147,7 +155,11 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
               aria-describedby={fieldErrors.label ? 'mobile-sync-label-error' : undefined}
             />
             {fieldErrors.label !== undefined && (
-              <p id="mobile-sync-label-error" role="alert" className="text-xs text-destructive">
+              <p
+                id="mobile-sync-label-error"
+                role="alert"
+                className="text-ui-body text-destructive"
+              >
                 {fieldErrors.label}
               </p>
             )}
@@ -159,7 +171,7 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
               render={
                 <button
                   type="button"
-                  className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  className="flex items-center gap-1 text-ui-body font-medium text-muted-foreground hover:text-foreground"
                 />
               }
             >
@@ -171,7 +183,7 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
               {t('devices.mobileSync.add.advanced.title')}
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-2 space-y-3 rounded-md border border-border/40 bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground">
+              <p className="text-ui-caption text-muted-foreground">
                 {t('devices.mobileSync.add.advanced.description')}
               </p>
 
@@ -196,12 +208,12 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
                   <p
                     id="mobile-sync-username-error"
                     role="alert"
-                    className="text-xs text-destructive"
+                    className="text-ui-body text-destructive"
                   >
                     {fieldErrors.username}
                   </p>
                 ) : (
-                  <p className="text-xs text-muted-foreground/80">
+                  <p className="text-ui-caption text-muted-foreground/80">
                     {t('devices.mobileSync.add.username.help')}
                   </p>
                 )}
@@ -229,12 +241,12 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
                   <p
                     id="mobile-sync-password-error"
                     role="alert"
-                    className="text-xs text-destructive"
+                    className="text-ui-body text-destructive"
                   >
                     {fieldErrors.password}
                   </p>
                 ) : (
-                  <p className="text-xs text-muted-foreground/80">
+                  <p className="text-ui-caption text-muted-foreground/80">
                     {t('devices.mobileSync.add.password.help')}
                   </p>
                 )}
@@ -245,7 +257,7 @@ const AddMobileSyncDeviceDialogInner: React.FC<Props> = ({ open, onOpenChange, o
           {formError !== null && (
             <div
               role="alert"
-              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-body text-destructive"
             >
               {formError}
             </div>

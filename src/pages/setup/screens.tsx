@@ -20,7 +20,15 @@ import {
   Wifi,
   XCircle,
 } from 'lucide-react'
-import { useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { getSettings } from '@/api/daemon/settings'
 import type {
@@ -30,12 +38,12 @@ import type {
   RedeemInvitationErrorKind,
   ActiveJoinSpaceResponse,
 } from '@/api/daemon/setupV2'
-import { INVITATION_CODE_LENGTH, formatInvitationCode } from '@/components/invitation-code-utils'
 import { InvitationCodeInput } from '@/components/InvitationCodeInput'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useConfigImport, type ConfigImportErrorKind } from '@/hooks/useConfigImport'
+import { INVITATION_CODE_LENGTH, formatInvitationCode } from '@/lib/invitation-code'
 import { cn } from '@/lib/utils'
 
 // ── Common shell ───────────────────────────────────────────────────────────
@@ -66,7 +74,7 @@ function ScreenShell({
       className="w-full"
     >
       <div className={cn('text-foreground', centered && 'text-center')}>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
+        <h1 className="text-ui-title font-semibold">{title}</h1>
         {subtitle && <p className="mt-2 text-muted-foreground">{subtitle}</p>}
       </div>
 
@@ -76,7 +84,7 @@ function ScreenShell({
         <div
           role="alert"
           className={cn(
-            'mt-4 flex items-center gap-2 text-sm text-destructive sm:mt-5',
+            'mt-4 flex items-center gap-2 text-ui-body text-destructive sm:mt-5',
             centered && 'justify-center'
           )}
         >
@@ -89,7 +97,7 @@ function ScreenShell({
         <div className={cn('mt-7 flex sm:mt-8', centered && 'justify-center')}>{footer}</div>
       )}
 
-      {hint && <div className="mt-4 text-xs text-muted-foreground sm:mt-5">{hint}</div>}
+      {hint && <div className="mt-4 text-ui-caption text-muted-foreground sm:mt-5">{hint}</div>}
     </m.div>
   )
 }
@@ -130,21 +138,19 @@ export function SetupBrandPanel() {
         <div className="flex size-10 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
           <ClipboardCheck className="size-5" />
         </div>
-        <span className="text-base font-semibold tracking-tight">UniClipboard</span>
+        <span className="text-ui-section font-semibold">UniClipboard</span>
       </div>
 
       {/* Value proposition. */}
       <div className="relative z-10 space-y-3">
-        <h2 className="text-2xl font-semibold leading-snug tracking-tight">
-          {t('brand.headline')}
-        </h2>
-        <p className="max-w-xs text-sm leading-relaxed text-white/55">{t('brand.tagline')}</p>
+        <h2 className="text-ui-title font-semibold">{t('brand.headline')}</h2>
+        <p className="max-w-xs text-ui-body-relaxed text-white/55">{t('brand.tagline')}</p>
       </div>
 
       {/* Trust badges. */}
       <div className="relative z-10 flex flex-col gap-2.5">
         {badges.map(({ icon: Icon, label }) => (
-          <div key={label} className="flex items-center gap-2.5 text-xs text-white/55">
+          <div key={label} className="flex items-center gap-2.5 text-ui-caption text-white/55">
             <Icon className="size-4 text-white/70" />
             {label}
           </div>
@@ -187,8 +193,8 @@ function EntryRow({
         <Icon className="size-5" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium text-foreground">{title}</div>
-        <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</div>
+        <div className="text-ui-body font-medium text-foreground">{title}</div>
+        <div className="mt-0.5 text-ui-caption-relaxed text-muted-foreground">{description}</div>
       </div>
       <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground" />
     </button>
@@ -217,8 +223,8 @@ export function EntryScreen({
       className="w-full"
     >
       <div className="mb-7">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t('title')}</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{t('subtitle')}</p>
+        <h1 className="text-ui-title font-semibold text-foreground">{t('title')}</h1>
+        <p className="mt-2 text-ui-body-relaxed text-muted-foreground">{t('subtitle')}</p>
       </div>
 
       <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
@@ -241,7 +247,9 @@ export function EntryScreen({
       </div>
 
       <div className="mt-5">
-        <p className="mb-2 text-xs font-medium text-muted-foreground">{t('import.divider')}</p>
+        <p className="mb-2 text-ui-caption font-medium text-muted-foreground">
+          {t('import.divider')}
+        </p>
         <div className="overflow-hidden rounded-lg border border-border/70 bg-card/60">
           <EntryRow
             icon={Package}
@@ -254,7 +262,7 @@ export function EntryScreen({
         </div>
       </div>
 
-      <p className="mt-5 text-xs leading-relaxed text-muted-foreground">{t('footer')}</p>
+      <p className="mt-5 text-ui-caption-relaxed text-muted-foreground">{t('footer')}</p>
     </m.div>
   )
 }
@@ -283,9 +291,19 @@ function initializeErrorMessage(
   }
 }
 
+interface InitializeForm {
+  deviceName: string
+  pass1: string
+  pass2: string
+  errorKind: InitializeSpaceErrorKind | null
+}
+
+type InitializeFormAction =
+  | { type: 'default_name'; name: string }
+  | { type: 'edit'; changes: Partial<InitializeForm> }
+
 export function InitializeSpaceScreen({
   onSubmit,
-  onSuccess,
   onBack,
   loading,
 }: {
@@ -294,19 +312,22 @@ export function InitializeSpaceScreen({
     passphrase: string
     passphraseConfirm: string
   }) => Promise<{ ok: true } | { ok: false; kind: InitializeSpaceErrorKind; raw: string }>
-  onSuccess?: () => void
   onBack: () => void
   loading?: boolean
 }) {
   const { t } = useTranslation(undefined, {
     keyPrefix: 'setup.initializeSpace',
   })
-  const [deviceName, setDeviceName] = useState('')
-  const [pass1, setPass1] = useState('')
-  const [pass2, setPass2] = useState('')
+  const [form, updateForm] = useReducer(
+    (state: InitializeForm, action: InitializeFormAction): InitializeForm =>
+      action.type === 'default_name'
+        ? { ...state, deviceName: state.deviceName || action.name }
+        : { ...state, ...action.changes },
+    { deviceName: '', pass1: '', pass2: '', errorKind: null }
+  )
+  const { deviceName, pass1, pass2, errorKind } = form
   const [showPass1, setShowPass1] = useState(false)
   const [showPass2, setShowPass2] = useState(false)
-  const [errorKind, setErrorKind] = useState<InitializeSpaceErrorKind | null>(null)
 
   const errorMessage = initializeErrorMessage(t, errorKind)
 
@@ -320,7 +341,7 @@ export function InitializeSpaceScreen({
         if (cancelled) return
         const fallback = s.general.deviceName?.trim() ?? ''
         if (!fallback) return
-        setDeviceName(prev => (prev ? prev : fallback))
+        updateForm({ type: 'default_name', name: fallback })
       })
       .catch(() => {
         // Non-fatal — user can still type a name manually.
@@ -331,17 +352,17 @@ export function InitializeSpaceScreen({
   }, [])
 
   const handleSubmit = async () => {
-    setErrorKind(null)
+    updateForm({ type: 'edit', changes: { errorKind: null } })
     if (!deviceName.trim()) {
-      setErrorKind('device_name_required')
+      updateForm({ type: 'edit', changes: { errorKind: 'device_name_required' } })
       return
     }
     if (!pass1) {
-      setErrorKind('passphrase_mismatch')
+      updateForm({ type: 'edit', changes: { errorKind: 'passphrase_mismatch' } })
       return
     }
     if (pass1 !== pass2) {
-      setErrorKind('passphrase_mismatch')
+      updateForm({ type: 'edit', changes: { errorKind: 'passphrase_mismatch' } })
       return
     }
     const res = await onSubmit({
@@ -349,11 +370,7 @@ export function InitializeSpaceScreen({
       passphrase: pass1,
       passphraseConfirm: pass2,
     })
-    if (!res.ok) {
-      setErrorKind(res.kind)
-      return
-    }
-    onSuccess?.()
+    if (!res.ok) updateForm({ type: 'edit', changes: { errorKind: res.kind } })
   }
 
   return (
@@ -397,7 +414,7 @@ export function InitializeSpaceScreen({
           <Input
             id="device-name"
             value={deviceName}
-            onChange={e => setDeviceName(e.target.value)}
+            onChange={e => updateForm({ type: 'edit', changes: { deviceName: e.target.value } })}
             disabled={loading}
             placeholder={t('placeholders.deviceName')}
           />
@@ -410,7 +427,7 @@ export function InitializeSpaceScreen({
               id="pass1"
               type={showPass1 ? 'text' : 'password'}
               value={pass1}
-              onChange={e => setPass1(e.target.value)}
+              onChange={e => updateForm({ type: 'edit', changes: { pass1: e.target.value } })}
               disabled={loading}
               className="pr-10"
               placeholder={t('placeholders.passphrase')}
@@ -432,7 +449,7 @@ export function InitializeSpaceScreen({
               id="pass2"
               type={showPass2 ? 'text' : 'password'}
               value={pass2}
-              onChange={e => setPass2(e.target.value)}
+              onChange={e => updateForm({ type: 'edit', changes: { pass2: e.target.value } })}
               disabled={loading}
               className="pr-10"
               placeholder={t('placeholders.passphraseConfirm')}
@@ -522,13 +539,13 @@ export function ShowInvitationScreen({
       <div className="mt-8 flex flex-col items-center gap-6 sm:mt-10">
         <div
           data-testid="setup-invitation-code"
-          className="rounded-xl border border-border/50 bg-muted/30 px-6 py-5 font-mono text-3xl font-semibold tracking-[0.4em] text-foreground sm:text-4xl"
+          className="break-words rounded-xl border border-border/50 bg-muted/30 px-6 py-5 font-mono text-ui-body font-medium text-foreground"
         >
           {display}
         </div>
         <div
           className={cn(
-            'text-sm tabular-nums',
+            'text-ui-body tabular-nums',
             expired ? 'text-destructive' : 'text-muted-foreground'
           )}
         >
@@ -584,7 +601,6 @@ export function RedeemInvitationScreen({
   onSubmit: (input: {
     code: string
     passphrase: string
-    deviceName: string
   }) => Promise<
     | { ok: true; redeem: ActiveJoinSpaceResponse | null }
     | { ok: false; kind: RedeemInvitationErrorKind; raw: string }
@@ -597,26 +613,19 @@ export function RedeemInvitationScreen({
   })
   const [code, setCode] = useState('')
   const [pass, setPass] = useState('')
-  const [deviceName, setDeviceName] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [errorKind, setErrorKind] = useState<RedeemInvitationErrorKind | null>(null)
   const passInputRef = useRef<HTMLInputElement>(null)
 
   const errorMessage = redeemErrorMessage(t, errorKind)
   const codeComplete = code.length === INVITATION_CODE_LENGTH
-  const canSubmit = codeComplete && pass.length > 0 && deviceName.trim().length > 0 && !loading
+  const canSubmit = codeComplete && pass.length > 0 && !loading
   const codeInvalid = errorKind === 'invitation_not_found' || errorKind === 'invitation_expired'
-
-  // Hand focus over to passphrase the moment the code reaches full length —
-  // works for both paste and the last keystroke of manual entry.
-  useEffect(() => {
-    if (codeComplete) passInputRef.current?.focus()
-  }, [codeComplete])
 
   const handleSubmit = async () => {
     setErrorKind(null)
     if (!canSubmit) return
-    const res = await onSubmit({ code, passphrase: pass, deviceName: deviceName.trim() })
+    const res = await onSubmit({ code, passphrase: pass })
     if (!res.ok) {
       setErrorKind(res.kind)
       // These failures all consume or invalidate the one-time invitation.
@@ -670,36 +679,22 @@ export function RedeemInvitationScreen({
     >
       <div className="mx-auto mt-8 w-full max-w-sm space-y-6 sm:mt-9">
         <div className="mx-auto w-fit space-y-2">
-          <Label htmlFor="join-code" className="text-xs font-medium text-muted-foreground">
+          <Label htmlFor="join-code" className="font-medium text-muted-foreground">
             {t('labels.code')}
           </Label>
           <div data-testid="setup-redeem-code">
             <InvitationCodeInput
               id="join-code"
               value={code}
-              onChange={setCode}
+              onChange={value => {
+                setCode(value)
+                if (value.length === INVITATION_CODE_LENGTH) passInputRef.current?.focus()
+              }}
               disabled={loading}
               invalid={codeInvalid}
               autoFocus
             />
           </div>
-      </div>
-
-        <div className="mx-auto w-[calc(100%-0.25rem)] space-y-2">
-          <Label htmlFor="join-device-name" className="text-xs font-medium text-muted-foreground">
-            {t('labels.deviceName')}
-          </Label>
-          <Input
-            id="join-device-name"
-            data-testid="setup-redeem-device-name"
-            value={deviceName}
-            onChange={e => setDeviceName(e.target.value)}
-            disabled={loading}
-            required
-            className="h-10 rounded-md bg-card text-base shadow-xs"
-            placeholder={t('placeholders.deviceName')}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-          />
         </div>
 
         <AnimatePresence initial={false}>
@@ -713,18 +708,19 @@ export function RedeemInvitationScreen({
               className="overflow-hidden"
             >
               <div className="mx-auto w-[calc(100%-0.25rem)] space-y-2">
-                <Label htmlFor="join-pass" className="text-xs font-medium text-muted-foreground">
+                <Label htmlFor="join-pass" className="font-medium text-muted-foreground">
                   {t('labels.passphrase')}
                 </Label>
                 <div className="relative">
                   <Input
                     id="join-pass"
                     ref={passInputRef}
+                    autoFocus
                     type={showPass ? 'text' : 'password'}
                     value={pass}
                     onChange={e => setPass(e.target.value)}
                     disabled={loading}
-                    className="h-10 rounded-md bg-card pr-10 text-base shadow-xs"
+                    className="h-10 rounded-md bg-card pr-10 shadow-xs"
                     placeholder={t('placeholders.passphrase')}
                     onKeyDown={e => e.key === 'Enter' && handleSubmit()}
                   />
@@ -759,13 +755,18 @@ export function JoinPendingScreen({
       title={t('title')}
       subtitle={t('subtitle')}
       footer={
-        <Button variant="outline" onClick={onCancel} disabled={loading}>
+        <Button
+          data-testid="setup-join-cancel"
+          variant="outline"
+          onClick={onCancel}
+          disabled={loading}
+        >
           {t('actions.cancel')}
         </Button>
       }
       centered
     >
-      <div className="mt-8 flex justify-center">
+      <div data-testid="setup-join-pending" className="mt-8 flex justify-center">
         <Loader2 className="size-12 animate-spin text-primary" />
       </div>
     </ScreenShell>
@@ -784,10 +785,14 @@ export function JoinRejectedScreen({
     <ScreenShell
       title={t('rejected.title')}
       subtitle={t(`rejected.reasons.${reason}`)}
-      footer={<Button onClick={onBack}>{t('actions.back')}</Button>}
+      footer={
+        <Button data-testid="setup-join-rejected-back" onClick={onBack}>
+          {t('actions.back')}
+        </Button>
+      }
       centered
     >
-      <div className="mt-8 flex justify-center">
+      <div data-testid="setup-join-rejected" className="mt-8 flex justify-center">
         <XCircle className="size-12 text-destructive" />
       </div>
     </ScreenShell>
@@ -886,7 +891,7 @@ export function PairingCompleteScreen({
       centered
     >
       <div data-testid="setup-pairing-complete" className="mt-4 flex justify-center">
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-ui-caption font-medium text-emerald-600 dark:text-emerald-400">
           <CheckCircle2 className="size-3.5" />
           {t('connected')}
         </span>
@@ -898,10 +903,10 @@ export function PairingCompleteScreen({
             <Monitor className="size-7" />
           </div>
           <div className="min-w-0 text-center">
-            <div className="break-words text-xs font-medium leading-tight sm:text-sm">
+            <div className="break-words text-ui-caption font-medium">
               {localDeviceName || t('devices.thisDevice')}
             </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">{t('devices.local')}</div>
+            <div className="mt-0.5 text-ui-caption text-muted-foreground">{t('devices.local')}</div>
           </div>
         </div>
 
@@ -917,8 +922,10 @@ export function PairingCompleteScreen({
             <Monitor className="size-7" />
           </div>
           <div className="min-w-0 text-center">
-            <div className="text-xs font-medium leading-tight sm:text-sm">{t('devices.peer')}</div>
-            <div className="mt-0.5 text-xs text-muted-foreground">{t('devices.joined')}</div>
+            <div className="text-ui-caption font-medium">{t('devices.peer')}</div>
+            <div className="mt-0.5 text-ui-caption text-muted-foreground">
+              {t('devices.joined')}
+            </div>
           </div>
         </div>
       </div>
@@ -928,23 +935,23 @@ export function PairingCompleteScreen({
           <Monitor className="size-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-sm font-medium">
+          <div className="flex items-center gap-2 text-ui-body font-medium">
             <span className="size-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_oklch(0.72_0.16_158_/_0.12)]" />
             {t('devices.peer')}
           </div>
           <div
             data-testid="setup-complete-peer-id"
-            className="mt-0.5 truncate font-mono text-xs text-muted-foreground"
+            className="mt-0.5 truncate font-mono text-ui-caption text-muted-foreground"
           >
             {shortDeviceId(peerDeviceId)}
           </div>
         </div>
-        <span className="shrink-0 rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">
+        <span className="shrink-0 rounded-full border border-border px-2 py-1 text-ui-caption text-muted-foreground">
           {t('devices.direct')}
         </span>
       </div>
 
-      <ul className="mx-auto mt-6 grid w-full max-w-md gap-3 text-left text-sm text-muted-foreground">
+      <ul className="mx-auto mt-6 grid w-full max-w-md gap-3 text-left text-ui-body text-muted-foreground">
         <li className="flex items-start gap-2.5">
           <Shield className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
           <span>{t('points.encrypted')}</span>
@@ -1009,9 +1016,11 @@ export function ImportConfigScreen({ onBack }: { onBack: () => void }) {
       <ScreenShell title={t('restartingTitle')} centered>
         <div className="mt-8 flex flex-col items-center gap-3 text-center sm:mt-10">
           <Loader2 className="size-8 animate-spin text-primary" />
-          <p className="max-w-md text-sm text-muted-foreground">{t('restartingDescription')}</p>
+          <p className="max-w-md text-ui-body text-muted-foreground">
+            {t('restartingDescription')}
+          </p>
           {imp.stagedResult?.unlockRequiredAfterApply && (
-            <p className="text-xs text-muted-foreground">{t('restartingUnlockHint')}</p>
+            <p className="text-ui-caption text-muted-foreground">{t('restartingUnlockHint')}</p>
           )}
         </div>
       </ScreenShell>
@@ -1045,15 +1054,17 @@ export function ImportConfigScreen({ onBack }: { onBack: () => void }) {
         }
       >
         <div className="mt-6 space-y-4 sm:mt-8">
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-snug text-foreground/90">
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-ui-caption text-foreground/90">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
             <span>{t('note')}</span>
           </div>
 
           {imp.preview && (
             <div className="space-y-1.5">
-              <div className="text-xs font-medium text-muted-foreground">{t('metaTitle')}</div>
-              <dl className="space-y-1 text-xs">
+              <div className="text-ui-caption font-medium text-muted-foreground">
+                {t('metaTitle')}
+              </div>
+              <dl className="space-y-1 text-ui-caption">
                 <div className="flex justify-between gap-4">
                   <dt className="text-muted-foreground">{t('metaAppVersion')}</dt>
                   <dd className="tabular-nums">{imp.preview.appVersion}</dd>
@@ -1113,12 +1124,16 @@ export function ImportConfigScreen({ onBack }: { onBack: () => void }) {
           >
             <FileUp className="size-5 shrink-0 text-muted-foreground" />
             {fileName ? (
-              <span className="min-w-0 flex-1 truncate text-sm text-foreground">{fileName}</span>
+              <span className="min-w-0 flex-1 truncate text-ui-body text-foreground">
+                {fileName}
+              </span>
             ) : (
-              <span className="flex-1 text-sm text-muted-foreground">{t('chooseFile')}</span>
+              <span className="flex-1 text-ui-body text-muted-foreground">{t('chooseFile')}</span>
             )}
             {fileName && (
-              <span className="shrink-0 text-xs font-medium text-primary">{t('changeFile')}</span>
+              <span className="shrink-0 text-ui-caption font-medium text-primary">
+                {t('changeFile')}
+              </span>
             )}
           </button>
         </div>
@@ -1157,7 +1172,7 @@ export function ImportConfigScreen({ onBack }: { onBack: () => void }) {
                     {showPass ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground">{t('passwordHint')}</p>
+                <p className="text-ui-caption text-muted-foreground">{t('passwordHint')}</p>
               </div>
             </m.div>
           )}

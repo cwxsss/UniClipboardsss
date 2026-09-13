@@ -1,11 +1,12 @@
-import React, { ReactNode, useMemo, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { LayoutGroup } from 'framer-motion'
+import React, { ReactNode, useId, useMemo, useRef, useState } from 'react'
 import InsetSurface from '@/components/layout/InsetSurface'
 import SidebarFooter from '@/components/layout/SidebarFooter'
 import SidebarNavigation from '@/components/layout/SidebarNavigation'
 import { ContentToolbar } from '@/components/TitleBar'
 import { SidebarSlotContext } from '@/contexts/sidebar-slot-context'
 import { usePlatform } from '@/hooks/usePlatform'
-import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useWindowFrame } from '@/hooks/useWindowFrame'
 
 interface MainLayoutProps {
@@ -22,13 +23,39 @@ interface ContentToolbarProps {
 }
 
 const SidebarArea: React.FC<SidebarAreaProps> = ({ title }) => {
-  const dragHandlers = useWindowDrag()
+  const selectionId = useId()
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return
+    dragStartRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    const start = dragStartRef.current
+    if (!start || (event.buttons & 1) === 0) return
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return
+    dragStartRef.current = null
+    void getCurrentWindow()
+      .startDragging()
+      .catch(() => undefined)
+  }
 
   return (
-    <aside data-tauri-drag-region {...dragHandlers} className="flex h-full w-12 shrink-0 flex-col">
+    <aside
+      data-tauri-drag-region
+      onPointerDownCapture={handlePointerDown}
+      onPointerMoveCapture={handlePointerMove}
+      onPointerUpCapture={() => {
+        dragStartRef.current = null
+      }}
+      className="flex h-full w-12 shrink-0 flex-col"
+    >
       {title}
-      <SidebarNavigation />
-      <SidebarFooter />
+      <LayoutGroup id={selectionId}>
+        <SidebarNavigation />
+        <SidebarFooter />
+      </LayoutGroup>
     </aside>
   )
 }
@@ -48,7 +75,12 @@ const LinuxMainLayout: React.FC<MainLayoutProps & SidebarAreaProps & ContentTool
       <SidebarArea />
 
       <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-card text-card-foreground">
-        <ContentToolbar rightSlot={<div ref={toolbarHostRef} className="flex items-center" />} />
+        <div
+          data-tauri-drag-region="deep"
+          className="flex h-10 shrink-0 items-center justify-end px-3"
+        >
+          <div ref={toolbarHostRef} className="flex items-center" />
+        </div>
         <div className="min-h-0 flex-1">{children}</div>
       </main>
     </>
@@ -71,7 +103,11 @@ const InsetMainLayout: React.FC<MainLayoutProps & SidebarAreaProps & ContentTool
       <SidebarArea title={sidebarTitle} />
 
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <ContentToolbar rightSlot={<div ref={toolbarHostRef} className="flex items-center" />} />
+        <ContentToolbar
+          rightSlot={
+            <div ref={toolbarHostRef} className="flex min-w-0 flex-1 items-center justify-end" />
+          }
+        />
         <div className="flex min-h-0 flex-1 pb-2 pr-2">
           <InsetSurface className="h-full w-full flex-1 rounded-xl">{children}</InsetSurface>
         </div>

@@ -11,25 +11,58 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Shared text roles for every application-owned main-window surface. */
+@utility text-ui-caption {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  letter-spacing: 0;
+}
+
+@utility text-ui-body {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  letter-spacing: 0;
+}
+
+@utility text-ui-section {
+  font-size: var(--font-size-section);
+  line-height: var(--line-height-section);
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+@utility text-ui-title {
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+@utility text-ui-caption-relaxed {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-relaxed);
+  letter-spacing: 0;
+}
+
+@utility text-ui-body-relaxed {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-relaxed);
+  letter-spacing: 0;
+}
+
 :root {
   /* Font sizes */
   --font-size-caption: 0.75rem; /* 12px */
-  --font-size-small: 0.8125rem; /* 13px */
   --font-size-body: 0.875rem; /* 14px */
-  --font-size-body-lg: 0.9375rem; /* 15px */
   --font-size-section: 1rem; /* 16px */
-  --font-size-title: 1.25rem; /* 20px */
+  --font-size-title: 1.5rem; /* 24px */
 
   /* Line heights */
-  --line-height-tight: 1.4;
-  --line-height-normal: 1.5;
-  --line-height-relaxed: 1.6;
-
-  /* Letter spacing */
-  --letter-spacing-title: -0.01em;
-  --letter-spacing-body: 0.01em;
-  --letter-spacing-button: 0.01em;
-  --letter-spacing-caption: 0.02em;
+  --line-height-caption: 1rem;
+  --line-height-body: 1.25rem;
+  --line-height-section: 1.5rem;
+  --line-height-title: 2rem;
+  --line-height-relaxed: 1.625;
 
   --sidebar: oklch(0.985 0 0);
 
@@ -142,81 +175,6 @@
   --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
   --scrollbar-thumb-hover: color-mix(in oklch, var(--muted-foreground) 58%, transparent);
   --scrollbar-thumb-active: color-mix(in oklch, var(--muted-foreground) 72%, transparent);
-}
-
-/* Global scrollbar helpers. Most scroll containers inherit the base styling. */
-@layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb) transparent;
-  }
-
-  .scrollbar-thin::-webkit-scrollbar {
-    width: var(--scrollbar-size);
-    height: var(--scrollbar-size);
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    min-width: 3rem;
-    min-height: 3rem;
-    border: var(--scrollbar-gutter) solid transparent;
-    border-radius: 9999px;
-    background-color: var(--scrollbar-thumb);
-    background-clip: padding-box;
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background-color: var(--scrollbar-thumb-hover);
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-thumb:active {
-    background-color: var(--scrollbar-thumb-active);
-  }
-
-  .scrollbar-code {
-    scrollbar-width: thin;
-    scrollbar-color: rgb(148 163 184 / 0.45) transparent;
-  }
-
-  .scrollbar-code::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-
-  .scrollbar-code::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .scrollbar-code::-webkit-scrollbar-thumb {
-    min-width: 48px;
-    min-height: 48px;
-    border: 3px solid transparent;
-    border-radius: 9999px;
-    background-color: rgb(148 163 184 / 0.38);
-    background-clip: padding-box;
-  }
-
-  .scrollbar-code::-webkit-scrollbar-thumb:hover {
-    background-color: rgb(203 213 225 / 0.62);
-  }
-
-  .scrollbar-code::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-
-  /* 隐藏滚动条但保留功能 */
-  .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
-  }
 }
 
 /* 文本截断 */
@@ -444,7 +402,19 @@
   z-index: 9999;
 }
 
-/* Linux WebKit 低特效模式：优先保证响应速度与稳定渲染。 */
+/* Device-local effect policy, shared by all desktop windows. */
+.uc-menu-shadow {
+  filter: drop-shadow(0 1.125rem 1.75rem rgb(0 0 0 / 0.2));
+}
+
+html[data-uc-low-effects='true'] .uc-menu-shadow {
+  filter: none;
+}
+
+html[data-uc-low-effects='true'] .uc-effects-surface {
+  background-color: var(--background);
+}
+
 html[data-uc-low-effects='true'] {
   --shadow-2xs: none;
   --shadow-xs: none;
@@ -458,9 +428,9 @@ html[data-uc-low-effects='true'] {
   --shadow-blur: 0px;
 }
 
-html[data-uc-low-effects='true'] *,
-html[data-uc-low-effects='true'] *::before,
-html[data-uc-low-effects='true'] *::after {
+html[data-uc-reduce-motion='true'] *,
+html[data-uc-reduce-motion='true'] *::before,
+html[data-uc-reduce-motion='true'] *::after {
   animation: none !important;
   transition-property: none !important;
   transition-duration: 0s !important;
@@ -485,8 +455,8 @@ html[data-uc-low-effects='true'] .glass-strong {
   background-color: var(--background);
 }
 
-html[data-uc-low-effects='true']::view-transition-old(root),
-html[data-uc-low-effects='true']::view-transition-new(root) {
+html[data-uc-reduce-motion='true']::view-transition-old(root),
+html[data-uc-reduce-motion='true']::view-transition-new(root) {
   animation: none !important;
 }
 
@@ -501,7 +471,7 @@ html[data-uc-low-effects='true']::view-transition-new(root) {
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-color: transparent transparent;
   }
 
   *::-webkit-scrollbar {
@@ -518,15 +488,24 @@ html[data-uc-low-effects='true']::view-transition-new(root) {
     min-height: 3rem;
     border: var(--scrollbar-gutter) solid transparent;
     border-radius: 9999px;
-    background-color: var(--scrollbar-thumb);
+    background-color: transparent;
     background-clip: padding-box;
+    transition: background-color 200ms ease;
   }
 
-  *::-webkit-scrollbar-thumb:hover {
+  [data-scroll-active='true'] {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  [data-scroll-active='true']::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  [data-scroll-active='true']::-webkit-scrollbar-thumb:hover {
     background-color: var(--scrollbar-thumb-hover);
   }
 
-  *::-webkit-scrollbar-thumb:active {
+  [data-scroll-active='true']::-webkit-scrollbar-thumb:active {
     background-color: var(--scrollbar-thumb-active);
   }
 
@@ -577,9 +556,9 @@ html[data-uc-low-effects='true']::view-transition-new(root) {
   }
 
   body {
-    letter-spacing: var(--letter-spacing-body);
+    letter-spacing: 0;
     font-size: var(--font-size-body);
-    line-height: var(--line-height-relaxed);
+    line-height: var(--line-height-body);
   }
 
   code,
@@ -590,12 +569,6 @@ html[data-uc-low-effects='true']::view-transition-new(root) {
   * {
     @apply border-border outline-ring/50;
   }
-}
-
-html[data-uc-custom-window-frame='true'],
-html[data-uc-custom-window-frame='true'] body,
-html[data-uc-custom-window-frame='true'] #root {
-  background-color: transparent;
 }
 
 .dark {

@@ -51,10 +51,9 @@ dbg_macro = "warn"
 [workspace.dependencies]
 # All desktop consumers use one immutable Engine revision. Features remain
 # opt-in at each host boundary so LAN compatibility cannot become a default.
-# Immutable rc8 pin shared with the HarmonyOS HAR. All desktop consumers must
+# Immutable rc15 pin shared with the HarmonyOS HAR. All desktop consumers must
 # resolve this exact published Engine revision.
-uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "733ea64ea29775db0027e624099214cb46e56079" }
-uc-observability-contract = { git = "https://github.com/cwxsss/Engine.git", rev = "733ea64ea29775db0027e624099214cb46e56079" }
+uc-engine = { git = "https://github.com/UniClipboard/Engine.git", rev = "f6f305d9689e4e79e7ab6d0e4921061f9416e4a6" }
 
 # tauri 2.11 是 specta rc.25 兼容的最低版本 —— 2.10.x 及之前在
 # `tauri/src/ipc/channel.rs` 用了 `#[specta(remote=..., rename="...")]`

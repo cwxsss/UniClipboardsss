@@ -22,7 +22,7 @@ import type {
   RedeemRequest as RedeemRequestDto,
   SwitchSpaceRequest as SwitchSpaceRequestDto,
 } from '@/api/generated/types.gen'
-import { normalizeInvitationCode } from '@/components/invitation-code-utils'
+import { formatInvitationCode } from '@/lib/invitation-code'
 import { daemonClient } from './client'
 import { DaemonApiError } from './errors'
 
@@ -55,7 +55,6 @@ export interface IssueInvitationResponse {
 export interface RedeemRequest {
   code: string
   passphrase: string
-  deviceName: string
 }
 
 export interface JoinedSpaceResponse {
@@ -80,7 +79,12 @@ export type JoinSpaceRejectionReason =
   | 'removed_before_activation'
 
 export type JoinSpaceResponse =
-  | { status: 'active'; joinId: string; joinedSpace: JoinedSpaceResponse }
+  | {
+      status: 'active'
+      joinId: string
+      joinedSpace: JoinedSpaceResponse
+      peerUpgradeRequired?: boolean
+    }
   | {
       status: 'pending'
       joinId: string
@@ -88,6 +92,7 @@ export type JoinSpaceResponse =
       sponsorDeviceId: string | null
       sponsorIdentityFingerprint: string | null
       cancelRequested: boolean
+      peerUpgradeRequired?: boolean
     }
   | { status: 'rejected'; joinId: string; reason: JoinSpaceRejectionReason }
 
@@ -426,7 +431,7 @@ export async function redeemInvitation(body: RedeemRequest): Promise<RedeemRespo
       setupV2Redeem({
         body: {
           ...body,
-          code: normalizeInvitationCode(body.code),
+          code: formatInvitationCode(body.code),
         } as unknown as RedeemRequestDto,
         throwOnError: true,
       })
@@ -494,7 +499,7 @@ export async function switchSpace(body: SwitchSpaceRequest): Promise<SwitchSpace
       setupV2SwitchSpace({
         body: {
           ...body,
-          code: normalizeInvitationCode(body.code),
+          code: formatInvitationCode(body.code),
           preserveUnreadableHistory: body.preserveUnreadableHistory ?? false,
         } as unknown as SwitchSpaceRequestDto,
         throwOnError: true,

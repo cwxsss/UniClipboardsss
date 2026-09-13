@@ -37,7 +37,10 @@ const baseSetting: Settings = makeBaseSettings({
   general: { theme: 'light', themeColor: 'zinc', language: 'zh-CN' },
 })
 
-const setup = (theme: Settings['general']['theme'] = 'light') => {
+const setup = (
+  theme: Settings['general']['theme'] = 'light',
+  generalOverrides: Partial<Settings['general']> = {}
+) => {
   const updateGeneralSetting = vi
     .fn<SettingContextType['updateGeneralSetting']>()
     .mockResolvedValue(undefined)
@@ -48,6 +51,7 @@ const setup = (theme: Settings['general']['theme'] = 'light') => {
       general: {
         ...baseSetting.general,
         theme,
+        ...generalOverrides,
       },
     },
     loading: false,
@@ -94,31 +98,38 @@ beforeEach(() => {
     canChooseSystemFrame: false,
     hasCustomTitleBar: true,
     hasCustomWindowControls: false,
-    hasRoundedWindow: false,
     searchInTitleBar: true,
     useSystemWindowFrame: false,
-    setUseSystemWindowFrame: vi.fn().mockResolvedValue(undefined),
+    windowFramePreference: 'custom',
+    setWindowFramePreference: vi.fn().mockResolvedValue(undefined),
   })
 })
 
 describe('AppearanceSection', () => {
-  it('把跟随系统显示为主题卡片而不是开关', () => {
+  it('显示三种主题预览和明确的主题选择', () => {
     setup('system')
 
     expect(screen.queryByRole('switch')).toBeNull()
     expect(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.sections.appearance.themePreview.followSystem',
       })
-    ).toHaveAttribute('aria-pressed', 'true')
+    ).toBeChecked()
+    expect(document.querySelectorAll('[data-appearance-theme-preview]')).toHaveLength(3)
+    expect(
+      document.querySelectorAll('[data-appearance-theme-preview="system"] .appearance-theme-window')
+    ).toHaveLength(2)
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+    expect(screen.getByText('appearanceLayout.themeHelp.system')).toBeVisible()
+    expect(document.querySelector('[data-testid="appearance-settings"] h3')).toBeNull()
   })
 
-  it('点击跟随系统卡片会切换到系统模式', async () => {
+  it('选择跟随系统会保存系统模式', async () => {
     const user = userEvent.setup()
     const { updateGeneralSetting } = setup('light')
 
     await user.click(
-      screen.getByRole('button', {
+      screen.getByRole('radio', {
         name: 'settings.sections.appearance.themePreview.followSystem',
       })
     )
@@ -128,27 +139,76 @@ describe('AppearanceSection', () => {
     })
   })
 
-  it('在支持的平台上允许启用系统窗口框', async () => {
-    const user = userEvent.setup()
-    const setUseSystemWindowFrame = vi.fn().mockResolvedValue(undefined)
-    mockUseWindowFrame.mockReturnValue({
-      canChooseSystemFrame: true,
-      hasCustomTitleBar: true,
-      hasCustomWindowControls: true,
-      hasRoundedWindow: true,
-      searchInTitleBar: true,
-      useSystemWindowFrame: false,
-      setUseSystemWindowFrame,
+  it('预览分别反映浅色与深色的自定义强调色', () => {
+    setup('system', {
+      themeOverridesLight: { primary: '#ff0000' },
+      themeOverridesDark: { primary: '#0000ff' },
     })
-
-    setup()
-    const toggle = screen.getByRole('switch', {
-      name: 'settings.sections.appearance.windowFrame.useSystem',
-    })
-
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    await user.click(toggle)
-
-    expect(setUseSystemWindowFrame).toHaveBeenCalledWith(true)
+    expect(
+      document.querySelector(
+        '[data-appearance-theme-preview="light"] .appearance-theme-window-content > span'
+      )
+    ).toHaveStyle({ backgroundColor: '#ff0000' })
+    expect(
+      document.querySelector(
+        '[data-appearance-theme-preview="dark"] .appearance-theme-window-content > span'
+      )
+    ).toHaveStyle({ backgroundColor: '#0000ff' })
+    expect(
+      document.querySelector(
+        '[data-appearance-theme-preview="system"] .appearance-theme-window:last-child .appearance-theme-window-content > span'
+      )
+    ).toHaveStyle({ backgroundColor: '#0000ff' })
   })
+
+  it('自定义颜色默认收起，选择色块只更新对应主题', async () => {
+    const user = userEvent.setup()
+    const { updateGeneralSetting } = setup()
+    expect(document.querySelector('details')).not.toHaveAttribute('open')
+    await user.click(screen.getByRole('combobox', { name: 'appearanceLayout.darkPalette' }))
+    await user.click(await screen.findByRole('option', { name: 'blue' }))
+    await waitFor(() =>
+      expect(updateGeneralSetting).toHaveBeenCalledWith({
+        themeColorDark: 'blue',
+        themeColor: null,
+      })
+    )
+    await user.click(screen.getByText('appearanceLayout.customColors'))
+    expect(document.querySelector('details')).toHaveAttribute('open')
+    expect(
+      screen.getByRole('button', { name: 'settings.sections.appearance.lightTheme.accent' })
+    ).toBeVisible()
+  })
+
+  it.each(['auto', 'custom', 'system', 'none'] as const)(
+    '允许选择标题栏模式 %s',
+    async preference => {
+      const user = userEvent.setup()
+      const setWindowFramePreference = vi.fn().mockResolvedValue(undefined)
+      mockUseWindowFrame.mockReturnValue({
+        canChooseSystemFrame: true,
+        hasCustomTitleBar: true,
+        hasCustomWindowControls: true,
+        searchInTitleBar: true,
+        useSystemWindowFrame: false,
+        windowFramePreference: preference === 'custom' ? 'system' : 'custom',
+        setWindowFramePreference,
+      })
+
+      setup()
+      const selector = screen.getByRole('combobox', {
+        name: 'settings.sections.appearance.windowFrame.title',
+      })
+
+      expect(selector).toBeVisible()
+      await user.click(selector)
+      await user.click(
+        await screen.findByRole('option', {
+          name: `settings.sections.appearance.windowFrame.${preference}`,
+        })
+      )
+
+      expect(setWindowFramePreference).toHaveBeenCalledWith(preference)
+    }
+  )
 })

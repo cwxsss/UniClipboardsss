@@ -14,9 +14,9 @@
 use std::sync::Arc;
 
 use tauri::webview::PageLoadEvent;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::MacosLauncher;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Instrument};
 
 use uc_daemon_client::realtime::RealtimeTopic;
 use uc_daemon_client::{DaemonConnectionState, DaemonWsBridge, DaemonWsBridgeConfig};
@@ -268,9 +268,9 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
     // in-process sink. The webview's UI events already POST directly
     // (`src/api/daemon/analytics.ts`).
     client_deps.analytics = Arc::new(
-        crate::analytics_forward::DaemonForwardingAnalyticsSink::new(DaemonConnectionState::clone(
-            &daemon_connection_state,
-        )),
+        crate::analytics_forward::DaemonForwardingAnalyticsSink::new(
+            DaemonConnectionState::clone(&daemon_connection_state),
+        )?,
     );
 
     let runtime = Arc::new(TauriAppRuntime::new(client_deps));
@@ -289,6 +289,8 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
     let builder = tauri::Builder::default()
         // Register TauriAppRuntime for Tauri commands
         .manage(runtime.clone())
+        .manage(crate::visual_effects::VisualEffectsService::default())
+        .manage(uc_daemon_client::DaemonQueryClient::new(daemon_connection_state.clone())?)
         .manage(DaemonConnectionState::clone(&daemon_connection_state))
         .manage(DaemonOwnership::clone(&daemon_ownership))
         .manage(daemon_bootstrap_status.clone())
@@ -298,6 +300,29 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
         .manage(quick_panel::QuickPanelToggleController::default())
         .manage(task_registry.clone())
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                let client = window.app_handle().state::<uc_daemon_client::DaemonQueryClient>().inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(2),
+                        client.notify_connectivity_opportunity(uc_daemon_contract::api::dto::device::ConnectivityOpportunity::Foreground)).await;
+                    if !matches!(result, Ok(Ok(()))) {
+                        tracing::debug!("foreground connectivity opportunity could not be delivered");
+                    }
+                });
+            }
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle().clone();
+                let label = window.label().to_owned();
+                tauri::async_runtime::spawn(async move {
+                    let service = app.state::<crate::visual_effects::VisualEffectsService>();
+                    let Some(initialized) = service.0.get() else { return; };
+                    let mut state = initialized.lock().await;
+                    state.remove_window(&label);
+                    if let Err(error) = app.emit(crate::visual_effects::EFFECTS_EVENT, state.snapshot()) {
+                        tracing::warn!(error_kind = "visual_effects_emit", source = %error, "visual preferences notification failed");
+                    }
+                }.in_current_span());
+            }
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == crate::main_window::MAIN_WINDOW_LABEL {
                     // The close proceeds in BOTH branches: destroying the
@@ -428,11 +453,12 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
             ));
             let hud_bridge_for_run = std::sync::Arc::clone(&hud_bridge);
             let hud_bridge_token = runtime.desktop().task_registry().token().clone();
+            let tray_event_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut rx = match hud_bridge
                     .subscribe(
                         "activity_hud",
-                        &[RealtimeTopic::FileTransfer, RealtimeTopic::Clipboard],
+                        &[RealtimeTopic::FileTransfer, RealtimeTopic::Clipboard, RealtimeTopic::Peers, RealtimeTopic::PairedDevices],
                     )
                     .await
                 {
@@ -445,6 +471,9 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                 // 现在有订阅者了,驱动 bridge 连接循环。
                 tauri::async_runtime::spawn(hud_bridge_for_run.run(hud_bridge_token));
                 while let Some(event) = rx.recv().await {
+                    if matches!(&event, uc_daemon_client::realtime::RealtimeEvent::PeersChanged(_) | uc_daemon_client::realtime::RealtimeEvent::PeersNameUpdated(_) | uc_daemon_client::realtime::RealtimeEvent::SpaceMembersChanged(_)) {
+                        tray_event_app.state::<TrayState>().refresh_devices();
+                    }
                     hud_emitter.emit(event);
                 }
             });
@@ -466,6 +495,7 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                 {
                     Ok(connection_info) => {
                         daemon_connection_state_for_setup.set(connection_info);
+                        daemon_bootstrap_status_for_setup.clear();
                         // ADR-008 P3-3 (B2'-3): daemon 现在永远是外部独立进程
                         // (probe→connect 或 detached spawn)。GUI 不再 owns 它的
                         // 生命周期 —— 崩溃恢复由外部负责;退出语义见 D3 三态
@@ -518,7 +548,7 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                 silent_start,
                 is_silent_mode,
                 initial_language,
-                lan_only_active,
+                sync_enabled,
                 quick_panel_enabled,
                 quick_panel_double_tap_modifier,
                 auto_start,
@@ -545,7 +575,7 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                             settings.silent_start,
                             settings.is_silent_mode,
                             settings.language,
-                            settings.lan_only_active,
+                            settings.sync_enabled,
                             settings.quick_panel_enabled,
                             settings.quick_panel_double_tap_modifier,
                             settings.auto_start,
@@ -602,7 +632,7 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
 
             // Initialize system tray
             let tray_state = app.state::<TrayState>();
-            if let Err(e) = tray_state.init(app.handle(), &initial_language, lan_only_active) {
+            if let Err(e) = tray_state.init(app.handle(), &initial_language, sync_enabled) {
                 error!("Failed to initialize system tray: {}", e);
                 // Non-fatal: continue startup without tray
             }
@@ -797,18 +827,18 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                 // ADR-008 P3-3 B2': the GUI is a pure client, so it can no
                 // longer reach an in-process `AppFacade` — the whole sequence
                 // is framework-agnostic RPC orchestration, so it lives in
-                // `uc_desktop::startup_actions` (shared by any future non-Tauri
+                // `uc_desktop::startup` (shared by any future non-Tauri
                 // shell); only the window/tray mechanics below are Tauri-specific.
                 let daemon_conn_for_startup_actions = daemon_connection_state.clone();
                 let app_handle_for_lightweight_start = app_handle_for_startup.clone();
                 let launch_origin_for_startup = daemon_launch_origin.clone();
                 let keep_gui_for_quick_panel = show_quick_panel_on_start;
                 tauri::async_runtime::spawn(async move {
-                    let outcome = uc_desktop::startup_actions::run_cold_launch_actions(
+                    let outcome = uc_desktop::startup::run_cold_launch_actions(
                         daemon_conn_for_startup_actions,
                         launch_origin_for_startup,
-                        uc_desktop::startup_actions::DEFAULT_READY_TIMEOUT,
-                        uc_desktop::startup_actions::DEFAULT_READY_POLL,
+                        uc_desktop::startup::DEFAULT_READY_TIMEOUT,
+                        uc_desktop::startup::DEFAULT_READY_POLL,
                     )
                     .await;
 
@@ -819,23 +849,23 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                     // only running; a later click that finds the daemon already
                     // running reopens the window instead.
                     match outcome.map(|o| o.window_action) {
-                        Some(uc_desktop::startup_actions::StartupWindowAction::EnterBackgroundOnly)
+                        Some(uc_desktop::startup::StartupWindowAction::EnterBackgroundOnly)
                             if !keep_gui_for_quick_panel => {
                             info!(
                                 "[Startup] Lightweight cold start: daemon ready, entering Lightweight Mode (GUI exits, daemon stays running)"
                             );
                             crate::lightweight::enter_lightweight_mode(&app_handle_for_lightweight_start);
                         }
-                        Some(uc_desktop::startup_actions::StartupWindowAction::EnterBackgroundOnly) => {
+                        Some(uc_desktop::startup::StartupWindowAction::EnterBackgroundOnly) => {
                             info!("Quick panel launch keeps GUI active instead of entering Lightweight Mode");
                         }
-                        Some(uc_desktop::startup_actions::StartupWindowAction::ShowWindow) => {
+                        Some(uc_desktop::startup::StartupWindowAction::ShowWindow) => {
                             info!(
                                 "[Startup] Lightweight reopen: daemon already running, showing the main window"
                             );
                             crate::main_window::show_main_window(&app_handle_for_lightweight_start);
                         }
-                        Some(uc_desktop::startup_actions::StartupWindowAction::None) | None => {}
+                        Some(uc_desktop::startup::StartupWindowAction::None) | None => {}
                     }
                 });
 
@@ -884,15 +914,23 @@ pub fn run(tauri_ctx: tauri::Context<tauri::Wry>) -> anyhow::Result<()> {
                     prompt_throttle_path,
                 });
                 app_handle_for_startup.manage(notify_ctx.clone());
+                let scheduler_clients = (|| -> anyhow::Result<_> {
+                    Ok((
+                        uc_daemon_client::DaemonSettingsClient::new(daemon_connection_state.clone())?,
+                        uc_daemon_client::DaemonSetupV2Client::with_conn_state(daemon_connection_state.clone())?,
+                    ))
+                })();
+                let (settings_client, setup_readiness) = match scheduler_clients {
+                    Ok(clients) => clients,
+                    Err(error) => {
+                        warn!(error = %error, error_kind = "daemon_client_build_failed", retryable = false,
+                            "Failed to initialize update scheduler clients");
+                        return;
+                    }
+                };
                 let scheduler_deps = crate::update_scheduler::SchedulerDeps {
-                    settings_client: uc_daemon_client::DaemonSettingsClient::new(
-                        daemon_connection_state.clone(),
-                    ),
-                    setup_readiness: Arc::new(
-                        uc_daemon_client::DaemonSetupV2Client::with_conn_state(
-                            daemon_connection_state.clone(),
-                        ),
-                    ),
+                    settings_client,
+                    setup_readiness: Arc::new(setup_readiness),
                     notify: notify_ctx,
                 };
 

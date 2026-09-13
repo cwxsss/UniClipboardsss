@@ -16,7 +16,6 @@ pub mod ws_topic {
     pub const ENCRYPTION: &str = "encryption";
     /// Search index events topic (Phase 92).
     pub const SEARCH: &str = "search";
-    pub const WORKSPACE_CONVERGENCE: &str = "workspace-convergence";
     pub const DEVICE_TRUST: &str = "device-trust";
     pub const NETWORK_RECOVERY: &str = "network-recovery";
 }
@@ -66,7 +65,6 @@ pub mod ws_event {
     pub const SEARCH_STATUS_SNAPSHOT: &str = "search.status_snapshot";
     /// Search rebuild progress event (Phase 92).
     pub const SEARCH_REBUILD_PROGRESS: &str = "search.rebuild_progress";
-    pub const WORKSPACE_CONVERGENCE_CHANGED: &str = "workspace-convergence.changed";
     pub const DEVICE_TRUST_CHANGED: &str = "device-trust.changed";
     pub const NETWORK_RECOVERY_CHANGED: &str = "network-recovery.changed";
     /// Lightweight inbound clipboard notice for CLI `watch` (ADR-008 P2.5).
@@ -120,6 +118,12 @@ pub mod http_route {
     pub const SETTINGS_RELAY_SAVE: &str = "/settings/relay";
     /// GET/PUT /diagnostics/debug — inspect or update persistent local debug mode.
     pub const DIAGNOSTICS_DEBUG: &str = "/diagnostics/debug";
+    /// GET the daemon-owned detailed capture status.
+    pub const DIAGNOSTICS_CAPTURE: &str = "/diagnostics/capture";
+    /// POST a bounded detailed capture request to the daemon.
+    pub const DIAGNOSTICS_CAPTURE_START: &str = "/diagnostics/capture/start";
+    /// POST a capture identifier to stop the matching daemon capture.
+    pub const DIAGNOSTICS_CAPTURE_STOP: &str = "/diagnostics/capture/stop";
     /// POST /diagnostics/log-export — export recent GUI/daemon/CLI logs to Downloads.
     pub const DIAGNOSTICS_LOG_EXPORT: &str = "/diagnostics/log-export";
     /// GET /encryption/state — encryption state
@@ -185,7 +189,7 @@ pub mod http_route_v2 {
     pub const SETUP_REDEEM: &str = "/v2/setup/redeem";
     /// POST /v2/setup/cancel — drop in-flight invitation; 409 when none.
     pub const SETUP_CANCEL: &str = "/v2/setup/cancel";
-    /// POST /v2/setup/reset — clear setup status + pending invitations.
+    /// POST /v2/setup/reset — rebuild as a one-device space and retain local history.
     pub const SETUP_RESET: &str = "/v2/setup/reset";
     /// GET /v2/setup/state — read-only snapshot for the v2 UI.
     pub const SETUP_STATE: &str = "/v2/setup/state";

@@ -1,5 +1,108 @@
 {
+  "startupFailure": {
+    "unavailable": "啟動遇到問題",
+    "title": "暫時無法啟動",
+    "description": "無法連線到背景服務，應用程式暫時無法使用。",
+    "updateTitle": "需要更新應用程式",
+    "updateDescription": "背景正在執行較新的版本，請更新目前的應用程式後繼續。",
+    "retry": "重試",
+    "retrying": "正在重試…",
+    "export": "匯出日誌",
+    "exporting": "正在匯出…",
+    "contact": "聯絡作者",
+    "update": "開啟更新",
+    "details": "錯誤詳情",
+    "exported": "日誌已儲存至：{{path}}",
+    "exportFailed": "日誌匯出失敗，請檢查儲存位置與剩餘空間後重試。",
+    "contactFailed": "無法開啟求助頁面，聯絡網址：",
+    "updateFailed": "無法完成更新檢查，請稍後重試。",
+    "contactOpened": "已在瀏覽器中開啟求助頁面。"
+  },
+  "appearanceLayout": {
+    "effectsHelp": "平衡視覺效果與執行效能。",
+    "scaleHelp": "調整介面元素與文字大小。",
+    "themeHelp": {
+      "system": "跟隨系統自動切換淺色與深色。",
+      "light": "一律使用淺色外觀。",
+      "dark": "一律使用深色外觀。"
+    },
+    "lightPalette": "淺色配色",
+    "darkPalette": "深色配色",
+    "theme": "主題",
+    "palette": "配色",
+    "effects": "視覺效果",
+    "display": "顯示",
+    "customColors": "自訂顏色",
+    "preview": "目前主題預覽",
+    "zoomIn": "放大介面",
+    "zoomOut": "縮小介面",
+    "saveFailed": "無法儲存變更，請再試一次。"
+  },
+  "smoothMode": {
+    "title": "流暢模式",
+    "auto": "自動",
+    "effects": "效果優先",
+    "smooth": "流暢優先",
+    "currentSmooth": "目前採用流暢模式",
+    "currentEffects": "目前採用效果優先",
+    "notSaved": "本次已生效，但無法儲存，重新啟動後可能恢復原設定。",
+    "unavailable": "暫時無法讀取或儲存外觀偏好，請稍後再試。",
+    "reason": {
+      "manual": "已採用你的選擇。",
+      "system": "遵循系統減少動態效果偏好；無法讀取時保守減少動態效果。",
+      "platform_default": "Linux 自動模式預設減少視覺效果。",
+      "hardware": "已依裝置能力選擇。",
+      "unknown": "裝置能力尚未確認，暫時減少視覺效果。",
+      "runtime": "已依先前執行表現選擇。"
+    }
+  },
   "deviceTrust": {
+    "presentation": {
+      "localRemovalTitle": "{{actor}} 想將此裝置移出裝置群組",
+      "leave": "離開裝置群組",
+      "keep": "保留現有裝置",
+      "leaveEffect": "停止與所有裝置同步。",
+      "keepEffect": "保留現有裝置。與 {{names}} 的同步將暫停。",
+      "showDevices": "檢視裝置",
+      "hideDevices": "隱藏裝置",
+      "scope": "選擇後的同步範圍：{{names}}。",
+      "title": "為 {{name}} 選擇裝置群組",
+      "local": "此裝置：{{name}}",
+      "localMember": "{{name}}（此裝置）",
+      "unnamed": "未命名裝置",
+      "members": "群組成員",
+      "membersUnknown": "成員資料暫不完整",
+      "impactUnknown": "此選擇的影響資料暫不完整。",
+      "detailsIncomplete": "部分變更詳情暫不可用。",
+      "paused": "與 {{names}} 的同步將暫停。",
+      "rejoin": "{{names}} 若要加入所選群組同步，需要重新加入。",
+      "waiting": "正在等待 {{names}} 確認。",
+      "removed": "{{actor}} 提出移除 {{target}}。",
+      "added": "{{actor}} 加入了裝置 {{target}}。",
+      "accepted": "{{actor}} 接受了移除 {{target}}。",
+      "rejected": "{{actor}} 拒絕了移除 {{target}}。",
+      "reason": {
+        "unknown": "裝置群組存在差異，暫時沒有足夠資料說明原因。",
+        "pending_removal": "裝置群組有一項移除需要你決定。",
+        "different_removals": "兩側移除了不同的裝置。",
+        "removal_decision_disagreement": "對同一次移除，兩側作出了不同決定。",
+        "diverged_history": "兩側記錄的裝置群組變更不同。"
+      },
+      "select": "請選擇一個裝置群組",
+      "back": "返回選擇",
+      "retry": "重新檢查",
+      "processing": "正在提交你的選擇",
+      "checking": "正在核對處理結果",
+      "pending": "選擇已受理，仍在處理。",
+      "completed": "裝置群組已更新",
+      "next": "繼續處理",
+      "done": "完成",
+      "more": "上一項已處理，還有 {{count}} 項需要選擇。",
+      "uncertain": "暫時無法確認處理結果，請重新檢查。",
+      "changed": "選擇內容已變更，請重新核對。",
+      "loading": "正在檢查裝置關係",
+      "loadFailed": "暫時無法讀取裝置關係，請重試。"
+    },
     "listSeparator": "、",
     "notification": {
       "title": "裝置關係需要查看",
@@ -10,15 +113,22 @@
       "title": "選擇這台裝置繼續與誰同步",
       "summary": "{{proposer}} 想要移除 {{targets}}",
       "localSummary": "{{proposer}} 想要移除這台裝置",
+      "groupConflictSummary": "這些裝置回報了不同的裝置群組，請選擇本機要使用的裝置群組。",
+      "issueProgress": "第 {{current}} 項，共 {{total}} 項",
       "applyTitle": "接受這次移除",
       "keepTitle": "不接受，保留原來的裝置",
       "leaveTitle": "退出裝置群組",
       "stayTitle": "留在目前的裝置群組",
+      "useGroupTitle": "使用這個裝置群組",
       "continueSyncing": "繼續同步",
       "stopSyncing": "停止同步",
       "noDevices": "無",
       "confirmLocalRemoval": "這會將本機移出空間，並停止在本機同步。請再次確認後繼續。",
+      "requiresRePairing": "不在這個裝置群組中的裝置需要重新配對。",
+      "membersIncomplete": "這個裝置群組可能還包含未顯示的裝置。",
       "stateChanged": "裝置狀態已經變化，已為你顯示最新情況。",
+      "choicePending": "你的選擇已儲存，仍在完成處理中。",
+      "rePairingRequired": "裝置群組已經變化，受影響的裝置需要重新配對。",
       "failed": "暫時無法儲存選擇，請檢查背景服務後重試。"
     },
     "actions": {
@@ -38,6 +148,8 @@
     }
   },
   "common": {
+    "notifications": "通知",
+    "dismissNotification": "關閉提示",
     "loading": "載入中...",
     "unknownSize": "未知大小",
     "zeroBytes": "0 字節"
@@ -119,11 +231,27 @@
     }
   },
   "rePairingNotice": {
+    "dontShowAgain": "不再提示",
     "title": "請重新配對裝置",
     "body": "本版本更新了裝置配對機制，原有配對已不可用。請前往「裝置」頁向另一台裝置發送邀請或重新加入。",
     "goToDevices": "前往裝置管理"
   },
   "settings": {
+    "pageDescriptions": {
+      "general": "設定啟動方式、語言、音效與診斷偏好。",
+      "appearance": "調整主題、配色與顯示效果。",
+      "shortcuts": "自訂常用操作的鍵盤快速鍵。",
+      "quickPanel": "設定快捷面板的喚起方式與顯示位置。",
+      "sync": "管理剪貼簿與檔案的同步行為。",
+      "security": "管理這台裝置的自動解鎖偏好。",
+      "network": "調整連線方式、中繼伺服器與傳輸效能。",
+      "storage": "查看空間使用量，管理歷史記錄與快取。",
+      "about": "查看應用程式版本、更新與專案資訊。"
+    },
+    "sectionHeadings": {
+      "syncBehavior": "同步行為",
+      "historyRetention": "歷史保留"
+    },
     "title": "設定",
     "restartBanner": {
       "restartButton": "立即重新啟動",
@@ -151,7 +279,7 @@
         "saveError": "儲存設定失敗",
         "deviceName": {
           "label": "裝置名稱",
-          "description": "用於在區域網路中識別此裝置",
+          "description": "用來區分你的不同裝置。",
           "placeholder": "輸入裝置名稱"
         },
         "autoStart": {
@@ -159,6 +287,11 @@
           "description": "系統啟動時自動啟動 UniClipboard"
         },
         "startupMode": {
+          "summaries": {
+            "normal": "啟動後顯示應用程式視窗。",
+            "silent": "啟動後在背景執行，不彈出視窗。",
+            "lightweight": "開機自啟時只保留背景同步，需要時可重新開啟介面。"
+          },
           "label": "啟動方式",
           "description": "「靜默」啟動後不彈窗，直接進入背景；「輕量」在背景就緒後進一步退出視窗和托盤、僅保留背景服務併發送通知，之後按一下應用程式圖標即可重新打開視窗。",
           "options": {
@@ -168,8 +301,8 @@
           }
         },
         "restoreLastEntryOnStartup": {
-          "label": "啟動後恢復最近一條剪貼簿記錄",
-          "description": "應用程式啟動、背景就緒後自動將最近一條歷程記錄重新放入系統剪貼簿"
+          "label": "啟動時還原剪貼簿",
+          "description": "將最近一筆歷史記錄重新放回剪貼簿。"
         },
         "language": {
           "title": "語言",
@@ -205,6 +338,15 @@
           "button": "在檔案管理器中打開"
         },
         "logs": {
+          "capture": {
+            "label": "擷取詳細日誌",
+            "tooltip": "約剩 {{minutes}} 分鐘，可手動關閉。",
+            "loading": "正在讀取背景服務的記錄狀態…",
+            "standard": "暫時記錄詳細日誌，10 分鐘後自動停止。",
+            "active": "正在記錄詳細日誌，約 {{minutes}} 分鐘後自動停止。",
+            "unavailable": "背景服務的診斷能力目前無法使用。",
+            "error": "變更詳細記錄失敗"
+          },
           "debug": {
             "label": "Debug 模式",
             "description": "應用程式和 daemon 重新啟動後提高本地診斷日誌詳細度。",
@@ -219,10 +361,12 @@
           },
           "export": {
             "label": "匯出日誌",
-            "description": "在 Downloads 目錄建立包含最近 24 小時 GUI、daemon 和 CLI 日誌的 zip 包。",
+            "description": "在 Downloads 目錄建立包含最近應用程式、Engine 診斷記錄和涵蓋報告的 ZIP 包。",
             "button": "匯出日誌",
             "exporting": "正在匯出...",
             "success": "日誌已匯出",
+            "offlineSuccess": "背景服務無法使用，已匯出現有日誌，但沒有本次即時重新整理確認。",
+            "partialSuccess": "診斷包已匯出，但重新整理或檔案涵蓋不完整，詳情請見包內清單。",
             "error": "匯出日誌失敗",
             "copyPath": "複製路徑",
             "copySuccess": "已複製匯出路徑",
@@ -274,9 +418,12 @@
           "hexInputLabel": "十六進制顏色值"
         },
         "windowFrame": {
-          "title": "視窗外觀",
-          "useSystem": "使用系統視窗框",
-          "description": "開啟後使用桌面系統的標題列和視窗按鈕，搜尋框將移回頁面。"
+          "title": "視窗標題列",
+          "description": "自動模式在 niri 和 Hyprland 下隱藏標題列。選擇僅對本機生效，啟動期間同樣適用。",
+          "auto": "自動",
+          "custom": "應用程式標題列",
+          "system": "系統標題列",
+          "none": "無標題列"
         },
         "zoom": {
           "title": "介面縮放",
@@ -386,6 +533,11 @@
         "loadError": "載入設定失敗:"
       },
       "network": {
+        "groups": {
+          "connection": "連線方式",
+          "relays": "中繼伺服器",
+          "performance": "傳輸效能"
+        },
         "loadError": "載入設定失敗:",
         "lanOnly": {
           "label": "LAN-only 模式",
@@ -641,6 +793,7 @@
         "recording": "請按快捷鍵...",
         "chordHint": "可再按一個組合作為第二段（連按兩次相同組合即\"雙擊\"），或直接確認",
         "rerecord": "重錄",
+        "save": "儲存",
         "conflict": "與 {{name}} 衝突",
         "confirmOverride": "仍要套用（清除衝突）",
         "confirm": "確認",
@@ -1088,6 +1241,14 @@
       "pairedCount_other": "{{count}} 台已配對",
       "onlineCount": "{{count}} 台在線"
     },
+    "connectionRefresh": {
+      "action": "重新整理連線",
+      "checking": "正在檢查連線",
+      "failed": "重新整理失敗，請重試",
+      "summary": "檢查了 {{total}} 台裝置，{{online}} 台線上，{{offline}} 台離線",
+      "errors": "{{count}} 台檢查失敗，無法確認連線狀態",
+      "listFailed": "連線檢查已完成，裝置清單更新失敗，請重試"
+    },
     "pairedDevices": {
       "title": "已配對裝置"
     },
@@ -1129,7 +1290,18 @@
       "subtitle": "在要加入的電腦或手機上輸入此邀請碼",
       "expiresIn": "{{remaining}} 後過期",
       "expired": "邀請碼已過期",
-      "qrAlt": "包含邀請碼的 QR Code",
+      "passphraseHint": "新裝置還需輸入空間口令完成配對",
+      "rePairing": {
+        "title": "確認空間口令",
+        "subtitle": "舊版本升級後需要確認一次",
+        "description": "你的歷史記錄已安全保留。產生新邀請碼前，請確認原來的空間口令。",
+        "passphraseLabel": "空間口令",
+        "passphrasePlaceholder": "輸入原來的空間口令",
+        "submit": "確認並產生邀請碼",
+        "submitting": "正在確認口令……",
+        "wrongPassphrase": "空間口令不正確",
+        "failed": "暫時無法確認口令，請重試"
+      },
       "loading": "正在生成邀請碼……",
       "actions": {
         "cancel": "取消",
@@ -1490,6 +1662,21 @@
       }
     },
     "panel": {
+      "danger": {
+        "title": "危險區",
+        "description": "保留本機歷史，清空本機的配對關係。",
+        "reset": "重建空間",
+        "failed": "重建失敗，請重試或重新啟動應用程式。",
+        "modal": {
+          "title": "重建空間",
+          "warning": "重建後將建立僅包含本機的新空間。本機歷史與設定會保留；舊空間的成員關係、安全狀態及未完成邀請將清空。其他裝置需重新配對。",
+          "confirmPrompt": "請輸入 RESET 以確認",
+          "confirmPlaceholder": "RESET",
+          "confirm": "重建空間",
+          "resetting": "正在重建...",
+          "cancel": "取消"
+        }
+      },
       "listTitle": "裝置",
       "counts": "{{online}}/{{total}} 在線 · {{mobile}} 移動裝置",
       "localBadge": "本機",
@@ -1547,6 +1734,20 @@
       },
       "sync": {
         "title": "同步設定",
+        "syncWithDevice": "與 {{deviceName}} 同步",
+        "enabledDescription": "雙方複製的內容會自動同步。",
+        "disabledDescription": "已停止與這台裝置同步。",
+        "customize": "自訂同步內容",
+        "allBoth": "全部雙向同步",
+        "customized": "已自訂",
+        "customizeDescription": "分別設定每種內容的同步方向。",
+        "directionLabel": "{{contentType}}的同步方向",
+        "modes": {
+          "both": "雙向同步",
+          "sendOnly": "僅傳送至 {{deviceName}}",
+          "receiveOnly": "僅從 {{deviceName}} 接收",
+          "off": "不同步"
+        },
         "helpLabel": "瞭解傳送和接收",
         "help": "傳送決定本機可以向這台裝置同步哪些內容；接收決定本機可以從這台裝置接收哪些內容。",
         "restoreDefaults": "恢復預設",
@@ -1914,7 +2115,6 @@
   },
   "setup": {
     "page": {
-      "loadingSetupState": "正在載入初始化狀態...",
       "processing": "正在處理...",
       "processingJoinSpace": {
         "title": "正在連接裝置…",
@@ -2040,12 +2240,10 @@
       "subtitle": "輸入對方裝置顯示的邀請碼，以及建立空間時設定的口令。",
       "labels": {
         "code": "邀請碼",
-        "passphrase": "空間口令",
-        "deviceName": "裝置名稱"
+        "passphrase": "空間口令"
       },
       "placeholders": {
-        "passphrase": "輸入對方在建立空間時使用的口令",
-        "deviceName": "例如：Windows 電腦"
+        "passphrase": "輸入對方在建立空間時使用的口令"
       },
       "errors": {
         "invitationNotFound": "邀請碼已被使用或失效，請讓對方重新生成一個。",
@@ -2114,57 +2312,6 @@
       "actions": {
         "done": "完成"
       }
-    }
-  },
-  "spaces": {
-    "selector": { "ariaLabel": "空間", "loading": "正在載入空間…", "empty": "沒有可用空間" },
-    "actions": {
-      "add": "新增空間",
-      "join": "加入空間",
-      "create": "建立空間",
-      "cancel": "取消",
-      "legacyRecovery": "復原舊版空間"
-    },
-    "status": {
-      "runtime": "執行狀態：{{state}}",
-      "incoming": "接收狀態：{{state}}",
-      "active": "{{name}}，目前傳送空間",
-      "setActive": "將 {{name}} 設為目前傳送空間"
-    },
-    "runtime": {
-      "stopped": "已停止",
-      "starting": "正在啟動",
-      "running": "執行中",
-      "locked": "已鎖定",
-      "failed": "失敗"
-    },
-    "incoming": {
-      "enabled": "已啟用",
-      "receiving": "正在接收",
-      "degraded": "部分異常",
-      "disabled": "已停用"
-    },
-    "faults": { "relayUnreachable": "無法連線至中繼服務", "generic": "此空間需要處理" },
-    "errors": {
-      "load": "無法載入空間清單",
-      "refresh": "無法重新整理空間清單",
-      "create": "無法建立空間",
-      "join": "無法加入空間，請檢查邀請碼與密碼後再試一次。",
-      "activeSend": "無法切換目前傳送空間",
-      "remove": "無法移除空間"
-    },
-    "dialog": {
-      "title": "新增空間",
-      "subtitle": "可同時保持多個空間連線；所有執行中的空間都會繼續接收同步內容。",
-      "joinMode": "加入現有空間",
-      "createMode": "建立新空間",
-      "code": "邀請碼",
-      "passphrase": "空間密碼",
-      "confirmPassphrase": "確認密碼",
-      "deviceName": "裝置名稱",
-      "passphraseMismatch": "兩次輸入的密碼不一致",
-      "joining": "正在加入…",
-      "creating": "正在建立…"
     }
   }
 }

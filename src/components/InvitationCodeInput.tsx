@@ -1,7 +1,9 @@
 import { type ComponentProps } from 'react'
-import { INVITATION_CODE_LENGTH, sanitizeInvitationCode } from '@/components/invitation-code-utils'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
+import { INVITATION_CODE_LENGTH } from '@/lib/invitation-code'
 import { cn } from '@/lib/utils'
+
+const stripInvitationCodeSeparator = (text: string) => text.replace(/[^0-9]/g, '')
 
 type Props = Omit<
   ComponentProps<typeof InputOTP>,
@@ -15,7 +17,7 @@ type Props = Omit<
 }
 
 const slotClass = cn(
-  'size-10 rounded-md border border-input bg-card text-lg font-mono font-semibold uppercase shadow-xs',
+  'size-10 rounded-md border border-input bg-card text-ui-body font-mono font-semibold uppercase shadow-xs',
   'data-[active=true]:border-primary data-[active=true]:bg-primary/5 data-[active=true]:ring-2 data-[active=true]:ring-primary/20',
   'transition-[border-color,background-color,box-shadow] duration-150'
 )
@@ -31,20 +33,23 @@ export function InvitationCodeInput({
   className,
   ...rest
 }: Props) {
-  const sanitizeInvitationInput = (next: string) => onChange(sanitizeInvitationCode(next))
+  const sanitizeInvitationInput = (next: string) => {
+    const cleaned = stripInvitationCodeSeparator(next).slice(0, INVITATION_CODE_LENGTH)
+    onChange(cleaned)
+  }
 
-  // Strip the `XXXX-XXXX` hyphen on paste so the underlying `<input>`'s
-  // maxLength=8 does not lop off the final character of a 9-char clipboard
+  // Strip the `XXX-XXX` hyphen on paste so the underlying `<input>`'s
+  // maxLength=6 does not lop off the final character of a 7-char clipboard
   // payload before our onChange filter runs. Passing this transformer also
   // forces input-otp to route paste through JS (preventDefault + manual
   // setValue) on non-iOS browsers, sidestepping the maxLength truncation.
-  const stripInvitationCodeSeparator = sanitizeInvitationCode
-
   const finalSlotClass = cn(slotClass, invalid && invalidSlotClass)
 
   return (
     <InputOTP
       maxLength={INVITATION_CODE_LENGTH}
+      inputMode="numeric"
+      pattern="^[0-9]*$"
       value={value}
       onChange={sanitizeInvitationInput}
       pasteTransformer={stripInvitationCodeSeparator}
@@ -54,12 +59,12 @@ export function InvitationCodeInput({
       {...rest}
     >
       <InputOTPGroup className="gap-2 rounded-none has-aria-invalid:ring-0">
-        {[0, 1, 2, 3].map(i => (
+        {[0, 1, 2].map(i => (
           <InputOTPSlot key={i} index={i} className={finalSlotClass} />
         ))}
       </InputOTPGroup>
       <InputOTPGroup className="gap-2 rounded-none has-aria-invalid:ring-0">
-        {[4, 5, 6, 7].map(i => (
+        {[3, 4, 5].map(i => (
           <InputOTPSlot key={i} index={i} className={finalSlotClass} />
         ))}
       </InputOTPGroup>

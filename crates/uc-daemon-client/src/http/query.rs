@@ -19,12 +19,12 @@ pub struct DaemonQueryClient {
 }
 
 impl DaemonQueryClient {
-    pub fn new(connection_state: DaemonConnectionState) -> Self {
-        Self {
-            http: Arc::new(reqwest::Client::new()),
+    pub fn new(connection_state: DaemonConnectionState) -> Result<Self> {
+        Ok(Self {
+            http: Arc::new(crate::build_local_http_client()?),
             connection_state,
             client_type: "gui".to_string(),
-        }
+        })
     }
 
     pub(crate) fn with_http_conn_state_and_type(
@@ -53,6 +53,24 @@ impl DaemonQueryClient {
 
     pub async fn get_local_device_info(&self) -> Result<LocalDeviceInfoDto> {
         self.enveloped(Method::GET, "/device/me").await
+    }
+
+    /// Report a host event; the Engine owns all connection attempts and retries.
+    pub async fn notify_connectivity_opportunity(
+        &self,
+        reason: uc_daemon_contract::api::dto::device::ConnectivityOpportunity,
+    ) -> Result<()> {
+        let request =
+            uc_daemon_contract::api::dto::device::ConnectivityOpportunityRequest { reason };
+        Ok(empty_request(
+            &self.http,
+            &self.connection_state,
+            &self.client_type,
+            Method::POST,
+            "/presence/opportunity",
+            |builder| builder.json(&request),
+        )
+        .await?)
     }
 
     pub async fn refresh_presence(&self) -> Result<PresenceRefreshResponse> {
@@ -123,5 +141,54 @@ impl DaemonQueryClient {
             |r| r,
         )
         .await?)
+    }
+}
+
+#[cfg(test)]
+mod connectivity_tests {
+    use super::*;
+    use uc_daemon_contract::api::auth::DaemonConnectionInfo;
+    use uc_daemon_contract::api::dto::device::ConnectivityOpportunity;
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn host_opportunities_use_authenticated_requests_without_refreshing() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/auth/connect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "sessionToken": "test-session", "expiresInSecs": 300, "refreshAtSecs": 240 }, "ts": 1
+            }))).mount(&server).await;
+        let state = DaemonConnectionState::default();
+        state.set(DaemonConnectionInfo {
+            base_url: server.uri(),
+            ws_url: "ws://127.0.0.1/unused".into(),
+            token: "test-bearer".into(),
+            pid: 42,
+        });
+        let client = DaemonQueryClient::new(state).unwrap();
+        for (reason, value) in [
+            (ConnectivityOpportunity::Foreground, "foreground"),
+            (ConnectivityOpportunity::SystemWake, "system_wake"),
+            (ConnectivityOpportunity::NetworkChanged, "network_changed"),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/presence/opportunity"))
+                .and(body_json(serde_json::json!({"reason": value})))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            client
+                .notify_connectivity_opportunity(reason)
+                .await
+                .unwrap();
+        }
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.url.path() != "/presence/refresh"));
     }
 }

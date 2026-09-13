@@ -27,5 +27,11 @@
     }
   },
   "include": ["src"],
+  "exclude": [
+    "src/api/daemon/spaces.ts",
+    "src/components/spaces/**",
+    "src/components/invitation-code-utils.ts",
+    "src/store/spacesSlice.ts"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  readUseSystemWindowFrame,
+  readWindowFramePreference,
   resolveWindowFrameMode,
-  setStoredUseSystemWindowFrame,
+  setStoredWindowFramePreference,
   WINDOW_FRAME_STORAGE_KEY,
 } from '@/lib/window-frame'
 
@@ -27,31 +27,37 @@ describe('window frame preference', () => {
   })
 
   it('defaults to the custom frame', () => {
-    expect(readUseSystemWindowFrame()).toBe(false)
-    expect(resolveWindowFrameMode(linuxPlatform, false)).toEqual({
+    expect(readWindowFramePreference()).toBe('auto')
+    expect(resolveWindowFrameMode(linuxPlatform, 'custom')).toMatchObject({
       canChooseSystemFrame: true,
       hasCustomTitleBar: true,
       hasCustomWindowControls: true,
-      hasRoundedWindow: true,
       searchInTitleBar: true,
     })
   })
 
+  it('keeps Windows custom window controls', () => {
+    expect(
+      resolveWindowFrameMode({ ...linuxPlatform, isLinux: false, isWindows: true }, 'custom')
+    ).toMatchObject({
+      hasCustomWindowControls: true,
+    })
+  })
+
   it('uses native chrome and keeps search in the page when the system frame is enabled', () => {
-    expect(resolveWindowFrameMode(linuxPlatform, true)).toEqual({
+    expect(resolveWindowFrameMode(linuxPlatform, 'system')).toMatchObject({
       canChooseSystemFrame: true,
       hasCustomTitleBar: false,
       hasCustomWindowControls: false,
-      hasRoundedWindow: false,
       searchInTitleBar: false,
     })
   })
 
   it('persists the local window preference', () => {
-    setStoredUseSystemWindowFrame(true)
+    setStoredWindowFramePreference('system')
 
-    expect(localStorage.getItem(WINDOW_FRAME_STORAGE_KEY)).toBe('true')
-    expect(readUseSystemWindowFrame()).toBe(true)
+    expect(localStorage.getItem(WINDOW_FRAME_STORAGE_KEY)).toBe('system')
+    expect(readWindowFramePreference()).toBe('system')
   })
 
   it('keeps the selected window frame for the current session when storage fails', () => {
@@ -67,20 +73,19 @@ describe('window frame preference', () => {
       },
     })
 
-    setStoredUseSystemWindowFrame(true)
+    setStoredWindowFramePreference('system')
 
-    expect(readUseSystemWindowFrame()).toBe(true)
+    expect(readWindowFramePreference()).toBe('system')
   })
 
   it('keeps the existing macOS title bar behavior', () => {
-    expect(resolveWindowFrameMode({ ...linuxPlatform, isLinux: false, isMac: true }, true)).toEqual(
-      {
-        canChooseSystemFrame: false,
-        hasCustomTitleBar: true,
-        hasCustomWindowControls: false,
-        hasRoundedWindow: false,
-        searchInTitleBar: true,
-      }
-    )
+    expect(
+      resolveWindowFrameMode({ ...linuxPlatform, isLinux: false, isMac: true }, 'system')
+    ).toMatchObject({
+      canChooseSystemFrame: false,
+      hasCustomTitleBar: true,
+      hasCustomWindowControls: false,
+      searchInTitleBar: true,
+    })
   })
 })

@@ -100,6 +100,7 @@ export default defineConfig({
       '**/worktrees/**',
       '**/docs-site/**',
       '**/_engine_upstream/**',
+      'src/components/spaces/**',
     ],
     coverage: {
       provider: 'v8',

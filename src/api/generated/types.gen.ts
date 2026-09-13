@@ -239,6 +239,13 @@ export type CaptureUiEventResponse = {
     accepted: boolean;
 };
 
+export type ChooseDeviceGroupRequestDto = {
+    choiceId: string;
+    confirmLocalRemoval?: boolean;
+    expectedRevision: number;
+    issueId: string;
+};
+
 /**
  * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
  *
@@ -359,6 +366,12 @@ export type ConnectRequest = {
     pid: number;
 };
 
+export type ConnectivityOpportunity = 'foreground' | 'system_wake' | 'network_changed';
+
+export type ConnectivityOpportunityRequest = {
+    reason: ConnectivityOpportunity;
+};
+
 export type ContentTypesDto = {
     codeSnippet: boolean;
     file: boolean;
@@ -445,12 +458,6 @@ export type DebugStatusEnvelope = {
     ts: number;
 };
 
-export type DecideDeviceTrustRequestDto = {
-    changeId: string;
-    choice: DeviceTrustChoiceDto;
-    confirmLocalRemoval?: boolean;
-};
-
 /**
  * Failure reason. i18n key convention: `delivery.failureReason.<variant>`.
  *
@@ -461,7 +468,137 @@ export type DeliveryFailureReasonDto = 'localPolicy' | 'peerRejected' | 'peerInc
 
 export type DeviceCompatibilityDto = 'compatible' | 'upgrade_required' | 'unknown';
 
-export type DeviceGroupRelationshipDto = 'consistent' | 'pending_local_decision' | 'diverged' | 'unverifiable' | 'unknown';
+export type DeviceGroupChangeDto = {
+    actor: DeviceGroupChoiceDeviceDto;
+    kind: DeviceGroupChangeKindDto;
+    side: DeviceGroupChangeSideDto;
+    target: DeviceGroupChoiceDeviceDto;
+};
+
+export type DeviceGroupChangeKindDto = 'added_device' | 'removed_device';
+
+export type DeviceGroupChangeSideDto = 'local' | 'remote';
+
+export type DeviceGroupChoiceDeviceDto = {
+    deviceId: string;
+    displayName: string;
+};
+
+export type DeviceGroupChoiceImpactDto = {
+    localDeviceOutcome: DeviceMembershipDto;
+    pausedDeviceIds: Array<string>;
+    pendingConfirmationDeviceIds: Array<string>;
+    requiresRejoinDeviceIds: Array<string>;
+    /**
+     * Expected sync scope; not authorization or completed recovery.
+     */
+    syncScopeDeviceIds: Array<string>;
+};
+
+export type DeviceGroupChoiceIssueDto = {
+    choices: Array<DeviceGroupChoiceOptionDto>;
+    issueId: string;
+    reason?: DeviceGroupChoiceReasonDto;
+};
+
+export type DeviceGroupChoiceMemberDto = {
+    active: boolean;
+    deviceId: string;
+    displayName: string;
+    isLocal: boolean;
+};
+
+export type DeviceGroupChoiceOptionDto = {
+    choiceId: string;
+    impact?: DeviceGroupChoiceImpactDto | null;
+    isCurrentGroup: boolean;
+    memberDeviceIds: Array<string>;
+    members?: Array<DeviceGroupChoiceMemberDto>;
+    membersComplete: boolean;
+    requiresRePairing: boolean;
+    sourceDeviceIds?: Array<string>;
+};
+
+export type DeviceGroupChoiceOutcomeDto = 'completed' | 'pending' | 're_pairing_required' | 'already_completed' | 'state_changed' | 'local_device_confirmation_required';
+
+/**
+ * Verified language-neutral facts. Products localize templates, not device names.
+ */
+export type DeviceGroupChoiceReasonDto = {
+    changes: Array<DeviceGroupChangeDto>;
+    decisions: Array<DeviceGroupDecisionDto>;
+    detailsComplete: boolean;
+    kind: DeviceGroupChoiceReasonKindDto;
+};
+
+export type DeviceGroupChoiceReasonKindDto = 'unknown' | 'pending_removal' | 'different_removals' | 'removal_decision_disagreement' | 'diverged_history';
+
+export type DeviceGroupChoiceResultDto = {
+    currentRevision?: number | null;
+    outcome: DeviceGroupChoiceOutcomeDto;
+};
+
+/**
+ * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
+ *
+ * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
+ * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
+ * helper, not a hard dependency on when the handler reads the clock).
+ * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
+ * declared for forward-compat.
+ *
+ * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
+ * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
+ * alias line whenever a new payload type needs enveloping. NEVER register the
+ * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
+ * generic, and an un-aliased generic inlines an anonymous schema.
+ */
+export type DeviceGroupChoiceResultEnvelope = {
+    data: DeviceGroupChoiceResultDto;
+    /**
+     * Server time when the response was built (unix epoch milliseconds).
+     */
+    ts: number;
+};
+
+export type DeviceGroupChoicesDto = {
+    deviceTrust: DeviceTrustSnapshotDto;
+    issues: Array<DeviceGroupChoiceIssueDto>;
+    revision: number;
+};
+
+/**
+ * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
+ *
+ * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
+ * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
+ * helper, not a hard dependency on when the handler reads the clock).
+ * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
+ * declared for forward-compat.
+ *
+ * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
+ * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
+ * alias line whenever a new payload type needs enveloping. NEVER register the
+ * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
+ * generic, and an un-aliased generic inlines an anonymous schema.
+ */
+export type DeviceGroupChoicesEnvelope = {
+    data: DeviceGroupChoicesDto;
+    /**
+     * Server time when the response was built (unix epoch milliseconds).
+     */
+    ts: number;
+};
+
+export type DeviceGroupDecisionDto = {
+    decision: DeviceGroupRemovalDecisionDto;
+    device: DeviceGroupChoiceDeviceDto;
+    target: DeviceGroupChoiceDeviceDto;
+};
+
+export type DeviceGroupRelationshipDto = 'confirmation_pending' | 'consistent' | 'pending_local_decision' | 'diverged' | 'unverifiable' | 'unknown';
+
+export type DeviceGroupRemovalDecisionDto = 'accepted' | 'rejected';
 
 export type DeviceMembershipDto = 'active' | 'removed' | 'unavailable' | 'unknown';
 
@@ -483,52 +620,6 @@ export type DeviceTrustChangeDto = {
 };
 
 export type DeviceTrustChoiceDto = 'apply_change' | 'keep_current_device_group';
-
-export type DeviceTrustDecisionDto = {
-    changeId: string;
-    kind: 'applied';
-    snapshot: DeviceTrustSnapshotDto;
-} | {
-    changeId: string;
-    kind: 'kept_current_device_group';
-    snapshot: DeviceTrustSnapshotDto;
-} | {
-    changeId: string;
-    completedChoice: DeviceTrustChoiceDto;
-    kind: 'already_completed';
-    snapshot: DeviceTrustSnapshotDto;
-} | {
-    currentChangeId?: string | null;
-    kind: 'state_changed';
-    snapshot: DeviceTrustSnapshotDto;
-} | {
-    changeId: string;
-    kind: 'local_device_confirmation_required';
-    snapshot: DeviceTrustSnapshotDto;
-};
-
-/**
- * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
- *
- * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
- * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
- * helper, not a hard dependency on when the handler reads the clock).
- * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
- * declared for forward-compat.
- *
- * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
- * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
- * alias line whenever a new payload type needs enveloping. NEVER register the
- * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
- * generic, and an un-aliased generic inlines an anonymous schema.
- */
-export type DeviceTrustDecisionEnvelope = {
-    data: DeviceTrustDecisionDto;
-    /**
-     * Server time when the response was built (unix epoch milliseconds).
-     */
-    ts: number;
-};
 
 /**
  * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
@@ -588,6 +679,135 @@ export type DeviceTrustSnapshotDto = {
 };
 
 export type DeviceTrustUnavailableReasonDto = 'no_current_change' | 'change_no_longer_current' | 'local_device_confirmation_required' | 'local_device_removed' | 'recovery_not_available_in_this_version' | 'peer_upgrade_required' | 'device_facts_unverifiable' | 'engine_unavailable';
+
+export type DiagnosticArchiveCollectionDto = {
+    concurrentWritesPossible: boolean;
+    includedFiles: Array<string>;
+    truncatedFiles: Array<string>;
+    unreadableFiles: Array<string>;
+};
+
+export type DiagnosticCaptureEndReasonDto = 'expired' | 'requested' | 'suspensionExpiryUnknown' | 'runtimeShutdown';
+
+export type DiagnosticCaptureModeDto = 'standard' | 'detailed';
+
+export type DiagnosticCaptureStartRequestDto = {
+    durationSeconds: number;
+};
+
+export type DiagnosticCaptureStateDto = {
+    captureId?: string | null;
+    endReason?: DiagnosticCaptureEndReasonDto | null;
+    lastCaptureId?: string | null;
+    mode: DiagnosticCaptureModeDto;
+    remainingMs: number;
+    revision: string;
+    startedAtUtc?: string | null;
+};
+
+/**
+ * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
+ *
+ * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
+ * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
+ * helper, not a hard dependency on when the handler reads the clock).
+ * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
+ * declared for forward-compat.
+ *
+ * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
+ * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
+ * alias line whenever a new payload type needs enveloping. NEVER register the
+ * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
+ * generic, and an un-aliased generic inlines an anonymous schema.
+ */
+export type DiagnosticCaptureStopEnvelope = {
+    data: DiagnosticCaptureStopResultDto;
+    /**
+     * Server time when the response was built (unix epoch milliseconds).
+     */
+    ts: number;
+};
+
+export type DiagnosticCaptureStopRequestDto = {
+    captureId: string;
+};
+
+export type DiagnosticCaptureStopResultDto = 'stopped' | 'alreadyStopped' | 'differentCapture';
+
+export type DiagnosticExportPreparationDto = {
+    completedAtUtc: string;
+    files: Array<DiagnosticFileSourceCountsDto>;
+    flush: DiagnosticSignalResultDto;
+    otherProcessesFlushed: boolean;
+    requestedAtUtc: string;
+    status: DiagnosticStatusDto;
+};
+
+export type DiagnosticFileSourceCountsDto = {
+    acceptedCount: string;
+    lastWrittenAtMs?: string | null;
+    queueDroppedCount: string;
+    quotaDroppedCount: string;
+    source: DiagnosticSourceDto;
+    writeFailedCount: string;
+    writtenCount: string;
+};
+
+export type DiagnosticSetupStatusDto = 'disabled' | 'ready' | 'unavailable';
+
+export type DiagnosticSignalResultDto = 'completed' | 'failed' | 'timedOut' | 'alreadyShutdown';
+
+export type DiagnosticSourceCapabilityDto = 'supported' | 'partial' | 'unsupported' | 'unknown';
+
+export type DiagnosticSourceCollectionDto = 'enabled' | 'disabled' | 'unavailable' | 'notRegistered';
+
+export type DiagnosticSourceCoverageDto = {
+    capability: DiagnosticSourceCapabilityDto;
+    collection: DiagnosticSourceCollectionDto;
+    observedCount: string;
+    policyFilteredCount: string;
+    source: DiagnosticSourceDto;
+};
+
+export type DiagnosticSourceDto = 'runtime' | 'connections' | 'addressStorage' | 'dnsDiscovery' | 'mdnsDiscovery' | 'pkarrDiscovery' | 'connectionPaths' | 'relayRecovery' | 'membershipUpdates' | 'sessions' | 'hostApplication' | 'hostShareExtension' | 'hostKeyboardExtension' | 'hostBackgroundService';
+
+export type DiagnosticStatusDto = {
+    capture: DiagnosticCaptureStateDto;
+    closed: boolean;
+    correlationLimitedRecords: string;
+    counterScope: string;
+    engineVersion: string;
+    localFile: DiagnosticSetupStatusDto;
+    observedRecords: string;
+    policyFilteredRecords: string;
+    runId: string;
+    schemaRejectedRecords: string;
+    sourceCommit: string;
+    sources: Array<DiagnosticSourceCoverageDto>;
+};
+
+/**
+ * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
+ *
+ * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
+ * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
+ * helper, not a hard dependency on when the handler reads the clock).
+ * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
+ * declared for forward-compat.
+ *
+ * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
+ * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
+ * alias line whenever a new payload type needs enveloping. NEVER register the
+ * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
+ * generic, and an un-aliased generic inlines an anonymous schema.
+ */
+export type DiagnosticStatusEnvelope = {
+    data: DiagnosticStatusDto;
+    /**
+     * Server time when the response was built (unix epoch milliseconds).
+     */
+    ts: number;
+};
 
 /**
  * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
@@ -1268,10 +1488,12 @@ export type JoinSpaceRejectionReason = 'invitation_unavailable' | 'authenticatio
 export type JoinSpaceResponse = {
     joinId: string;
     joinedSpace: JoinedSpaceResponse;
+    peerUpgradeRequired?: boolean;
     status: 'active';
 } | {
     cancelRequested: boolean;
     joinId: string;
+    peerUpgradeRequired?: boolean;
     sponsorDeviceId?: string | null;
     sponsorIdentityFingerprint?: string | null;
     status: 'pending';
@@ -1476,6 +1698,8 @@ export type LogExportRequestDto = {
 };
 
 export type LogExportResultDto = {
+    collection: DiagnosticArchiveCollectionDto;
+    enginePreparation: DiagnosticExportPreparationDto;
     includedFiles: Array<string>;
     path: string;
     since: string;
@@ -1964,7 +2188,6 @@ export type QuickPanelSettingsPatchDto = {
 export type RedeemRequest = {
     code: string;
     passphrase: string;
-    deviceName: string;
 };
 
 /**
@@ -3480,57 +3703,6 @@ export type WorkerStatusDto = {
 };
 
 /**
- * Complete Engine-owned workspace convergence state for the active space.
- */
-export type WorkspaceConvergenceDto = {
-    convergenceDigest?: string | null;
-    divergedPeerDeviceIds: Array<string>;
-    effectiveMemberCount: number;
-    failureCategory?: WorkspaceConvergenceFailureCategoryDto | null;
-    historyEventCount: number;
-    pendingRemovalDecisionDeviceIds: Array<string>;
-    pendingRemovalDecisionEventId?: string | null;
-    phase: WorkspaceConvergencePhaseDto;
-    removed: boolean;
-    revision: number;
-    updatedAtMs: number;
-    upgradeRequiredPeerDeviceIds: Array<string>;
-};
-
-/**
- * Canonical success envelope: `{ "data": T, "ts": <unix millis i64> }`.
- *
- * `ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler
- * via [`ApiEnvelope::now`] (the contract carries only the type + the clock
- * helper, not a hard dependency on when the handler reads the clock).
- * `rename_all = "camelCase"` is a no-op for the single-word fields here but is
- * declared for forward-compat.
- *
- * IMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named
- * OpenAPI component is declared in the `#[aliases(...)]` block below. Add a new
- * alias line whenever a new payload type needs enveloping. NEVER register the
- * bare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare
- * generic, and an un-aliased generic inlines an anonymous schema.
- */
-export type WorkspaceConvergenceEnvelope = {
-    data: WorkspaceConvergenceDto;
-    /**
-     * Server time when the response was built (unix epoch milliseconds).
-     */
-    ts: number;
-};
-
-/**
- * Stable failure category for workspace convergence.
- */
-export type WorkspaceConvergenceFailureCategoryDto = 'space_mismatch' | 'continuity_gap' | 'identity_mismatch' | 'digest_conflict' | 'unauthorized' | 'version_incompatible' | 'no_effective_members' | 'storage';
-
-/**
- * Current phase of the Engine-owned workspace convergence.
- */
-export type WorkspaceConvergencePhaseDto = 'locally_applied' | 'converging' | 'complete' | 'recovery_required';
-
-/**
  * Error response sent via HTTP status + JSON body when the WebSocket upgrade fails.
  */
 export type WsErrorResponse = {
@@ -4363,6 +4535,89 @@ export type GetLocalDeviceInfoResponses = {
 
 export type GetLocalDeviceInfoResponse = GetLocalDeviceInfoResponses[keyof GetLocalDeviceInfoResponses];
 
+export type GetDiagnosticCaptureStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/diagnostics/capture';
+};
+
+export type GetDiagnosticCaptureStatusErrors = {
+    /**
+     * Local Engine diagnostics unavailable
+     */
+    503: ApiErrorResponse;
+};
+
+export type GetDiagnosticCaptureStatusError = GetDiagnosticCaptureStatusErrors[keyof GetDiagnosticCaptureStatusErrors];
+
+export type GetDiagnosticCaptureStatusResponses = {
+    /**
+     * Current daemon-owned diagnostic capture state
+     */
+    200: DiagnosticStatusEnvelope;
+};
+
+export type GetDiagnosticCaptureStatusResponse = GetDiagnosticCaptureStatusResponses[keyof GetDiagnosticCaptureStatusResponses];
+
+export type StartDiagnosticCaptureData = {
+    body: DiagnosticCaptureStartRequestDto;
+    path?: never;
+    query?: never;
+    url: '/diagnostics/capture/start';
+};
+
+export type StartDiagnosticCaptureErrors = {
+    /**
+     * Invalid capture duration
+     */
+    400: ApiErrorResponse;
+    /**
+     * Local Engine diagnostics unavailable
+     */
+    503: ApiErrorResponse;
+};
+
+export type StartDiagnosticCaptureError = StartDiagnosticCaptureErrors[keyof StartDiagnosticCaptureErrors];
+
+export type StartDiagnosticCaptureResponses = {
+    /**
+     * Actual daemon-owned diagnostic capture state
+     */
+    200: DiagnosticStatusEnvelope;
+};
+
+export type StartDiagnosticCaptureResponse = StartDiagnosticCaptureResponses[keyof StartDiagnosticCaptureResponses];
+
+export type StopDiagnosticCaptureData = {
+    body: DiagnosticCaptureStopRequestDto;
+    path?: never;
+    query?: never;
+    url: '/diagnostics/capture/stop';
+};
+
+export type StopDiagnosticCaptureErrors = {
+    /**
+     * Invalid capture identifier
+     */
+    400: ApiErrorResponse;
+    /**
+     * Local Engine diagnostics unavailable
+     */
+    503: ApiErrorResponse;
+};
+
+export type StopDiagnosticCaptureError = StopDiagnosticCaptureErrors[keyof StopDiagnosticCaptureErrors];
+
+export type StopDiagnosticCaptureResponses = {
+    /**
+     * Capture stop result
+     */
+    200: DiagnosticCaptureStopEnvelope;
+};
+
+export type StopDiagnosticCaptureResponse = StopDiagnosticCaptureResponses[keyof StopDiagnosticCaptureResponses];
+
 export type GetDebugStatusData = {
     body?: never;
     path?: never;
@@ -4715,31 +4970,31 @@ export type GetLifecycleStatusResponses = {
 
 export type GetLifecycleStatusResponse = GetLifecycleStatusResponses[keyof GetLifecycleStatusResponses];
 
-export type GetDeviceTrustData = {
+export type GetDeviceGroupChoicesData = {
     body?: never;
     path?: never;
     query?: never;
-    url: '/member/device-trust';
+    url: '/member/device-group-choices';
 };
 
-export type GetDeviceTrustResponses = {
-    200: DeviceTrustEnvelope;
+export type GetDeviceGroupChoicesResponses = {
+    200: DeviceGroupChoicesEnvelope;
 };
 
-export type GetDeviceTrustResponse = GetDeviceTrustResponses[keyof GetDeviceTrustResponses];
+export type GetDeviceGroupChoicesResponse = GetDeviceGroupChoicesResponses[keyof GetDeviceGroupChoicesResponses];
 
-export type DecideDeviceTrustData = {
-    body: DecideDeviceTrustRequestDto;
+export type ChooseDeviceGroupData = {
+    body: ChooseDeviceGroupRequestDto;
     path?: never;
     query?: never;
-    url: '/member/device-trust/decision';
+    url: '/member/device-group-choices';
 };
 
-export type DecideDeviceTrustResponses = {
-    200: DeviceTrustDecisionEnvelope;
+export type ChooseDeviceGroupResponses = {
+    200: DeviceGroupChoiceResultEnvelope;
 };
 
-export type DecideDeviceTrustResponse = DecideDeviceTrustResponses[keyof DecideDeviceTrustResponses];
+export type ChooseDeviceGroupResponse = ChooseDeviceGroupResponses[keyof ChooseDeviceGroupResponses];
 
 export type GetSpaceProtectionData = {
     body?: never;
@@ -5216,7 +5471,7 @@ export type UnpairDeviceErrors = {
 export type UnpairDeviceError = UnpairDeviceErrors[keyof UnpairDeviceErrors];
 
 export type UnpairDeviceResponses = {
-    200: WorkspaceConvergenceEnvelope;
+    200: DeviceTrustEnvelope;
 };
 
 export type UnpairDeviceResponse = UnpairDeviceResponses[keyof UnpairDeviceResponses];
@@ -5245,6 +5500,35 @@ export type ListPeersResponses = {
 };
 
 export type ListPeersResponse = ListPeersResponses[keyof ListPeersResponses];
+
+export type NotifyConnectivityOpportunityData = {
+    body: ConnectivityOpportunityRequest;
+    path?: never;
+    query?: never;
+    url: '/presence/opportunity';
+};
+
+export type NotifyConnectivityOpportunityErrors = {
+    /**
+     * Invalid connectivity opportunity
+     */
+    400: ApiErrorResponse;
+    /**
+     * Engine is unavailable
+     */
+    503: ApiErrorResponse;
+};
+
+export type NotifyConnectivityOpportunityError = NotifyConnectivityOpportunityErrors[keyof NotifyConnectivityOpportunityErrors];
+
+export type NotifyConnectivityOpportunityResponses = {
+    /**
+     * Connectivity opportunity accepted
+     */
+    204: void;
+};
+
+export type NotifyConnectivityOpportunityResponse = NotifyConnectivityOpportunityResponses[keyof NotifyConnectivityOpportunityResponses];
 
 export type RefreshPresenceData = {
     body?: never;
@@ -5837,11 +6121,15 @@ export type SetupV2IssueInvitationData = {
 
 export type SetupV2IssueInvitationErrors = {
     /**
+     * Space state requires recovery or does not permit invitations
+     */
+    409: ApiErrorResponse;
+    /**
      * Internal error
      */
     500: ApiErrorResponse;
     /**
-     * Facade not assembled or network not started
+     * Service unavailable, network not started, or member changes pending
      */
     503: ApiErrorResponse;
 };

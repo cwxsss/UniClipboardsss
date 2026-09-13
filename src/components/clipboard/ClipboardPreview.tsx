@@ -24,7 +24,7 @@ import TransferProgressBar from './TransferProgressBar'
 
 interface ClipboardPreviewProps {
   item: DisplayClipboardItem | null
-  actions?: React.ReactNode
+  actions?: (delivery: ReturnType<typeof useEntryDelivery>['delivery']) => React.ReactNode
 }
 
 interface PreviewContentProps {
@@ -153,7 +153,9 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item, actions }) =>
     return (
       <div className="flex h-full flex-1 min-h-0 flex-col items-center justify-center gap-3 bg-card text-muted-foreground">
         <Clipboard className="size-10 text-muted-foreground/20" />
-        <span className="text-sm font-medium opacity-50">{t('clipboard.preview.selectItem')}</span>
+        <span className="text-ui-body font-medium opacity-50">
+          {t('clipboard.preview.selectItem')}
+        </span>
       </div>
     )
   }
@@ -181,7 +183,10 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item, actions }) =>
 
   return (
     <div
-      className={cn('flex h-full flex-1 min-h-0 flex-col', isCode ? 'bg-muted/15' : 'bg-card')}
+      className={cn(
+        'relative flex h-full flex-1 min-h-0 flex-col',
+        isCode ? 'bg-muted/15' : 'bg-card'
+      )}
       data-testid="clipboard-detail"
     >
       <ClipboardPreviewInfo
@@ -190,8 +195,24 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item, actions }) =>
         imageDimensions={imageDimensions}
         delivery={delivery}
       />
-
+      {effectiveStatus === 'transferring' && transfer?.status === 'active' && (
+        <div className="mx-6 mb-2 max-w-sm">
+          <TransferProgressBar
+            progress={transfer}
+            variant="compact"
+            onCancel={handleCancelTransfer}
+            cancelling={cancelling}
+          />
+        </div>
+      )}
       <div className="relative flex-1 min-h-0">
+        {actions && (
+          <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 flex flex-col items-center gap-2">
+            <div className="pointer-events-auto flex max-w-full items-center justify-center gap-1 rounded-full border border-border/60 bg-card/90 p-1 backdrop-blur-xl">
+              <div className="flex min-w-0 max-w-full items-center gap-1">{actions(delivery)}</div>
+            </div>
+          </div>
+        )}
         {fillsParent ? (
           <div className="absolute inset-0">{content}</div>
         ) : (
@@ -200,29 +221,6 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item, actions }) =>
           </ScrollArea>
         )}
       </div>
-
-      {(effectiveStatus === 'transferring' || actions) && (
-        <div
-          className={cn(
-            'flex min-h-[64px] shrink-0 items-center justify-between px-6 py-4',
-            isCode ? 'bg-transparent' : 'bg-card'
-          )}
-        >
-          <div className="mr-8 min-w-0 flex-1">
-            {effectiveStatus === 'transferring' && transfer && transfer.status === 'active' && (
-              <div className="max-w-[280px]">
-                <TransferProgressBar
-                  progress={transfer}
-                  variant="compact"
-                  onCancel={handleCancelTransfer}
-                  cancelling={cancelling}
-                />
-              </div>
-            )}
-          </div>
-          {actions && <div className="shrink-0">{actions}</div>}
-        </div>
-      )}
     </div>
   )
 }

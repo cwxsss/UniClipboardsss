@@ -1,8 +1,8 @@
-import { Loader2, ShieldAlert } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, ShieldAlert } from 'lucide-react'
 import { useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { DeviceTrustChoice, DeviceTrustSnapshot } from '@/api/daemon/device-trust'
-import { getPendingDecisionView } from '@/components/device/device-trust-model'
+import type { DeviceGroupChoices } from '@/api/daemon/device-trust'
+import { presentDeviceGroups } from '@/components/device/device-group-presentation'
 import { DeviceTrustChoiceCard } from '@/components/device/DeviceTrustChoiceCard'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,126 +13,180 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-function moveChoice(event: KeyboardEvent<HTMLDivElement>) {
+function moveChoice(event: KeyboardEvent<HTMLButtonElement>) {
   if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
   const options = Array.from(
-    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)')
+    event.currentTarget
+      .closest('[role="radiogroup"]')!
+      .querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)')
   )
-  const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement)
-  if (currentIndex === -1 || options.length < 2) return
+  const index = options.indexOf(document.activeElement as HTMLButtonElement)
+  if (index < 0 || options.length < 2) return
   event.preventDefault()
   const offset = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1
-  const next = options[(currentIndex + offset + options.length) % options.length]
+  const next = options[(index + offset + options.length) % options.length]
   next.click()
   next.focus()
 }
 
 export function DeviceTrustDecisionContent({
-  snapshot,
+  deviceGroups,
   busy,
   error,
-  localRemovalConfirmationChangeId,
-  onDecide,
+  localRemovalConfirmationIssueId,
+  onChoose,
+  onRefresh,
+  onBack,
+  confirmationChoiceId,
 }: {
-  snapshot: DeviceTrustSnapshot
+  deviceGroups: DeviceGroupChoices
   busy: boolean
   error: string | null
-  localRemovalConfirmationChangeId: string | null
-  onDecide: (choice: DeviceTrustChoice, confirmLocalRemoval: boolean) => void
+  localRemovalConfirmationIssueId: string | null
+  onChoose: (issueId: string, choiceId: string, confirmLocalRemoval: boolean) => void
+  onRefresh?: () => void
+  onBack?: () => void
+  confirmationChoiceId?: string | null
 }) {
   const { t } = useTranslation()
-  const view = getPendingDecisionView(snapshot)
-  const change = snapshot.currentChange
-  const choices = change?.allowedChoices ?? []
-  const [selectedChoice, setSelectedChoice] = useState<DeviceTrustChoice>(
-    () => choices[0] ?? 'apply_change'
-  )
-  if (!view || !change || choices.length === 0) return null
-  const choice = choices.includes(selectedChoice) ? selectedChoice : choices[0]
-  const confirmingLocalRemoval =
-    localRemovalConfirmationChangeId === change.changeId &&
-    choice === 'apply_change' &&
-    view.includesLocalDevice
-
-  const names = (items: typeof view.targets) =>
-    items.length > 0
-      ? items.map(item => item.label).join(t('deviceTrust.listSeparator'))
-      : t('deviceTrust.modal.noDevices')
-
+  const [selection, setSelection] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
+  const issue = deviceGroups.issues[0]
+  const view = presentDeviceGroups(deviceGroups, t)
+  const selected = view.choices.find(choice => choice.id === (selection ?? confirmationChoiceId))
+  const localConfirmation = confirming || localRemovalConfirmationIssueId === issue?.issueId
+  if (!issue) return null
+  const submit = () => {
+    if (!selected || busy) return
+    if (selected.removesLocal && !localConfirmation) {
+      setConfirming(true)
+      return
+    }
+    onChoose(issue.issueId, selected.id, localConfirmation)
+  }
   return (
     <>
-      <DialogHeader className="flex-row items-start gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-destructive/10 text-destructive">
-          <ShieldAlert className="size-5" aria-hidden="true" />
+      <DialogHeader>
+        <span className="flex items-start gap-3">
+          <ShieldAlert className="mt-0.5 size-5 shrink-0 text-destructive" />
+          <span className="min-w-0">
+            <DialogTitle className="[overflow-wrap:anywhere]">
+              {view.localRemovalTitle ??
+                t('deviceTrust.presentation.title', { name: view.localName })}
+            </DialogTitle>
+            <DialogDescription className={view.localRemovalTitle ? 'sr-only' : 'mt-2'}>
+              {view.localRemovalTitle
+                ? t('deviceTrust.presentation.select')
+                : t('deviceTrust.presentation.local', { name: view.localName })}
+            </DialogDescription>
+          </span>
         </span>
-        <span className="min-w-0">
-          <DialogTitle>{t('deviceTrust.modal.title')}</DialogTitle>
-          <DialogDescription className="mt-1">
-            {view.includesLocalDevice
-              ? t('deviceTrust.modal.localSummary', { proposer: view.proposer.label })
-              : t('deviceTrust.modal.summary', {
-                  proposer: view.proposer.label,
-                  targets: names(view.targets),
-                })}
-          </DialogDescription>
-        </span>
-      </DialogHeader>
-      <DialogBody className="space-y-4 py-1">
-        <div className="grid min-w-0 gap-3" role="radiogroup" onKeyDown={moveChoice}>
-          {choices.includes('apply_change') && (
-            <DeviceTrustChoiceCard
-              selected={choice === 'apply_change'}
-              disabled={busy}
-              onSelect={() => setSelectedChoice('apply_change')}
-              title={t(
-                view.includesLocalDevice
-                  ? 'deviceTrust.modal.leaveTitle'
-                  : 'deviceTrust.modal.applyTitle'
-              )}
-              continuesWith={names(view.apply.continuesWith)}
-              stopsWith={names(view.apply.stopsWith)}
-            />
-          )}
-          {choices.includes('keep_current_device_group') && (
-            <DeviceTrustChoiceCard
-              selected={choice === 'keep_current_device_group'}
-              disabled={busy}
-              onSelect={() => setSelectedChoice('keep_current_device_group')}
-              title={t(
-                view.includesLocalDevice
-                  ? 'deviceTrust.modal.stayTitle'
-                  : 'deviceTrust.modal.keepTitle'
-              )}
-              continuesWith={names(view.keepCurrent.continuesWith)}
-              stopsWith={names(view.keepCurrent.stopsWith)}
-            />
-          )}
-        </div>
-        {error && (
-          <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
-            {error === 'device_state_changed'
-              ? t('deviceTrust.modal.stateChanged')
-              : t('deviceTrust.modal.failed')}
+        {!view.localRemovalTitle && (
+          <p data-testid="choice-reason" className="mt-3 text-ui-body [overflow-wrap:anywhere]">
+            {view.reason}
           </p>
         )}
-        {confirmingLocalRemoval && (
-          <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
+        {view.detailsIncomplete && (
+          <p className="text-ui-caption text-muted-foreground">
+            {t('deviceTrust.presentation.detailsIncomplete')}
+          </p>
+        )}
+        {deviceGroups.issues.length > 1 && (
+          <p className="text-ui-caption text-muted-foreground">
+            {t('deviceTrust.modal.issueProgress', {
+              current: 1,
+              total: deviceGroups.issues.length,
+            })}
+          </p>
+        )}
+      </DialogHeader>
+      <DialogBody className="space-y-3 py-1">
+        <div
+          className="grid min-w-0 gap-3"
+          role="radiogroup"
+          tabIndex={-1}
+          aria-label={t('deviceTrust.presentation.select')}
+        >
+          {view.choices.map((choice, index) => (
+            <DeviceTrustChoiceCard
+              key={choice.id}
+              view={choice}
+              showDetails={showDetails}
+              selected={selected?.id === choice.id}
+              tabStop={selected ? selected.id === choice.id : index === 0}
+              disabled={busy || localConfirmation}
+              onKeyDown={moveChoice}
+              onSelect={() => {
+                setSelection(choice.id)
+                setConfirming(false)
+              }}
+            />
+          ))}
+        </div>
+        {!localConfirmation && (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={showDetails}
+            onClick={() => setShowDetails(value => !value)}
+          >
+            {showDetails ? <ChevronUp /> : <ChevronDown />}
+            {t(`deviceTrust.presentation.${showDetails ? 'hideDevices' : 'showDevices'}`)}
+          </Button>
+        )}
+        {error && (
+          <p
+            role="alert"
+            data-testid="device-trust-error"
+            data-error={error}
+            className="text-ui-body text-destructive"
+          >
+            {t(
+              error === 'device_state_changed'
+                ? 'deviceTrust.presentation.changed'
+                : 'deviceTrust.presentation.uncertain'
+            )}
+          </p>
+        )}
+        {localConfirmation && (
+          <p
+            data-testid="device-trust-local-removal-warning"
+            className="text-ui-body text-destructive"
+          >
             {t('deviceTrust.modal.confirmLocalRemoval')}
           </p>
         )}
       </DialogBody>
-      <DialogFooter>
+      <DialogFooter className="flex-wrap">
+        {localConfirmation && (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setConfirming(false)
+              setSelection(null)
+              onBack?.()
+            }}
+          >
+            {t('deviceTrust.presentation.back')}
+          </Button>
+        )}
+        {error && onRefresh && (
+          <Button variant="outline" onClick={onRefresh} disabled={busy}>
+            {t('deviceTrust.presentation.retry')}
+          </Button>
+        )}
         <Button
-          className="min-w-24"
-          disabled={busy}
-          onClick={() => onDecide(choice, confirmingLocalRemoval)}
+          data-testid="device-trust-confirm"
+          disabled={busy || !selected}
+          onClick={submit}
+          className="min-w-24 max-w-full whitespace-normal"
         >
-          {busy && <Loader2 className="animate-spin" aria-hidden="true" />}
-          {t(
-            confirmingLocalRemoval
-              ? 'deviceTrust.actions.confirmExit'
-              : 'deviceTrust.actions.confirm'
-          )}
+          {busy && <Loader2 className="size-4 animate-spin" />}
+          {localConfirmation
+            ? t('deviceTrust.actions.confirmExit')
+            : (selected?.title ?? t('deviceTrust.presentation.select'))}
         </Button>
       </DialogFooter>
     </>
