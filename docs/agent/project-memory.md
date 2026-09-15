@@ -340,3 +340,8 @@ Do not treat DeepWiki as a higher authority than the repository code.
 - PC 端官方 Engine `v1.1.0-rc.15` 适配、启动恢复、设备管理、搜索存储、托盘和窗口体验等改动已提交为 `a16638338580639d9d2cf9b04485f035a51ce6e0`，推送到 `cwxsss/UniClipboardsss` 的 `codex/multi-space-engine-integration-pr`，未合并到 `main`。
 - 鸿蒙端 Engine `v1.1.0-rc.15` 适配已压缩提交为 `df12c5fbe3bf9a955653fd47d817bf367e5bdf5c`，推送到 `cwxsss/UniClipboardHarmonyOS` Fork 的 `codex/rc7-source`，未合并到 `main`。为避免公开 Fork 无法上传新的 Git LFS 对象，提交基于远程现有分支重建，不包含 HAR 二进制和独立 `.so`；保留固定版本元数据、声明、校验清单和源码适配。
 - 本轮 PC 提交时既有 pre-commit 的 `refresh-agents-structure.mjs` 因中文路径编码拼接错误而失败，已在前置构建、测试和 `git diff --cached --check` 通过后使用 `--no-verify` 提交；该钩子问题仍待单独修复。PC 临时 `.engine-work`、未接入的 `vendor/iroh-blobs` 和构建产物未提交。
+
+## 2026-09-15 onboarding 窗口关闭控件
+
+- SetupPage 原先只渲染可拖动的空白顶部条；由于 setup gate 不渲染通用 fullTitleBar，Windows 自绘窗口模式下 onboarding 页面缺少关闭按钮。现已在顶部复用 `ContentToolbar`，使 entry、创建、加入、迁移和配对完成阶段共享现有窗口控制语义。
+- 新增 SetupPage 窗口控件回归测试，验证关闭按钮可见并调用当前 Tauri 窗口的 `close()`。补齐已声明的 `use-context-selector` 本地依赖后，定向 Vitest 合计 5 个文件、30 项测试通过；lint 仅保留既有 `sidebar.tsx` Fast Refresh 警告。Vite 在沙盒内遇到 `spawn EPERM`，按批准在沙盒外重跑 `npm run build` 成功；依赖清单和锁文件未修改。未生成或安装新的 Windows 安装包，未提交或推送。

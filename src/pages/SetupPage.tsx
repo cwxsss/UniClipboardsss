@@ -1,6 +1,7 @@
 import { AnimatePresence } from 'framer-motion'
 import type React from 'react'
 import { useNavigate } from 'react-router'
+import { ContentToolbar } from '@/components/TitleBar'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useSetupFlow } from '@/hooks/useSetupFlow'
 import { cn } from '@/lib/utils'
@@ -161,7 +162,9 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
         <header
           data-tauri-drag-region
           className={cn('flex h-12 shrink-0 items-center pr-4', isMac ? 'pl-20 lg:pl-6' : 'pl-6')}
-        />
+        >
+          <ContentToolbar className="ml-auto w-auto" />
+        </header>
 
         <div className="flex min-h-0 flex-1 items-center overflow-y-auto px-8 pb-12 sm:px-14">
           <div className={cn('mx-auto min-w-0 w-full', pairingComplete ? 'max-w-xl' : 'max-w-md')}>

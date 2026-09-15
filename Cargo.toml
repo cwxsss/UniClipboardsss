@@ -53,7 +53,7 @@ dbg_macro = "warn"
 # opt-in at each host boundary so LAN compatibility cannot become a default.
 # Immutable rc15 pin shared with the HarmonyOS HAR. All desktop consumers must
 # resolve this exact published Engine revision.
-uc-engine = { git = "https://github.com/UniClipboard/Engine.git", rev = "f6f305d9689e4e79e7ab6d0e4921061f9416e4a6" }
+uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "918bf39b8282fe18030180048fccc1526c9b5cde" }
 
 # tauri 2.11 是 specta rc.25 兼容的最低版本 —— 2.10.x 及之前在
 # `tauri/src/ipc/channel.rs` 用了 `#[specta(remote=..., rename="...")]`
