@@ -2281,7 +2281,9 @@
           "history_conflict": "两边的历史无法合并。",
           "peer_upgrade_required": "对方设备需要更新 UniClipboard。",
           "cancelled": "本次加入已取消。",
-          "removed_before_activation": "对方在确认前取消了这台设备。"
+          "removed_before_activation": "对方在确认前取消了这台设备。",
+          "expired": "邀请已过期，请对方重新发起邀请。",
+          "superseded": "这次加入已被更新的请求取代。"
         }
       }
     },

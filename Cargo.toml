@@ -51,9 +51,12 @@ dbg_macro = "warn"
 [workspace.dependencies]
 # All desktop consumers use one immutable Engine revision. Features remain
 # opt-in at each host boundary so LAN compatibility cannot become a default.
-# Immutable rc15 pin shared with the HarmonyOS HAR. All desktop consumers must
+# Immutable rc17 pin shared with the HarmonyOS HAR. All desktop consumers must
 # resolve this exact published Engine revision.
-uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "918bf39b8282fe18030180048fccc1526c9b5cde" }
+# 3cc2f95f = cwxsss/Engine 把上游 UniClipboard/Engine v1.1.0-rc.17 (a13ff9d78)
+# 合并进分叉 main 的合并提交；与上游 #1694 采纳的 Engine 内容等价（上游直接
+# 指向 a13ff9d78，我们指向分叉合并点，保证桌面端与鸿蒙 HAR 同源）。
+uc-engine = { git = "https://github.com/cwxsss/Engine.git", rev = "3cc2f95f6b73c0306f8a81c9a114d7b3720760da" }
 
 # tauri 2.11 是 specta rc.25 兼容的最低版本 —— 2.10.x 及之前在
 # `tauri/src/ipc/channel.rs` 用了 `#[specta(remote=..., rename="...")]`

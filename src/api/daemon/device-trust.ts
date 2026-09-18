@@ -55,7 +55,10 @@ const DEVICE_GROUP_CHOICE_TIMEOUT_MS = 60_000
 function normalizeJoinSpaceResponse(
   response: GeneratedJoinSpaceResponse | null | undefined
 ): JoinSpaceResponse | null | undefined {
-  if (!response || response.status === 'rejected') return response
+  // `rejected` 与 rc.17 新增的 `terminated`（cancelled/expired/superseded）都是
+  // 终态，字段本身就不可空，直接透传即可。
+  if (!response || response.status === 'rejected' || response.status === 'terminated')
+    return response
   if (response.status === 'pending') {
     return {
       ...response,

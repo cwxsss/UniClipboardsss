@@ -2283,7 +2283,9 @@
           "history_conflict": "The two histories cannot be merged.",
           "peer_upgrade_required": "The other device must update UniClipboard.",
           "cancelled": "This join was cancelled.",
-          "removed_before_activation": "The other device removed this device before confirmation."
+          "removed_before_activation": "The other device removed this device before confirmation.",
+          "expired": "This invitation expired. Ask the other device for a new one.",
+          "superseded": "A newer join attempt replaced this one."
         }
       }
     },

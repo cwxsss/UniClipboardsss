@@ -239,7 +239,8 @@ fn join_id(response: &JoinSpaceResponse) -> &str {
     match response {
         JoinSpaceResponse::Active { join_id, .. }
         | JoinSpaceResponse::Pending { join_id, .. }
-        | JoinSpaceResponse::Rejected { join_id, .. } => join_id,
+        | JoinSpaceResponse::Rejected { join_id, .. }
+        | JoinSpaceResponse::Terminated { join_id, .. } => join_id,
     }
 }
 
@@ -304,7 +305,10 @@ fn join_response_outcome(
     intent: JoinResponseIntent,
 ) -> JoinResponseOutcome {
     let ok = match intent {
-        JoinResponseIntent::Start => !matches!(response, JoinSpaceResponse::Rejected { .. }),
+        JoinResponseIntent::Start => !matches!(
+            response,
+            JoinSpaceResponse::Rejected { .. } | JoinSpaceResponse::Terminated { .. }
+        ),
         JoinResponseIntent::Status => true,
         JoinResponseIntent::Cancel => matches!(
             response,
@@ -314,6 +318,10 @@ fn join_response_outcome(
             } | JoinSpaceResponse::Rejected {
                 reason:
                     uc_daemon_contract::api::dto::v2::setup::JoinSpaceRejectionReason::Cancelled,
+                ..
+            } | JoinSpaceResponse::Terminated {
+                reason:
+                    uc_daemon_contract::api::dto::v2::setup::JoinSpaceTerminationReason::Cancelled,
                 ..
             }
         ),
@@ -475,6 +483,43 @@ fn render_join_response(
                         ui::info("status", "rejected");
                     }
                     _ => ui::spinner_finish_error(spinner, "Join request was rejected"),
+                }
+                ui::info("join_id", join_id);
+                ui::info("reason", reason);
+                outcome.exit_code
+            }
+        }
+        // rc.17 起 Engine 会在加入尝试被取消 / 过期 / 取代时返回 terminated。
+        // 它是终态且不会自愈，因此按失败收尾，并把原因透出给脚本。
+        JoinSpaceResponse::Terminated { join_id, reason } => {
+            let reason = match reason {
+                uc_daemon_contract::api::dto::v2::setup::JoinSpaceTerminationReason::Cancelled => {
+                    "cancelled"
+                }
+                uc_daemon_contract::api::dto::v2::setup::JoinSpaceTerminationReason::Expired => {
+                    "expired"
+                }
+                uc_daemon_contract::api::dto::v2::setup::JoinSpaceTerminationReason::Superseded => {
+                    "superseded"
+                }
+            };
+            if json {
+                spinner.finish_and_clear();
+                crate::output::emit_json_with_code(
+                    &JoinRejectedOutput {
+                        ok: outcome.ok,
+                        status: "terminated",
+                        join_id,
+                        reason,
+                    },
+                    "join response",
+                    outcome.exit_code,
+                )
+            } else {
+                if outcome.ok {
+                    ui::spinner_finish_success(spinner, "Join attempt was cancelled");
+                } else {
+                    ui::spinner_finish_error(spinner, "Join attempt was terminated");
                 }
                 ui::info("join_id", join_id);
                 ui::info("reason", reason);

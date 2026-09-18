@@ -15,8 +15,8 @@ use uc_daemon_contract::api::dto::v2::spaces::{
     SpaceFaultDto, SpaceIncomingSyncStateDto, SpaceProfileSummaryDto, SpaceRuntimeStateDto,
 };
 use uc_engine::{
-    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary, Operation, OperationResult,
-    SecretString,
+    CreateSpaceInput, Engine, JoinSpaceInput, JoinSpaceStatusSummary,
+    JoinSpaceTerminationReasonSummary, Operation, OperationResult, SecretString,
 };
 use uc_platform::clipboard::SystemClipboardSnapshot;
 
@@ -488,6 +488,20 @@ async fn wait_for_join_completion(
                     "space join was rejected",
                 ))
             }
+            // rc.17 起 Engine 会把「已终结」的加入尝试单独上报：取消 / 过期 / 被新的
+            // 邀请取代。它是终态而非瞬时状态，继续轮询只会耗到超时，因此立刻失败并
+            // 把具体原因透出给调用方。
+            JoinSpaceStatusSummary::Terminated { reason, .. } => {
+                let reason_code = match reason {
+                    JoinSpaceTerminationReasonSummary::Cancelled => "cancelled",
+                    JoinSpaceTerminationReasonSummary::Expired => "expired",
+                    JoinSpaceTerminationReasonSummary::Superseded => "superseded",
+                };
+                return Err(SpacesBackendError::conflict(
+                    "join_terminated",
+                    format!("space join was terminated: {reason_code}"),
+                ));
+            }
             JoinSpaceStatusSummary::Pending { ref join_id, .. } => {
                 let expected_join_id = join_id.clone();
                 if tokio::time::Instant::now() >= deadline {
@@ -500,7 +514,9 @@ async fn wait_for_join_completion(
                 status = match engine.execute(Operation::QueryDeviceGroupChoices).await {
                     Ok(OperationResult::DeviceGroupChoices(choices)) => {
                         match choices.device_trust.current_join {
-                            Some(candidate) if join_id_of(&candidate) == expected_join_id => candidate,
+                            Some(candidate) if join_id_of(&candidate) == expected_join_id => {
+                                candidate
+                            }
                             _ => continue,
                         }
                     }
@@ -515,7 +531,8 @@ fn join_id_of(status: &JoinSpaceStatusSummary) -> &str {
     match status {
         JoinSpaceStatusSummary::Active { join_id, .. }
         | JoinSpaceStatusSummary::Pending { join_id, .. }
-        | JoinSpaceStatusSummary::Rejected { join_id, .. } => join_id,
+        | JoinSpaceStatusSummary::Rejected { join_id, .. }
+        | JoinSpaceStatusSummary::Terminated { join_id, .. } => join_id,
     }
 }
 

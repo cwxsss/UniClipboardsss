@@ -1502,7 +1502,13 @@ export type JoinSpaceResponse = {
     joinId: string;
     reason: JoinSpaceRejectionReason;
     status: 'rejected';
+} | {
+    joinId: string;
+    reason: JoinSpaceTerminationReason;
+    status: 'terminated';
 };
+
+export type JoinSpaceTerminationReason = 'cancelled' | 'expired' | 'superseded';
 
 export type JoinedSpaceResponse = {
     migratedRecords?: number | null;

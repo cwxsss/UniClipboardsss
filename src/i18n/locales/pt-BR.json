@@ -2289,6 +2289,8 @@
           "history_conflict": "Os dois históricos não podem ser combinados.",
           "peer_upgrade_required": "O outro dispositivo precisa atualizar o UniClipboard.",
           "cancelled": "Esta entrada foi cancelada.",
+          "expired": "O convite expirou.",
+          "superseded": "Esta tentativa de entrada foi substituída por uma mais recente.",
           "removed_before_activation": "O outro dispositivo removeu este dispositivo antes da confirmação."
         }
       }

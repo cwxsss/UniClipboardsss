@@ -15,6 +15,7 @@ import {
   type RedeemInvitationErrorKind,
   type InitializeSpaceErrorKind,
   type JoinSpaceRejectionReason,
+  type JoinSpaceTerminationReason,
 } from '@/api/daemon/setupV2'
 import { activeDeviceIds, findNewActiveDeviceId } from '@/components/device/pairing-success-utils'
 import { toast } from '@/components/ui/toast'
@@ -53,8 +54,9 @@ export type SetupScreen =
   | { kind: 'redeem_invitation' }
   /** S4a — joiner: durable admission is waiting for its final outcome. */
   | { kind: 'join_pending'; joinId: string }
-  /** S4b — joiner: durable admission was rejected. */
-  | { kind: 'join_rejected'; reason: JoinSpaceRejectionReason }
+  /** S4b — joiner: durable admission ended without success (rejected or, since
+   * rc.17, terminated as cancelled/expired/superseded). */
+  | { kind: 'join_rejected'; reason: JoinSpaceRejectionReason | JoinSpaceTerminationReason }
   /** Sponsor Space is ready and can issue its first invitation. */
   | { kind: 'space_ready' }
   /** S5 — both: post-handshake summary. */
@@ -177,7 +179,9 @@ export function useSetupFlow(): UseSetupFlowReturn {
   })
 
   const resolveJoinAdmission = useCallback(async (result: JoinAdmissionResolution) => {
-    if (result.status === 'rejected') {
+    // `rejected` 与 rc.17 新增的 `terminated`（cancelled/expired/superseded）都是
+    // 终态失败，两者都带 reason，统一交给拒绝页渲染。
+    if (result.status !== 'active') {
       setPageScreen({ kind: 'join_rejected', reason: result.reason })
       return
     }
@@ -319,7 +323,7 @@ export function useSetupFlow(): UseSetupFlowReturn {
           setPageScreen({ kind: 'join_pending', joinId: redeem.joinId })
           return { ok: true, redeem: null } as const
         }
-        if (redeem.status === 'rejected') {
+        if (redeem.status === 'rejected' || redeem.status === 'terminated') {
           setPageScreen({ kind: 'join_rejected', reason: redeem.reason })
           return {
             ok: false,

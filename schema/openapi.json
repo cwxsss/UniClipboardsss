@@ -352,6 +352,30 @@
         ],
         "type": "object"
       },
+      "ChooseDeviceGroupRequestDto": {
+        "properties": {
+          "choiceId": {
+            "type": "string"
+          },
+          "confirmLocalRemoval": {
+            "type": "boolean"
+          },
+          "expectedRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issueId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "issueId",
+          "choiceId",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
       "ClearCacheEnvelope": {
         "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
         "properties": {
@@ -509,6 +533,26 @@
         ],
         "type": "object"
       },
+      "ConnectivityOpportunity": {
+        "enum": [
+          "foreground",
+          "system_wake",
+          "network_changed"
+        ],
+        "type": "string"
+      },
+      "ConnectivityOpportunityRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/ConnectivityOpportunity"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "ContentTypesDto": {
         "properties": {
           "codeSnippet": {
@@ -660,24 +704,6 @@
         ],
         "type": "object"
       },
-      "DecideDeviceTrustRequestDto": {
-        "properties": {
-          "changeId": {
-            "type": "string"
-          },
-          "choice": {
-            "$ref": "#/components/schemas/DeviceTrustChoiceDto"
-          },
-          "confirmLocalRemoval": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "changeId",
-          "choice"
-        ],
-        "type": "object"
-      },
       "DeliveryFailureReasonDto": {
         "description": "Failure reason. i18n key convention: `delivery.failureReason.<variant>`.\n\nNote: \"peer offline\" is NOT in this enum — it is represented as\n`EntryDeliveryStatusDto::Unreachable` (a separate status, not a failure).",
         "enum": [
@@ -697,13 +723,354 @@
         ],
         "type": "string"
       },
+      "DeviceGroupChangeDto": {
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceDeviceDto"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceGroupChangeKindDto"
+          },
+          "side": {
+            "$ref": "#/components/schemas/DeviceGroupChangeSideDto"
+          },
+          "target": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceDeviceDto"
+          }
+        },
+        "required": [
+          "side",
+          "kind",
+          "actor",
+          "target"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChangeKindDto": {
+        "enum": [
+          "added_device",
+          "removed_device"
+        ],
+        "type": "string"
+      },
+      "DeviceGroupChangeSideDto": {
+        "enum": [
+          "local",
+          "remote"
+        ],
+        "type": "string"
+      },
+      "DeviceGroupChoiceDeviceDto": {
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceImpactDto": {
+        "properties": {
+          "localDeviceOutcome": {
+            "$ref": "#/components/schemas/DeviceMembershipDto"
+          },
+          "pausedDeviceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pendingConfirmationDeviceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requiresRejoinDeviceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "syncScopeDeviceIds": {
+            "description": "Expected sync scope; not authorization or completed recovery.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "syncScopeDeviceIds",
+          "pausedDeviceIds",
+          "pendingConfirmationDeviceIds",
+          "requiresRejoinDeviceIds",
+          "localDeviceOutcome"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceIssueDto": {
+        "properties": {
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGroupChoiceOptionDto"
+            },
+            "type": "array"
+          },
+          "issueId": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceReasonDto"
+          }
+        },
+        "required": [
+          "issueId",
+          "choices"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceMemberDto": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "isLocal": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deviceId",
+          "displayName",
+          "isLocal",
+          "active"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceOptionDto": {
+        "properties": {
+          "choiceId": {
+            "type": "string"
+          },
+          "impact": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeviceGroupChoiceImpactDto"
+              }
+            ],
+            "nullable": true
+          },
+          "isCurrentGroup": {
+            "type": "boolean"
+          },
+          "memberDeviceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGroupChoiceMemberDto"
+            },
+            "type": "array"
+          },
+          "membersComplete": {
+            "type": "boolean"
+          },
+          "requiresRePairing": {
+            "type": "boolean"
+          },
+          "sourceDeviceIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "choiceId",
+          "isCurrentGroup",
+          "requiresRePairing",
+          "memberDeviceIds",
+          "membersComplete"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceOutcomeDto": {
+        "enum": [
+          "completed",
+          "pending",
+          "re_pairing_required",
+          "already_completed",
+          "state_changed",
+          "local_device_confirmation_required"
+        ],
+        "type": "string"
+      },
+      "DeviceGroupChoiceReasonDto": {
+        "description": "Verified language-neutral facts. Products localize templates, not device names.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGroupChangeDto"
+            },
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGroupDecisionDto"
+            },
+            "type": "array"
+          },
+          "detailsComplete": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceReasonKindDto"
+          }
+        },
+        "required": [
+          "kind",
+          "changes",
+          "decisions",
+          "detailsComplete"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceReasonKindDto": {
+        "enum": [
+          "unknown",
+          "pending_removal",
+          "different_removals",
+          "removal_decision_disagreement",
+          "diverged_history"
+        ],
+        "type": "string"
+      },
+      "DeviceGroupChoiceResultDto": {
+        "properties": {
+          "currentRevision": {
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceOutcomeDto"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoiceResultEnvelope": {
+        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceResultDto"
+          },
+          "ts": {
+            "description": "Server time when the response was built (unix epoch milliseconds).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoicesDto": {
+        "properties": {
+          "deviceTrust": {
+            "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGroupChoiceIssueDto"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "deviceTrust",
+          "issues"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupChoicesEnvelope": {
+        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DeviceGroupChoicesDto"
+          },
+          "ts": {
+            "description": "Server time when the response was built (unix epoch milliseconds).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "DeviceGroupDecisionDto": {
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/DeviceGroupRemovalDecisionDto"
+          },
+          "device": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceDeviceDto"
+          },
+          "target": {
+            "$ref": "#/components/schemas/DeviceGroupChoiceDeviceDto"
+          }
+        },
+        "required": [
+          "device",
+          "decision",
+          "target"
+        ],
+        "type": "object"
+      },
       "DeviceGroupRelationshipDto": {
         "enum": [
+          "confirmation_pending",
           "consistent",
           "pending_local_decision",
           "diverged",
           "unverifiable",
           "unknown"
+        ],
+        "type": "string"
+      },
+      "DeviceGroupRemovalDecisionDto": {
+        "enum": [
+          "accepted",
+          "rejected"
         ],
         "type": "string"
       },
@@ -802,145 +1169,6 @@
           "keep_current_device_group"
         ],
         "type": "string"
-      },
-      "DeviceTrustDecisionDto": {
-        "discriminator": {
-          "propertyName": "kind"
-        },
-        "oneOf": [
-          {
-            "properties": {
-              "changeId": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "applied"
-                ],
-                "type": "string"
-              },
-              "snapshot": {
-                "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
-              }
-            },
-            "required": [
-              "changeId",
-              "snapshot",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "changeId": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "kept_current_device_group"
-                ],
-                "type": "string"
-              },
-              "snapshot": {
-                "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
-              }
-            },
-            "required": [
-              "changeId",
-              "snapshot",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "changeId": {
-                "type": "string"
-              },
-              "completedChoice": {
-                "$ref": "#/components/schemas/DeviceTrustChoiceDto"
-              },
-              "kind": {
-                "enum": [
-                  "already_completed"
-                ],
-                "type": "string"
-              },
-              "snapshot": {
-                "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
-              }
-            },
-            "required": [
-              "changeId",
-              "completedChoice",
-              "snapshot",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "currentChangeId": {
-                "nullable": true,
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "state_changed"
-                ],
-                "type": "string"
-              },
-              "snapshot": {
-                "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
-              }
-            },
-            "required": [
-              "snapshot",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "changeId": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "local_device_confirmation_required"
-                ],
-                "type": "string"
-              },
-              "snapshot": {
-                "$ref": "#/components/schemas/DeviceTrustSnapshotDto"
-              }
-            },
-            "required": [
-              "changeId",
-              "snapshot",
-              "kind"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "DeviceTrustDecisionEnvelope": {
-        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/DeviceTrustDecisionDto"
-          },
-          "ts": {
-            "description": "Server time when the response was built (unix epoch milliseconds).",
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "data",
-          "ts"
-        ],
-        "type": "object"
       },
       "DeviceTrustEnvelope": {
         "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
@@ -1134,6 +1362,371 @@
           "engine_unavailable"
         ],
         "type": "string"
+      },
+      "DiagnosticArchiveCollectionDto": {
+        "properties": {
+          "concurrentWritesPossible": {
+            "type": "boolean"
+          },
+          "includedFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "truncatedFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unreadableFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "includedFiles",
+          "unreadableFiles",
+          "truncatedFiles",
+          "concurrentWritesPossible"
+        ],
+        "type": "object"
+      },
+      "DiagnosticCaptureEndReasonDto": {
+        "enum": [
+          "expired",
+          "requested",
+          "suspensionExpiryUnknown",
+          "runtimeShutdown"
+        ],
+        "type": "string"
+      },
+      "DiagnosticCaptureModeDto": {
+        "enum": [
+          "standard",
+          "detailed"
+        ],
+        "type": "string"
+      },
+      "DiagnosticCaptureStartRequestDto": {
+        "properties": {
+          "durationSeconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "durationSeconds"
+        ],
+        "type": "object"
+      },
+      "DiagnosticCaptureStateDto": {
+        "properties": {
+          "captureId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "endReason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DiagnosticCaptureEndReasonDto"
+              }
+            ],
+            "nullable": true
+          },
+          "lastCaptureId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DiagnosticCaptureModeDto"
+          },
+          "remainingMs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "startedAtUtc": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "remainingMs",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "DiagnosticCaptureStopEnvelope": {
+        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DiagnosticCaptureStopResultDto"
+          },
+          "ts": {
+            "description": "Server time when the response was built (unix epoch milliseconds).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "ts"
+        ],
+        "type": "object"
+      },
+      "DiagnosticCaptureStopRequestDto": {
+        "properties": {
+          "captureId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "captureId"
+        ],
+        "type": "object"
+      },
+      "DiagnosticCaptureStopResultDto": {
+        "enum": [
+          "stopped",
+          "alreadyStopped",
+          "differentCapture"
+        ],
+        "type": "string"
+      },
+      "DiagnosticExportPreparationDto": {
+        "properties": {
+          "completedAtUtc": {
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticFileSourceCountsDto"
+            },
+            "type": "array"
+          },
+          "flush": {
+            "$ref": "#/components/schemas/DiagnosticSignalResultDto"
+          },
+          "otherProcessesFlushed": {
+            "type": "boolean"
+          },
+          "requestedAtUtc": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DiagnosticStatusDto"
+          }
+        },
+        "required": [
+          "flush",
+          "status",
+          "requestedAtUtc",
+          "completedAtUtc",
+          "otherProcessesFlushed",
+          "files"
+        ],
+        "type": "object"
+      },
+      "DiagnosticFileSourceCountsDto": {
+        "properties": {
+          "acceptedCount": {
+            "type": "string"
+          },
+          "lastWrittenAtMs": {
+            "nullable": true,
+            "type": "string"
+          },
+          "queueDroppedCount": {
+            "type": "string"
+          },
+          "quotaDroppedCount": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DiagnosticSourceDto"
+          },
+          "writeFailedCount": {
+            "type": "string"
+          },
+          "writtenCount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "acceptedCount",
+          "writtenCount",
+          "queueDroppedCount",
+          "quotaDroppedCount",
+          "writeFailedCount"
+        ],
+        "type": "object"
+      },
+      "DiagnosticSetupStatusDto": {
+        "enum": [
+          "disabled",
+          "ready",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "DiagnosticSignalResultDto": {
+        "enum": [
+          "completed",
+          "failed",
+          "timedOut",
+          "alreadyShutdown"
+        ],
+        "type": "string"
+      },
+      "DiagnosticSourceCapabilityDto": {
+        "enum": [
+          "supported",
+          "partial",
+          "unsupported",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "DiagnosticSourceCollectionDto": {
+        "enum": [
+          "enabled",
+          "disabled",
+          "unavailable",
+          "notRegistered"
+        ],
+        "type": "string"
+      },
+      "DiagnosticSourceCoverageDto": {
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/DiagnosticSourceCapabilityDto"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/DiagnosticSourceCollectionDto"
+          },
+          "observedCount": {
+            "type": "string"
+          },
+          "policyFilteredCount": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DiagnosticSourceDto"
+          }
+        },
+        "required": [
+          "source",
+          "capability",
+          "collection",
+          "observedCount",
+          "policyFilteredCount"
+        ],
+        "type": "object"
+      },
+      "DiagnosticSourceDto": {
+        "enum": [
+          "runtime",
+          "connections",
+          "addressStorage",
+          "dnsDiscovery",
+          "mdnsDiscovery",
+          "pkarrDiscovery",
+          "connectionPaths",
+          "relayRecovery",
+          "membershipUpdates",
+          "sessions",
+          "hostApplication",
+          "hostShareExtension",
+          "hostKeyboardExtension",
+          "hostBackgroundService"
+        ],
+        "type": "string"
+      },
+      "DiagnosticStatusDto": {
+        "properties": {
+          "capture": {
+            "$ref": "#/components/schemas/DiagnosticCaptureStateDto"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "correlationLimitedRecords": {
+            "type": "string"
+          },
+          "counterScope": {
+            "type": "string"
+          },
+          "engineVersion": {
+            "type": "string"
+          },
+          "localFile": {
+            "$ref": "#/components/schemas/DiagnosticSetupStatusDto"
+          },
+          "observedRecords": {
+            "type": "string"
+          },
+          "policyFilteredRecords": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "schemaRejectedRecords": {
+            "type": "string"
+          },
+          "sourceCommit": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticSourceCoverageDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runId",
+          "capture",
+          "observedRecords",
+          "policyFilteredRecords",
+          "schemaRejectedRecords",
+          "correlationLimitedRecords",
+          "engineVersion",
+          "sourceCommit",
+          "counterScope",
+          "sources",
+          "localFile",
+          "closed"
+        ],
+        "type": "object"
+      },
+      "DiagnosticStatusEnvelope": {
+        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DiagnosticStatusDto"
+          },
+          "ts": {
+            "description": "Server time when the response was built (unix epoch milliseconds).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "ts"
+        ],
+        "type": "object"
       },
       "DispatchOutcomeEnvelope": {
         "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
@@ -2307,6 +2900,9 @@
               "joinedSpace": {
                 "$ref": "#/components/schemas/JoinedSpaceResponse"
               },
+              "peerUpgradeRequired": {
+                "type": "boolean"
+              },
               "status": {
                 "enum": [
                   "active"
@@ -2328,6 +2924,9 @@
               },
               "joinId": {
                 "type": "string"
+              },
+              "peerUpgradeRequired": {
+                "type": "boolean"
               },
               "sponsorDeviceId": {
                 "nullable": true,
@@ -2376,8 +2975,38 @@
               "status"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "joinId": {
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/JoinSpaceTerminationReason"
+              },
+              "status": {
+                "enum": [
+                  "terminated"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "joinId",
+              "reason",
+              "status"
+            ],
+            "type": "object"
           }
         ]
+      },
+      "JoinSpaceTerminationReason": {
+        "enum": [
+          "cancelled",
+          "expired",
+          "superseded"
+        ],
+        "type": "string"
       },
       "JoinedSpaceResponse": {
         "properties": {
@@ -2616,6 +3245,12 @@
       },
       "LogExportResultDto": {
         "properties": {
+          "collection": {
+            "$ref": "#/components/schemas/DiagnosticArchiveCollectionDto"
+          },
+          "enginePreparation": {
+            "$ref": "#/components/schemas/DiagnosticExportPreparationDto"
+          },
           "includedFiles": {
             "items": {
               "type": "string"
@@ -2633,7 +3268,9 @@
         "required": [
           "path",
           "includedFiles",
-          "since"
+          "since",
+          "enginePreparation",
+          "collection"
         ],
         "type": "object"
       },
@@ -5763,124 +6400,6 @@
         ],
         "type": "object"
       },
-      "WorkspaceConvergenceDto": {
-        "description": "Complete Engine-owned workspace convergence state for the active space.",
-        "properties": {
-          "convergenceDigest": {
-            "nullable": true,
-            "type": "string"
-          },
-          "divergedPeerDeviceIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "effectiveMemberCount": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "failureCategory": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/WorkspaceConvergenceFailureCategoryDto"
-              }
-            ],
-            "nullable": true
-          },
-          "historyEventCount": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "pendingRemovalDecisionDeviceIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "pendingRemovalDecisionEventId": {
-            "nullable": true,
-            "type": "string"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/WorkspaceConvergencePhaseDto"
-          },
-          "removed": {
-            "type": "boolean"
-          },
-          "revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "updatedAtMs": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "upgradeRequiredPeerDeviceIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "phase",
-          "revision",
-          "historyEventCount",
-          "effectiveMemberCount",
-          "pendingRemovalDecisionDeviceIds",
-          "divergedPeerDeviceIds",
-          "upgradeRequiredPeerDeviceIds",
-          "updatedAtMs",
-          "removed"
-        ],
-        "type": "object"
-      },
-      "WorkspaceConvergenceEnvelope": {
-        "description": "Canonical success envelope: `{ \"data\": T, \"ts\": <unix millis i64> }`.\n\n`ts` is `chrono::Utc::now().timestamp_millis()`, set in the webserver handler\nvia [`ApiEnvelope::now`] (the contract carries only the type + the clock\nhelper, not a hard dependency on when the handler reads the clock).\n`rename_all = \"camelCase\"` is a no-op for the single-word fields here but is\ndeclared for forward-compat.\n\nIMPORTANT (utoipa v4): every concrete `ApiEnvelope<X>` that needs a named\nOpenAPI component is declared in the `#[aliases(...)]` block below. Add a new\nalias line whenever a new payload type needs enveloping. NEVER register the\nbare `ApiEnvelope` in `components(schemas(...))` — utoipa errors on a bare\ngeneric, and an un-aliased generic inlines an anonymous schema.",
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/WorkspaceConvergenceDto"
-          },
-          "ts": {
-            "description": "Server time when the response was built (unix epoch milliseconds).",
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "data",
-          "ts"
-        ],
-        "type": "object"
-      },
-      "WorkspaceConvergenceFailureCategoryDto": {
-        "description": "Stable failure category for workspace convergence.",
-        "enum": [
-          "space_mismatch",
-          "continuity_gap",
-          "identity_mismatch",
-          "digest_conflict",
-          "unauthorized",
-          "version_incompatible",
-          "no_effective_members",
-          "storage"
-        ],
-        "type": "string"
-      },
-      "WorkspaceConvergencePhaseDto": {
-        "description": "Current phase of the Engine-owned workspace convergence.",
-        "enum": [
-          "locally_applied",
-          "converging",
-          "complete",
-          "recovery_required"
-        ],
-        "type": "string"
-      },
       "WsErrorResponse": {
         "description": "Error response sent via HTTP status + JSON body when the WebSocket upgrade fails.",
         "properties": {
@@ -7488,6 +8007,160 @@
         ]
       }
     },
+    "/diagnostics/capture": {
+      "get": {
+        "operationId": "getDiagnosticCaptureStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticStatusEnvelope"
+                }
+              }
+            },
+            "description": "Current daemon-owned diagnostic capture state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Local Engine diagnostics unavailable"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/diagnostics/capture/start": {
+      "post": {
+        "operationId": "startDiagnosticCapture",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagnosticCaptureStartRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticStatusEnvelope"
+                }
+              }
+            },
+            "description": "Actual daemon-owned diagnostic capture state"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid capture duration"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Local Engine diagnostics unavailable"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/diagnostics/capture/stop": {
+      "post": {
+        "operationId": "stopDiagnosticCapture",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagnosticCaptureStopRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticCaptureStopEnvelope"
+                }
+              }
+            },
+            "description": "Capture stop result"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid capture identifier"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Local Engine diagnostics unavailable"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "tags": [
+          "system"
+        ]
+      }
+    },
     "/diagnostics/debug": {
       "get": {
         "operationId": "getDebugStatus",
@@ -8091,15 +8764,15 @@
         ]
       }
     },
-    "/member/device-trust": {
+    "/member/device-group-choices": {
       "get": {
-        "operationId": "getDeviceTrust",
+        "operationId": "getDeviceGroupChoices",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DeviceTrustEnvelope"
+                  "$ref": "#/components/schemas/DeviceGroupChoicesEnvelope"
                 }
               }
             },
@@ -8117,16 +8790,14 @@
         "tags": [
           "member"
         ]
-      }
-    },
-    "/member/device-trust/decision": {
+      },
       "post": {
-        "operationId": "decideDeviceTrust",
+        "operationId": "chooseDeviceGroup",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DecideDeviceTrustRequestDto"
+                "$ref": "#/components/schemas/ChooseDeviceGroupRequestDto"
               }
             }
           },
@@ -8137,7 +8808,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DeviceTrustDecisionEnvelope"
+                  "$ref": "#/components/schemas/DeviceGroupChoiceResultEnvelope"
                 }
               }
             },
@@ -9014,7 +9685,7 @@
     },
     "/pairing/unpair": {
       "post": {
-        "description": "Revokes the local member record for the given peer and returns the\nEngine-owned workspace convergence state. Errors flow through the shared `ApiError`\ncarrier and therefore serialize to `ApiErrorResponse { code, message,\ndetails? }` on the wire.",
+        "description": "Revokes the local member record for the given peer and returns the\ncurrent Engine-owned device relationship state. Errors flow through the shared `ApiError`\ncarrier and therefore serialize to `ApiErrorResponse { code, message,\ndetails? }` on the wire.",
         "operationId": "unpairDevice",
         "requestBody": {
           "content": {
@@ -9031,7 +9702,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceConvergenceEnvelope"
+                  "$ref": "#/components/schemas/DeviceTrustEnvelope"
                 }
               }
             },
@@ -9117,6 +9788,58 @@
           }
         ],
         "summary": "GET /peers",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/presence/opportunity": {
+      "post": {
+        "operationId": "notifyConnectivityOpportunity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectivityOpportunityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Connectivity opportunity accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid connectivity opportunity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Engine is unavailable"
+          }
+        },
+        "security": [
+          {
+            "session_query": []
+          },
+          {
+            "session_header": []
+          }
+        ],
+        "summary": "Accept a host opportunity without waiting for peer connections.",
         "tags": [
           "system"
         ]
@@ -10246,6 +10969,16 @@
             },
             "description": "Invitation issued"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Space state requires recovery or does not permit invitations"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -10264,7 +10997,7 @@
                 }
               }
             },
-            "description": "Facade not assembled or network not started"
+            "description": "Service unavailable, network not started, or member changes pending"
           }
         },
         "security": [

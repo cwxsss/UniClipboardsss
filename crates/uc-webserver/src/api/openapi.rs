@@ -125,8 +125,9 @@ use uc_daemon_contract::api::dto::storage::{
 use uc_daemon_contract::api::dto::upgrade::{AckUpgradePayload, UpgradeStatusDto};
 use uc_daemon_contract::api::dto::v2::setup::{
     CancelJoinSpaceRequest, CurrentInvitation, InitializeSpaceRequest, InitializeSpaceResponse,
-    IssueInvitationResponse, JoinSpaceRejectionReason, JoinSpaceResponse, JoinedSpaceResponse,
-    RedeemRequest, SetupStateResponse, SwitchSpaceRequest,
+    IssueInvitationResponse, JoinSpaceRejectionReason, JoinSpaceResponse,
+    JoinSpaceTerminationReason, JoinedSpaceResponse, RedeemRequest, SetupStateResponse,
+    SwitchSpaceRequest,
 };
 use uc_daemon_contract::api::dto::ws::{WsErrorResponse, WsSubscribeRequest};
 use uc_daemon_contract::api::types::DaemonWsEvent;
@@ -558,6 +559,7 @@ impl Modify for ContractMeta {
             JoinSpaceResponse,
             JoinedSpaceResponse,
             JoinSpaceRejectionReason,
+            JoinSpaceTerminationReason,
             SetupStateResponse,
             SwitchSpaceRequest,
             CancelJoinSpaceRequest,

@@ -2282,7 +2282,9 @@
           "history_conflict": "両方の履歴を統合できません。",
           "peer_upgrade_required": "相手のデバイスで UniClipboard の更新が必要です。",
           "cancelled": "この参加は取り消されました。",
-          "removed_before_activation": "確認前に相手がこのデバイスを削除しました。"
+          "removed_before_activation": "確認前に相手がこのデバイスを削除しました。",
+          "expired": "この招待は期限切れです。相手に新しい招待を依頼してください。",
+          "superseded": "この参加は新しい試行に置き換えられました。"
         }
       }
     },

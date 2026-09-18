@@ -35,6 +35,7 @@ import type {
   InitializeSpaceErrorKind,
   IssueInvitationErrorKind,
   JoinSpaceRejectionReason,
+  JoinSpaceTerminationReason,
   RedeemInvitationErrorKind,
   ActiveJoinSpaceResponse,
 } from '@/api/daemon/setupV2'
@@ -777,7 +778,7 @@ export function JoinRejectedScreen({
   reason,
   onBack,
 }: {
-  reason: JoinSpaceRejectionReason
+  reason: JoinSpaceRejectionReason | JoinSpaceTerminationReason
   onBack: () => void
 }) {
   const { t } = useTranslation(undefined, { keyPrefix: 'setup.joinPending' })

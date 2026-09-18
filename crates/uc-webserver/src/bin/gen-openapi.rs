@@ -59,9 +59,15 @@ use uc_webserver::api::openapi::ApiDoc;
 /// +2 paths, +2 operations.
 /// Engine-owned member protection adds GET `/member/protection`. Workspace
 /// Device trust replaces the product-facing convergence query with one complete
-/// query and one decision endpoint: 73 paths / 81 operations.
-const EXPECTED_PATHS: usize = 73;
-const EXPECTED_OPERATIONS: usize = 81;
+/// query and one decision endpoint.
+/// Fork-local routes on top of that baseline: diagnostics capture adds
+/// `/diagnostics/capture`, `/diagnostics/capture/start` and
+/// `/diagnostics/capture/stop`; the workspace device-trust pair
+/// (`/member/device-trust`, `/member/device-trust/decision`) is replaced by
+/// `/member/device-group-choices`; connectivity opportunities add
+/// `/presence/opportunity`: 76 paths.
+const EXPECTED_PATHS: usize = 76;
+const EXPECTED_OPERATIONS: usize = 85;
 const SCHEMA_PREFIX: &str = "#/components/schemas/";
 const HTTP_METHODS: [&str; 7] = ["get", "put", "post", "delete", "patch", "head", "options"];
 
