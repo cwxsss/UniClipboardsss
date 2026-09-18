@@ -271,13 +271,17 @@ async fn run_for_address_inner(selected_ip: IpAddr, verbose: bool) -> i32 {
 async fn workspace_convergence_revision(
     cli: &crate::commands::app_session::CliAppSession,
 ) -> Result<u64, String> {
+    // Engine rc.15 removed `Operation::QueryWorkspaceConvergence` and
+    // `OperationResult::WorkspaceConvergence`. The dev-tools membership
+    // diagnostics query exposes the same monotonic membership revision, and is
+    // behind the same `dev-tools` feature this helper already requires.
     match cli
         .engine()
-        .execute(Operation::QueryWorkspaceConvergence)
+        .execute(Operation::QueryMembershipDiagnostics)
         .await
         .map_err(|error| error.to_string())?
     {
-        OperationResult::WorkspaceConvergence(summary) => Ok(summary.revision),
+        OperationResult::MembershipDiagnostics(summary) => Ok(summary.revision),
         result => Err(format!("unexpected engine response: {result:?}")),
     }
 }

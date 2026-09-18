@@ -126,6 +126,54 @@ export function updateCargoToml(
   return { path: cargoPath, old: oldVersion, new: newVersion }
 }
 
+/**
+ * Package names of the workspace members that inherit `[workspace.package]
+ * version` via `version.workspace = true`. Their Cargo.lock entries must be
+ * re-pointed on every bump, otherwise the lock drifts from the manifests: the
+ * next cargo invocation rewrites it (dirtying the worktree) and every
+ * `cargo ... --locked` CI job fails. Members that pin an explicit version are
+ * skipped here; the caller handles the desktop bin package separately.
+ *
+ * Returns [] when there is no root manifest (e.g. unit-test fixtures).
+ */
+function workspaceVersionMemberNames(rootDir, newVersion) {
+  if (!newVersion) {
+    return []
+  }
+
+  const rootManifestPath = path.join(rootDir, 'Cargo.toml')
+  if (!fs.existsSync(rootManifestPath)) {
+    return []
+  }
+
+  const membersMatch = fs
+    .readFileSync(rootManifestPath, 'utf8')
+    .match(/^\s*members\s*=\s*\[([\s\S]*?)\]/m)
+  if (!membersMatch) {
+    return []
+  }
+
+  const names = []
+  for (const entry of membersMatch[1].matchAll(/"([^"]+)"/g)) {
+    const manifestPath = path.join(rootDir, entry[1], 'Cargo.toml')
+    if (!fs.existsSync(manifestPath)) {
+      continue
+    }
+
+    const manifest = fs.readFileSync(manifestPath, 'utf8')
+    if (!/^\s*version\.workspace\s*=\s*true\s*$/m.test(manifest)) {
+      continue
+    }
+
+    const nameMatch = manifest.match(/^name\s*=\s*"([^"]+)"/m)
+    if (nameMatch) {
+      names.push(nameMatch[1])
+    }
+  }
+
+  return names
+}
+
 export function updateCargoLock(newVersion, dryRun) {
   // The cargo workspace lives at the repo root, so Cargo.lock does too; the
   // `uniclipboard` package manifest still lives in src-tauri/Cargo.toml.
@@ -133,7 +181,12 @@ export function updateCargoLock(newVersion, dryRun) {
   const cargoLockPath = path.join(process.cwd(), 'Cargo.lock')
 
   if (!fs.existsSync(cargoLockPath)) {
-    return { path: cargoLockPath, skipped: true, reason: 'Cargo.lock not found' }
+    return {
+      path: cargoLockPath,
+      skipped: true,
+      reason: 'Cargo.lock not found',
+      updated: [],
+    }
   }
 
   const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
@@ -143,29 +196,57 @@ export function updateCargoLock(newVersion, dryRun) {
   }
 
   const packageName = nameMatch[1]
-  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const content = fs.readFileSync(cargoLockPath, 'utf8')
-  const packageRegex = new RegExp(
-    `(\\[\\[package\\]\\]\\nname = "${escapedPackageName}"\\nversion = "([^"]+)")`,
-    'm'
-  )
-  const match = content.match(packageRegex)
+  // The desktop bin first so its old version stays the reported baseline, then
+  // every workspace member that inherits the workspace version.
+  const names = [
+    ...new Set([packageName, ...workspaceVersionMemberNames(process.cwd(), newVersion)]),
+  ]
 
-  if (!match) {
-    throw new Error(`Could not find package '${packageName}' in Cargo.lock`)
+  let content = fs.readFileSync(cargoLockPath, 'utf8')
+  let oldVersion = null
+  const updated = []
+
+  for (const name of names) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const packageRegex = new RegExp(
+      `(\\[\\[package\\]\\]\\nname = "${escapedName}"\\nversion = "([^"]+)")`,
+      'm'
+    )
+    const match = content.match(packageRegex)
+
+    if (!match) {
+      if (name === packageName) {
+        throw new Error(`Could not find package '${packageName}' in Cargo.lock`)
+      }
+      continue
+    }
+
+    if (oldVersion === null) {
+      oldVersion = match[2]
+    }
+
+    if (match[2] === newVersion) {
+      continue
+    }
+
+    content = content.replace(
+      packageRegex,
+      `[[package]]\nname = "${name}"\nversion = "${newVersion}"`
+    )
+    updated.push({ name, from: match[2] })
   }
 
-  const oldVersion = match[2]
-  const newContent = content.replace(
-    packageRegex,
-    `[[package]]\nname = "${packageName}"\nversion = "${newVersion}"`
-  )
-
-  if (!dryRun) {
-    fs.writeFileSync(cargoLockPath, newContent, 'utf8')
+  if (!dryRun && updated.length > 0) {
+    fs.writeFileSync(cargoLockPath, content, 'utf8')
   }
 
-  return { path: cargoLockPath, old: oldVersion, new: newVersion, skipped: false }
+  return {
+    path: cargoLockPath,
+    old: oldVersion ?? newVersion,
+    new: newVersion,
+    skipped: false,
+    updated,
+  }
 }
 
 export function run(options = parseArgs()) {
@@ -252,6 +333,7 @@ export function run(options = parseArgs()) {
   } else {
     console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${cargoLockResult.path}`)
     console.log(`  ${cargoLockResult.old} → ${cargoLockResult.new}`)
+    console.log(`  workspace packages rewritten: ${cargoLockResult.updated.length}`)
   }
 
   if (!options.dryRun) {
