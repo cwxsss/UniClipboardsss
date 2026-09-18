@@ -19,6 +19,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { bumpVersion, parseSemver } from './bump-version-lib.js'
 
 export function parseArgs(argv = process.argv.slice(2)) {
@@ -282,6 +283,10 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Windows note: import.meta.url is "file:///E:/..." while a template-built
+// `file://${process.argv[1]}` yields "file://E:\..." (backslashes, and only two
+// slashes), so the naive comparison never matches and the CLI silently no-ops.
+// pathToFileURL normalises both sides.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
 }
