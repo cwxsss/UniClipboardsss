@@ -608,6 +608,7 @@
           "itemAriaLabel": "Nó de relay personalizado {{index}}",
           "removeAriaLabel": "Remover o nó de relay {{index}}",
           "saveError": "Falha ao salvar os relays personalizados: {{message}}. A configuração anterior foi restaurada.",
+          "engineUnavailableError": "Falha ao salvar os relays personalizados: o mecanismo de sincronização não está em execução ({{message}}). Isso não está relacionado ao endereço do relay. Reinicie o serviço de desktop; se continuar falhando, verifique no log do daemon uma falha no backup anterior à atualização.",
           "invalidUrl": "URL de relay inválida: {{url}}. Informe uma URL http ou https.",
           "duplicateUrl": "A URL de relay já existe: {{url}}.",
           "testAriaLabel": "Testar o nó de relay {{index}}",

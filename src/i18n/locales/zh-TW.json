@@ -608,6 +608,7 @@
           "itemAriaLabel": "自定義中繼節點 {{index}}",
           "removeAriaLabel": "移除中繼節點 {{index}}",
           "saveError": "儲存自定義中繼失敗：{{message}}。已恢復到上一次的設定。",
+          "engineUnavailableError": "儲存自定義中繼失敗：同步引擎未執行（{{message}}）。這與中繼位址無關。請重新啟動桌面服務；若仍然失敗，請在背景日誌中檢查「升級前備份」是否失敗。",
           "invalidUrl": "無效的中繼 URL：{{url}}。請輸入 http 或 https URL。",
           "duplicateUrl": "中繼 URL 已重複：{{url}}。",
           "testAriaLabel": "測試中繼節點 {{index}}",

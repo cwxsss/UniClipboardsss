@@ -10,6 +10,7 @@ const cancelInvitation = vi.hoisted(() => vi.fn())
 const redeemInvitation = vi.hoisted(() => vi.fn())
 const applyIssuedInvitation = vi.hoisted(() => vi.fn())
 const applyServerSetupState = vi.hoisted(() => vi.fn())
+const refreshSetupState = vi.hoisted(() => vi.fn())
 const subscribe = vi.hoisted(() => vi.fn())
 const onReconnect = vi.hoisted(() => vi.fn())
 
@@ -54,7 +55,7 @@ vi.mock('@/store/setupRealtimeStore', () => ({
   acknowledgeSetupCompletion: vi.fn(),
   applyIssuedInvitation: (...args: unknown[]) => applyIssuedInvitation(...args),
   applyServerSetupState: (...args: unknown[]) => applyServerSetupState(...args),
-  refreshSetupState: vi.fn(),
+  refreshSetupState: () => refreshSetupState(),
   useSetupRealtimeStore: () => ({ flow, hydrated: true }),
 }))
 
@@ -207,11 +208,20 @@ describe('useSetupFlow joiner admission', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     flow = { kind: 'entry' }
+    subscribe.mockImplementation((_topics, callback) => {
+      deviceTrustHandler = callback
+      return () => undefined
+    })
+    onReconnect.mockImplementation(callback => {
+      reconnectHandler = callback
+      return () => undefined
+    })
     getDeviceTrustSnapshot.mockResolvedValue({
       currentJoin: null,
       localMembership: 'unavailable',
       devices: [],
     })
+    refreshSetupState.mockResolvedValue(undefined)
     redeemInvitation.mockResolvedValue({
       status: 'pending',
       joinId: 'join-123',
@@ -239,7 +249,31 @@ describe('useSetupFlow joiner admission', () => {
     })
   })
 
-  it('uses the matching durable admission result after a device-trust update', async () => {
+  const ACTIVE_JOIN = {
+    status: 'active',
+    joinId: 'join-123',
+    joinedSpace: {
+      sponsorDeviceId: 'sponsor-123',
+      sponsorIdentityFingerprint: 'fingerprint',
+      spaceId: 'space-123',
+      selfDeviceId: 'local-123',
+      selfIdentityFingerprint: 'local-fingerprint',
+      migratedRecords: null,
+      preservedUnreadableRecords: null,
+    },
+  } satisfies {
+    status: string
+    joinId: string
+    joinedSpace: Record<string, unknown>
+  }
+
+  const COMPLETED_STATE = {
+    hasCompleted: true,
+    currentInvitation: null,
+    deviceName: 'MacBook',
+  }
+
+  async function startPendingJoin() {
     const { result } = renderHook(() => useSetupFlow())
     act(() => result.current.startJoinSpace())
     await act(async () => {
@@ -248,30 +282,31 @@ describe('useSetupFlow joiner admission', () => {
         passphrase: 'passphrase',
       })
     })
-    getDeviceTrustSnapshot.mockResolvedValue({
-      currentJoin: {
-        status: 'active',
-        joinId: 'join-123',
-        joinedSpace: {
-          sponsorDeviceId: 'sponsor-123',
-          sponsorIdentityFingerprint: 'fingerprint',
-          spaceId: 'space-123',
-          selfDeviceId: 'local-123',
-          selfIdentityFingerprint: 'local-fingerprint',
-          migratedRecords: null,
-          preservedUnreadableRecords: null,
-        },
-      },
-    })
+    return result
+  }
+
+  it('retries the setup state read while the engine restarts after a completed join', async () => {
+    await startPendingJoin()
+    getDeviceTrustSnapshot.mockResolvedValue({ currentJoin: ACTIVE_JOIN })
+    // 加入成功后引擎会重启会话：这段窗口里 `/v2/setup/state` 返回 503。
+    getSetupState
+      .mockRejectedValueOnce(new Error('setup-state service unavailable'))
+      .mockRejectedValueOnce(new Error('setup-state service unavailable'))
+      .mockResolvedValue(COMPLETED_STATE)
 
     await waitFor(() => expect(deviceTrustHandler).toBeTypeOf('function'))
     act(() => deviceTrustHandler?.({ eventType: 'device-trust.changed' }))
 
-    await waitFor(() => {
-      expect(applyServerSetupState).toHaveBeenCalledWith(
-        expect.objectContaining({ hasCompleted: true }),
-        expect.objectContaining({ kind: 'pairing_succeeded', role: 'joiner' })
-      )
-    })
+    await waitFor(
+      () => {
+        expect(applyServerSetupState).toHaveBeenCalledWith(
+          expect.objectContaining({ hasCompleted: true }),
+          expect.objectContaining({ kind: 'pairing_succeeded', role: 'joiner' })
+        )
+      },
+      { timeout: 10_000 }
+    )
+    expect(getSetupState.mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(refreshSetupState).not.toHaveBeenCalled()
   })
 })

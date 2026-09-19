@@ -608,6 +608,7 @@
           "itemAriaLabel": "カスタム リレー ノード {{index}}",
           "removeAriaLabel": "リレー ノード {{index}} の削除",
           "saveError": "カスタム リレーの保存に失敗しました: {{message}}。以前の設定に戻りました。",
+          "engineUnavailableError": "カスタム リレーの保存に失敗しました：同期エンジンが動作していません（{{message}}）。これはリレーのアドレスとは無関係です。デスクトップ サービスを再起動してください。それでも失敗する場合は、デーモン ログで「アップグレード前バックアップ」の失敗を確認してください。",
           "invalidUrl": "無効なリレー URL: {{url}}。 http または https URL を入力します。",
           "duplicateUrl": "同じリレー URL が既にあります: {{url}}。",
           "testAriaLabel": "テスト リレー ノード {{index}}",

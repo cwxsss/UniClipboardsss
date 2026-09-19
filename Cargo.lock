@@ -10510,7 +10510,7 @@ dependencies = [
 [[package]]
 name = "uc-application"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10603,7 +10603,7 @@ dependencies = [
 [[package]]
 name = "uc-content-hash"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "blake3",
  "hex",
@@ -10612,7 +10612,7 @@ dependencies = [
 [[package]]
 name = "uc-core"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -10772,7 +10772,7 @@ dependencies = [
 [[package]]
 name = "uc-engine"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10798,7 +10798,7 @@ dependencies = [
 [[package]]
 name = "uc-infra"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "anyhow",
  "argon2",
@@ -10866,7 +10866,7 @@ dependencies = [
 [[package]]
 name = "uc-mobile-lan"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -10888,7 +10888,7 @@ dependencies = [
 [[package]]
 name = "uc-mobile-proto"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -10923,7 +10923,7 @@ dependencies = [
 [[package]]
 name = "uc-observability-contract"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10940,7 +10940,7 @@ dependencies = [
 [[package]]
 name = "uc-observability-runtime"
 version = "1.1.0-rc.17"
-source = "git+https://github.com/cwxsss/Engine.git?rev=3cc2f95f6b73c0306f8a81c9a114d7b3720760da#3cc2f95f6b73c0306f8a81c9a114d7b3720760da"
+source = "git+https://github.com/cwxsss/Engine.git?rev=8c3fce6581fe97cda8b72816673ebba490e03f2b#8c3fce6581fe97cda8b72816673ebba490e03f2b"
 dependencies = [
  "chrono",
  "jni 0.22.4",

@@ -35,6 +35,40 @@ import {
 const log = createLogger('use-setup-flow')
 
 /**
+ * 加入 / 切换空间会让引擎重启会话，重启窗口内 `GET /v2/setup/state` 返回
+ * 503（`setup-state service unavailable`）。实测窗口约 5 秒（老会话关闭 → 新空间
+ * 冷启动 → 数据库迁移 → iroh 重新装配）。
+ *
+ * 直接把这一发 503 当成失败会**永久砖 UI**：加入其实已经成功，但前端状态仍停在
+ * `entry`，而 setup 的三个 ws 事件（邀请签发 / 撤销 / 重新配对）都不会在加入方
+ * 完成时触发 —— 没有任何东西能把状态再唤醒。所以这里给状态读取一个重试预算。
+ */
+const SETUP_STATE_RETRY_ATTEMPTS = 20
+const SETUP_STATE_RETRY_DELAY_MS = 500
+
+type SetupStatePayload = Awaited<ReturnType<typeof getSetupState>>
+
+function delay(ms: number) {
+  return new Promise<void>(resolve => setTimeout(resolve, ms))
+}
+
+/** 读取 setup 状态，容忍引擎重启窗口内的瞬时 503。 */
+async function loadSetupStateAfterTransition(): Promise<SetupStatePayload> {
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= SETUP_STATE_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await getSetupState()
+    } catch (err) {
+      lastError = err
+      if (attempt < SETUP_STATE_RETRY_ATTEMPTS) {
+        await delay(SETUP_STATE_RETRY_DELAY_MS)
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('setup state unavailable')
+}
+
+/**
  * Page-level screens visible inside the setup gate. The store-level
  * `SetupFlow` only carries enough state to decide which entry/recovery
  * screen to show on launch; navigating between intermediate forms is the
@@ -187,7 +221,7 @@ export function useSetupFlow(): UseSetupFlowReturn {
     }
     try {
       setPageScreen(null)
-      const next = await getSetupState()
+      const next = await loadSetupStateAfterTransition()
       applyServerSetupState(next, {
         kind: 'pairing_succeeded',
         role: 'joiner',
@@ -195,6 +229,13 @@ export function useSetupFlow(): UseSetupFlowReturn {
       })
     } catch (err) {
       log.warn({ err }, 'failed to apply completed durable admission')
+      // 这里没有可回退的界面（页面状态已清空），所以哪怕拿不到本次配对摘要，
+      // 也必须把 store 刷回服务端真实状态：否则用户会被永久留在首屏。
+      try {
+        await refreshSetupState()
+      } catch (refreshError) {
+        log.warn({ err: refreshError }, 'failed to refresh setup state after admission')
+      }
     }
   }, [])
 
@@ -331,7 +372,8 @@ export function useSetupFlow(): UseSetupFlowReturn {
             raw: redeem.reason,
           } as const
         }
-        const next = await getSetupState()
+        // redeem 返回 active 时引擎通常正在切换空间，状态读取要容忍 503。
+        const next = await loadSetupStateAfterTransition()
         applyServerSetupState(next, {
           kind: 'pairing_succeeded',
           role: 'joiner',

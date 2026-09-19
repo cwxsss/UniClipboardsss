@@ -608,6 +608,7 @@
           "itemAriaLabel": "Custom relay node {{index}}",
           "removeAriaLabel": "Remove relay node {{index}}",
           "saveError": "Failed to save custom relays: {{message}}. Reverted to the previous setting.",
+          "engineUnavailableError": "Failed to save custom relays because the sync engine is not running ({{message}}). This is unrelated to the relay address. Restart the desktop service; if it keeps failing, check the daemon log for a failed pre-upgrade profile backup.",
           "invalidUrl": "Invalid relay URL: {{url}}. Enter an http or https URL.",
           "duplicateUrl": "Relay URL already exists: {{url}}.",
           "testAriaLabel": "Test relay node {{index}}",
